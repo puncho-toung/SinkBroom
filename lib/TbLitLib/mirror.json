@@ -4309,11 +4309,15 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
           "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "objFileProblem, isLexerNumber"
         }
       ],
       "call": "Error",
       "reachable": false,
-      "afterReturn": "returns; the caller goes on as after a warning. Unreachable: every lexer of the copied paths sets LEXFL_NOFATALERRORS (DECL_LEXER_FLAGS, the stage shortcuts, the image programs), so the Warning branch runs"
+      "afterReturn": "returns; the caller goes on as after a warning. Unreachable: every lexer of the copied paths sets LEXFL_NOFATALERRORS (DECL_LEXER_FLAGS, the stage shortcuts, the image programs), so the Warning branch runs LP7.1a: OBJ_Parse's lexer has flags 0 (Model_obj.cpp:79), so ParseFloat's Errors (Lexer.cpp:1696, 1702, 1714) reach this site for a malformed number: after the return ParseFloat yields 0 or the token's value (memory-safe). Unreachable: the OBJ validator passes only numbers the lexer reads as one TT_NUMBER (M-MODEL-GUARD-01)"
     },
     {
       "id": "M-ID-FATAL-11",
@@ -5266,6 +5270,7 @@
           "Bounds.obj bounds_zeroOneCube",
           "Dict.obj ?globalKeys@idDict",
           "Dict.obj ?globalValues@idDict",
+          "EngineGeometry.obj mikkTSpaceInterface",
           "Math.obj ?FLT_SMALLEST_NON_DENORMAL@idMath",
           "Math.obj ?SIMD_SP_smallestNonDenorm@idMath",
           "Matrix.obj mat3_identity",
@@ -5322,7 +5327,7 @@
           "Vector.obj vec6_infinity"
         ]
       },
-      "reason": "R1.6, C9, C24 (5): the dynamic initialisers (MSVC ??__E symbols) that TbLitIdLib's objects may hold, per configuration, as \"<object> <global>\"; each initialises a read-only global from literals or from another of them that is zero until initialised (bounds_zero from vec3_zero), allocating, opening and starting nothing, except idDict's two idStrPool globals (M-ID-STATIC-*), which allocate nothing until used. The check lists the objects' ??__E symbols with dumpbin and fails on one not listed here, so a later copy with an idStr or idList global is caught; one listed but gone is reported LP2.0: ShimPipelineState.obj, which compiles the copied GetRenderState against nvrhi/nvrhi.h, holds that header's two namespace-scope constants nvrhi::AllSubresources (TextureSubresourceSet(0, AllMipLevels, 0, AllArraySlices)) and nvrhi::EntireBuffer (BufferRange(0, ~0ull)), which Debug initialises at load from those literals through their non-constexpr constructors and Release constant-initialises; they allocate nothing. ShaderMake's ShaderBlob.obj and SPIRV-Reflect's spirv_reflect.obj hold none (dumpbin, both configurations)"
+      "reason": "R1.6, C9, C24 (5): the dynamic initialisers (MSVC ??__E symbols) that TbLitIdLib's objects may hold, per configuration, as \"<object> <global>\"; each initialises a read-only global from literals or from another of them that is zero until initialised (bounds_zero from vec3_zero), allocating, opening and starting nothing, except idDict's two idStrPool globals (M-ID-STATIC-*), which allocate nothing until used. The check lists the objects' ??__E symbols with dumpbin and fails on one not listed here, so a later copy with an idStr or idList global is caught; one listed but gone is reported LP2.0: ShimPipelineState.obj, which compiles the copied GetRenderState against nvrhi/nvrhi.h, holds that header's two namespace-scope constants nvrhi::AllSubresources (TextureSubresourceSet(0, AllMipLevels, 0, AllArraySlices)) and nvrhi::EntireBuffer (BufferRange(0, ~0ull)), which Debug initialises at load from those literals through their non-constexpr constructors and Release constant-initialises; they allocate nothing. ShaderMake's ShaderBlob.obj and SPIRV-Reflect's spirv_reflect.obj hold none (dumpbin, both configurations) LP7.1a (D135): the copied tr_trisurf.cpp's static idMikkTSpaceInterface mikkTSpaceInterface in EngineGeometry.obj, whose constructor stores eight function pointers (M-MODEL-STATIC-01)"
     },
     {
       "id": "M-ID-NC-01",
@@ -7013,6 +7018,15 @@
         {
           "file": "neo/renderer/tr_trisurf.cpp",
           "lines": [
+            36,
+            36
+          ],
+          "anchor": "#include <mikktspace.h> (LP7.1a, D135)",
+          "sha256": "de1e9d6de595c6af7ea9bae94aa6468a7fd2b8a0046bbaa6d62b69666e07011e"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
             38,
             38
           ],
@@ -7027,6 +7041,24 @@
           ],
           "anchor": "USE_INVA, DERIVE_UNSMOOTHED_BITANGENT",
           "sha256": "802e3bfc5d538e2ddeb58f290582d37b79a070a78870021f342fbf3fd2887af3"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            176,
+            206
+          ],
+          "anchor": "the MikkTSpace callbacks' prototypes, idMikkTSpaceInterface, its static object, SetUpMikkTSpaceContext",
+          "sha256": "6a6629fd776f8f34884a59c96a2687a817d9940062af372e5237c1f0fd48613d"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            267,
+            351
+          ],
+          "anchor": "R_FreeStaticTriSurfVertexCaches, R_FreeStaticTriSurf",
+          "sha256": "e9fc2b653ae26ac27fd5f84ee5d406057ffdc1d1b69165e72f579c5df00e9821"
         },
         {
           "file": "neo/renderer/tr_trisurf.cpp",
@@ -7049,11 +7081,29 @@
         {
           "file": "neo/renderer/tr_trisurf.cpp",
           "lines": [
+            462,
+            493
+          ],
+          "anchor": "R_AllocStaticTriSurfDupVerts, MocIndexes, MocVerts",
+          "sha256": "5f7ae5bcacbd77b027c492c573a4b872f6d6a4c5fea442d3407860a6de44ecae"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
             495,
             507
           ],
           "anchor": "R_ResizeStaticTriSurfVerts",
           "sha256": "b1e1def2817aa2b92ded952bde4c15a8d1eaaab6bd27c26ee685bdde4609efd1"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            554,
+            609
+          ],
+          "anchor": "R_RangeCheckIndexes, R_BoundTriSurf",
+          "sha256": "1081cdaca512b473503e6a2beff6f804c2fef2216a2beef5925a68598aba5499"
         },
         {
           "file": "neo/renderer/tr_trisurf.cpp",
@@ -7067,11 +7117,29 @@
         {
           "file": "neo/renderer/tr_trisurf.cpp",
           "lines": [
+            699,
+            737
+          ],
+          "anchor": "R_CreateDupVerts",
+          "sha256": "0377fcc80b1d2fecb913b2faf76fa279415de4599d363dfe811b29f170978b0e"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
             742,
             866
           ],
           "anchor": "R_FaceNegativePolarity, tangentVert_t, R_DuplicateMirroredVertexes",
           "sha256": "8c9af0aa2f17fc6969b5da1c884b6645e634b05f3c1e848317bafc03a823f5bd"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            868,
+            883
+          ],
+          "anchor": "R_DeriveMikktspaceTangents",
+          "sha256": "22154c1000d6ece4d712a267dfea727b8ede6691c5c9dbc790549a520be68473"
         },
         {
           "file": "neo/renderer/tr_trisurf.cpp",
@@ -7103,11 +7171,56 @@
         {
           "file": "neo/renderer/tr_trisurf.cpp",
           "lines": [
+            1599,
+            1629
+          ],
+          "anchor": "R_TestDegenerateTextureSpace",
+          "sha256": "e60793a4fdfd790b68c9b330bc4d29b87177cfc4a76f8ec707345ec58b07ed2d"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            1704,
+            1767
+          ],
+          "anchor": "R_MergeSurfaceList, R_MergeTriangles",
+          "sha256": "6bf215a0af26af62c7b0b1bc549bc4708aaa0d2091fd8e563d1916abdb6d27b4"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
             1769,
             1801
           ],
           "anchor": "R_ReverseTriangles",
           "sha256": "0b99f4630110a2dd0beb4bad6e38a8fdb45a06439dea3967a97978e455b5ced5"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            1803,
+            1847
+          ],
+          "anchor": "R_CleanupTriangles",
+          "sha256": "33cd9d4f31bc251ab8d38eeb07dedcc5097b41df2df9307bcc9bdc61cae378f8"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            2073,
+            2165
+          ],
+          "anchor": "the MikkTSpace callbacks, idMikkTSpaceInterface's constructor, SetUpMikkTSpaceContext",
+          "sha256": "e733465422b223312897139615b2f5ae2df87b24273696ee5c40b29942b73b8a"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            2267,
+            2290
+          ],
+          "anchor": "R_CreateMaskedOcclusionCullingTris",
+          "sha256": "7197dd7f0d561e450dc8912ee5eb15144763bd73e3291d200ac3dec6454f5e4e"
         }
       ],
       "sinkbroom": [
@@ -7119,7 +7232,7 @@
           "symbol": "#include \"renderer/tr_trisurf.cpp\""
         }
       ],
-      "note": "992 of the file's 2291 lines, in 12 ranges, each preceded by one marker line (D57): the allocators the closure calls, R_CreateSilIndexes, R_DuplicateMirroredVertexes, R_DeriveNormalsAndTangents and R_DeriveUnsmoothedNormalsAndTangents (R_DeriveTangents' closure), R_DeriveTangentsWithoutNormals, R_BuildDominantTris, R_DeriveTangents, R_RemoveDegenerateTriangles, R_ReverseTriangles and r_useSilRemap. Compiled inside EngineGeometry.cpp (HEADER_FILE_ONLY), because three of them are static. Line 36, #include <mikktspace.h>, is left out (Q18). Lines 170-174, the USE_INVA and DERIVE_UNSMOOTHED_BITANGENT defines, were added after golden (b) found every tangent of R_DeriveTangentsWithoutNormals negated without them"
+      "note": "992 of the file's 2291 lines, in 12 ranges, each preceded by one marker line (D57): the allocators the closure calls, R_CreateSilIndexes, R_DuplicateMirroredVertexes, R_DeriveNormalsAndTangents and R_DeriveUnsmoothedNormalsAndTangents (R_DeriveTangents' closure), R_DeriveTangentsWithoutNormals, R_BuildDominantTris, R_DeriveTangents, R_RemoveDegenerateTriangles, R_ReverseTriangles and r_useSilRemap. Compiled inside EngineGeometry.cpp (HEADER_FILE_ONLY), because three of them are static. Line 36, #include <mikktspace.h>, is left out (Q18). Lines 170-174, the USE_INVA and DERIVE_UNSMOOTHED_BITANGENT defines, were added after golden (b) found every tangent of R_DeriveTangentsWithoutNormals negated without them LP7.1a (C51 (3), D135, the director's copy plan): twelve more ranges, 1,509 of the file's 2,291 lines in 24 ranges now: the MikkTSpace include and interface (M-GEO-NC-02 restated), R_FreeStaticTriSurf, the dupVerts and masked occlusion allocators, R_RangeCheckIndexes, R_BoundTriSurf, R_CreateDupVerts (M-GEO-NC-01 restated), R_DeriveMikktspaceTangents (the shim's stub gone, M-GEO-FN-04), R_TestDegenerateTextureSpace, R_MergeSurfaceList and R_MergeTriangles, R_CleanupTriangles whole and R_CreateMaskedOcclusionCullingTris; the 1-34 range's marker keeps its words, the include being the 36-36 range's"
     },
     {
       "id": "M-GEO-PART-02",
@@ -7146,6 +7259,15 @@
         {
           "file": "neo/renderer/Model.h",
           "lines": [
+            61,
+            115
+          ],
+          "anchor": "the forward declarations, srfTriangles_t (LP7.1a)",
+          "sha256": "cf0922c1e6aac3cf72f34419cdc4e3f1c31bda0e5f5e348f425b3300045162df"
+        },
+        {
+          "file": "neo/renderer/Model.h",
+          "lines": [
             325,
             325
           ],
@@ -7158,7 +7280,7 @@
           "file": "lib/TbLitLib/idtech/engine/renderer/Model.h"
         }
       ],
-      "note": "37 of the file's 325 lines, in 3 ranges: dominantTri_t, which R_BuildDominantTris fills; the shim's RenderCommon.h includes it"
+      "note": "37 of the file's 325 lines, in 3 ranges: dominantTri_t, which R_BuildDominantTris fills; the shim's RenderCommon.h includes it LP7.1a: srfTriangles_t itself (:61-115), whose every field the copied ranges now read (bounds, generateNormals, the masked occlusion arrays, the referenced flags, the caches): the shim's reduced stand-in struct is gone (the director's item 2); RenderCommon.h gives it vertCacheHandle_t (VertexCache.h's uint64) before including it"
     },
     {
       "id": "M-GEO-FN-01",
@@ -7281,11 +7403,11 @@
       ],
       "sinkbroom": [
         {
-          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
-          "symbol": "R_DeriveMikktspaceTangents"
+          "file": "lib/TbLitLib/idtech/engine/renderer/tr_trisurf.cpp",
+          "symbol": "R_DeriveMikktspaceTangents (copied, LP7.1a)"
         }
       ],
-      "note": "Q18: MikkTSpace is not copied (M-ID-DIFF-04); the static the copied R_DeriveTangentsWithoutNormals calls returns false, which the copy turns into its warning and its own derivation, as the engine does when MikkTSpace fails. R3.11: the facade passes useMikktspace true for a material with the mikktspace keyword (EngineTangentPath::Mikktspace), so a call reaches it and fails"
+      "note": "A43 (LP7.1a) restated: R_DeriveMikktspaceTangents is the copied range (tr_trisurf.cpp:868-883) over the copied MikkTSpace; the shim's stub that returned false (Q18) is gone, so R_DeriveTangentsWithoutNormals( tri, true ) runs MikkTSpace and takes the warned fallback only where the library itself fails, as the engine does"
     },
     {
       "id": "M-GEO-PURE-01",
@@ -7974,7 +8096,7 @@
     },
     {
       "id": "M-GEO-NC-01",
-      "kind": "not-copied",
+      "kind": "difference",
       "engine": [
         {
           "file": "neo/renderer/tr_trisurf.cpp",
@@ -8016,14 +8138,18 @@
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
-          "symbol": "engineCleanupTriangles"
+          "symbol": "engineCleanupTriangles (brush faces), engineCleanupModelTriangles (models)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/tr_trisurf.cpp",
+          "symbol": "R_CreateDupVerts, R_TestDegenerateTextureSpace, R_RangeCheckIndexes, R_BoundTriSurf, R_CreateMaskedOcclusionCullingTris (copied, LP7.1a)"
         }
       ],
-      "note": "D57: R_CreateDupVerts changes nothing drawn (dupVerts serve the smoothed normals of generated-normal surfaces and shadows); R_TestDegenerateTextureSpace has no effect; R_RangeCheckIndexes is the facade's pre-validation; bounds and the MOC data are the chunk builder's or not needed"
+      "note": "A43 (LP7.1a) restated: R_CreateDupVerts, R_TestDegenerateTextureSpace, R_RangeCheckIndexes, R_BoundTriSurf and R_CreateMaskedOcclusionCullingTris are copied now (M-GEO-PART-01), and a model's surfaces take R_CleanupTriangles whole (engineCleanupModelTriangles, FinishSurfaces): R_CreateDupVerts feeds R_DeriveNormalsAndTangents' sum over the dupVerts for generated normals (tr_trisurf.cpp:984-994). The difference that stays: a brush face's engineCleanupTriangles calls R_CleanupTriangles' steps without them (D57: a brush face never generates normals, so nothing reads its dupVerts; R_TestDegenerateTextureSpace has no effect; the range check is the facade's pre-validation; the bounds and the masked occlusion data are the chunk builder's or unused)"
     },
     {
       "id": "M-GEO-NC-02",
-      "kind": "not-copied",
+      "kind": "function",
       "engine": [
         {
           "file": "neo/renderer/tr_trisurf.cpp",
@@ -8053,12 +8179,20 @@
           "sha256": "7eac0a9fded90c34e4e61c313adb8701441a42c9b1754f4573c2a00813dc704e"
         }
       ],
-      "sinkbroom": [],
-      "note": "Q18: the hidden [.][retail] sweep of every decl file (tst_RetailMaterials.cpp, \"the mikktspace keyword\") finds the keyword in no retail or loose decl file, so MikkTSpace (neo/libs/mikktspace) is not copied (M-ID-DIFF-04)"
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/tr_trisurf.cpp",
+          "symbol": "the MikkTSpace include and interface (copied, LP7.1a)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/mikktspace/mikktspace.c"
+        }
+      ],
+      "note": "A43, D135 (LP7.1a) restated: MikkTSpace is copied (M-MIKK-COPY-01, -02) with the engine's interface (the callbacks, m_alloc and m_free, the static object M-MODEL-STATIC-01); Q18's sweep found the keyword nowhere, but every model newer than 2016 takes MikkTSpace (Model.cpp:366-375), so it is copied for every surface: a model's without generated normals and without unsmoothedTangents, and a brush face whose material has the keyword (P7.16)"
     },
     {
       "id": "M-ID-DIFF-04",
-      "kind": "difference",
+      "kind": "function",
       "engine": [
         {
           "file": "neo/renderer/Model.cpp",
@@ -8098,7 +8232,7 @@
           "symbol": "engineCleanupTriangles (EngineTangentPath::Mikktspace)"
         }
       ],
-      "note": "Q18 answered 0, R3.11: a material with the mikktspace keyword takes the engine's failure path: R_DeriveTangentsWithoutNormals( tri, true ) calls the stub R_DeriveMikktspaceTangents (M-GEO-FN-04), which fails, so the copy warns \"Mikkelsen tangent space calculation failed\" and derives the tangents without normals, as the engine does when MikkTSpace fails; unsmoothedTangents comes first, as in R_CleanupTriangles. The difference: the engine would run MikkTSpace and succeed. No retail or user material has the keyword"
+      "note": "A43, P7.16 (LP7.1a) restated: the mikktspace keyword's path is the engine's: R_DeriveTangentsWithoutNormals( tri, true ) runs the copied MikkTSpace, for a brush face whose material has the keyword and for a model's surface (useMikktspace || UseMikkTSpace(), Model.cpp:1281); unsmoothedTangents comes first and generated normals take R_DeriveTangents, as in R_CleanupTriangles (:1831-1843), so MikkTSpace applies only without either. No retail, user or parity material has the keyword (the [.][retail] sweep; the sandbox's four .mtr files by grep), so no parity row changes"
     },
     {
       "id": "M-GEO-FN-05",
@@ -10985,7 +11119,7 @@
           "symbol": "FrameLog: LP7.0's columns"
         }
       ],
-      "note": "LP7.0 (C51, C52, C53, D126, P7.19, P7.20): the engine loads a model synchronously on the calling thread (GetModel) and keeps it in its model list by canonical name; the preview's model table is the material service's, published with the materials (C20), so a record has states of its own: Pending (requested, read or finishing: its entities draw nothing and keep the frame unconverged, D124), Ready, Missing (no file: the default cube, flagged) and Default (an unknown type, a validator or loader failure, a modelDef name on an idEntity spawnclass: the cube, flagged). A record carries per surface the material, EngineDrawVert vertices, 16-bit indexes, generateNormals, tangentsCalculated and bounds; the model bounds, the three has-surfaces flags, the source kind (binary, source, default), the source time (A4, the file source's), the binary's stored time (LoadBinaryModel's test is LP7.1a's), a .bglb's model_state and animation count (P7.19), a version and the notice's reason. MaterialTable::models is kept across reloads with modelChanges and changedModels, as the images' slots are (a model does not depend on the decls; LP7.1a's source path re-finishes records whose materials change, P7.22); MaterialTable::skins is per registry, as the entityDefs. LP7.0 has no loader and no request path: the maps are empty, so every model name finds no record. The skins are not reachable from the parse thread through the facade today: the shim registers DECL_SKIN with the copied idDeclSkin (DeclManagerShim.cpp Init, Init2: the skins folder) and the registry parses a skin when FindSkin asks, but MaterialDecls has no skin call and idDeclSkin's mappings are private (RemapShaderBySkin is its only lookup), so the map stays empty until LP7.2 adds a facade call. The frame log carries LP7's eleven counts (model_entities, model_instances, model_draws, models_pending, models_skinned, dress_surfaces, dress_unmatched, adopted_islands, adopted_tris, unmatched_islands, curved_islands) after proc_bytes at the end of the header, 0 in every frame row until LP7.2-LP7.4 fill them, empty in start and stop rows: 69 fields"
+      "note": "LP7.0 (C51, C52, C53, D126, P7.19, P7.20): the engine loads a model synchronously on the calling thread (GetModel) and keeps it in its model list by canonical name; the preview's model table is the material service's, published with the materials (C20), so a record has states of its own: Pending (requested, read or finishing: its entities draw nothing and keep the frame unconverged, D124), Ready, Missing (no file: the default cube, flagged) and Default (an unknown type, a validator or loader failure, a modelDef name on an idEntity spawnclass: the cube, flagged). A record carries per surface the material, EngineDrawVert vertices, 16-bit indexes, generateNormals, tangentsCalculated and bounds; the model bounds, the three has-surfaces flags, the source kind (binary, source, default), the source time (A4, the file source's), the binary's stored time (LoadBinaryModel's test is LP7.1a's), a .bglb's model_state and animation count (P7.19), a version and the notice's reason. MaterialTable::models is kept across reloads with modelChanges and changedModels, as the images' slots are (a model does not depend on the decls; LP7.1a's source path re-finishes records whose materials change, P7.22); MaterialTable::skins is per registry, as the entityDefs. LP7.0 has no loader and no request path: the maps are empty, so every model name finds no record. The skins are not reachable from the parse thread through the facade today: the shim registers DECL_SKIN with the copied idDeclSkin (DeclManagerShim.cpp Init, Init2: the skins folder) and the registry parses a skin when FindSkin asks, but MaterialDecls has no skin call and idDeclSkin's mappings are private (RemapShaderBySkin is its only lookup), so the map stays empty until LP7.2 adds a facade call. The frame log carries LP7's eleven counts (model_entities, model_instances, model_draws, models_pending, models_skinned, dress_surfaces, dress_unmatched, adopted_islands, adopted_tris, unmatched_islands, curved_islands) after proc_bytes at the end of the header, 0 in every frame row until LP7.2-LP7.4 fill them, empty in start and stop rows: 69 fields LP7.1a: the table is filled (MaterialService::requestModel, M-MODEL-DIFF-02); a fifth state Skinned (an .md5mesh: nothing drawn, K41, D127); the time test is binaryModelTimeAccepted (M-MODEL-03), the GLMB tail readGlmbTail (M-MODEL-04); a surface keeps its id, mirroredVerts and dupVerts, a record pendingLoader and its Source materials (P7.22)"
     },
     {
       "id": "M-BAKE-DIFF-02",
@@ -22899,6 +23033,1467 @@
         }
       ],
       "note": "LP5.3 step 5 (C50, P6.7), test only: the sweep's fog and blend sections, LP5.1's SKIPs filled: 60 _color steps of lp1b_light as the fog stand-in (shaderParm3 150) over the fixture's tree with its portal -> fog light table (the camera in the west room, 248 from the doorway: fogged out) and as the blend stand-in (colored), the fake service withholding every second step and the run 40-49: per step the light listed with registers, provisional exactly on the withheld steps, its colour the last answered step's, no _default unit, of its kind; the fog light's flow use never pending and the doorway fogged on every step (the kept registers decide the portal as the answered ones would). The mutant (TB_LIT_SWEEP_MUTANT=1) fails all five kinds (fog 140 problems, the flow's among them). The GPU variant (the LP5.1 [.][litgpu2] case) adds a fog light (fogs/basicFog's shape) and a blend light (blend add, colored) over LP4.2a's slabs: the fogged and the blended patch never decrease, equal on the kept frames, rise on the answered ones; the case copies the fog and blendlight blobs into its root"
+    },
+    {
+      "id": "M-MODEL-COPY-01",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_obj.cpp",
+          "lines": [
+            1,
+            279
+          ],
+          "anchor": "whole file",
+          "sha256": "27d04ebe0144bfdac9a957fe31657eedfc45d788f60787fe2ccb0794be1187ec",
+          "gitBlob": "4e9143b6de4146a9e60d35e39fa92bdcde2c49b6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Model_obj.cpp"
+        }
+      ],
+      "note": "LP7.1a (C51 (3), D136, D137): the OBJ loader, copied whole: OBJ_Parse with the copied idLexer (flags 0), OBJ_Load, whose ReadFile the shim serves from the bytes and time handed in (M-MODEL-FS-01), and OBJ_Free; its own translation unit. Parse thread only (C20): MaterialDecls::parseObjModel calls OBJ_Load; the parsed objModel_t is plain data the pool's finish reads. Its fatal sites: M-MODEL-FATAL-01, -02"
+    },
+    {
+      "id": "M-MODEL-COPY-02",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_obj.h",
+          "lines": [
+            1,
+            63
+          ],
+          "anchor": "whole file",
+          "sha256": "ce60597f08cc01d04d9642df45f336f4ffaec20fab9655d5f464bdc17243eb67",
+          "gitBlob": "e3d6023c4ab9c81a5fdb95d5245684c5450e7d3a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Model_obj.h"
+        }
+      ],
+      "note": "LP7.1a: objObject_t and objModel_t, which Model_obj.cpp, the Model.cpp ranges (M-MODEL-PART-01) and ShimModels.cpp include"
+    },
+    {
+      "id": "M-MODEL-COPY-03",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/containers/VectorSet.h",
+          "lines": [
+            1,
+            317
+          ],
+          "anchor": "whole file",
+          "sha256": "06912f387902e05163c4b3dd77b32c17462df7ba50486c4c44145ce8a99daaa6",
+          "gitBlob": "a0f3758808c7593474fe16215902bf14f9c618eb"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/containers/VectorSet.h"
+        }
+      ],
+      "note": "LP7.1a: idVectorSubset, ConvertOBJToModelSurfaces' slop merge of positions and texture coordinates (r_slopVertex 0.01, r_slopTexCoord 0.001), copied whole; included by ShimModels.cpp. Its default constructor reads boxHashSize before it is set (hash.Clear( IPow( boxHashSize, dimension ), 128 ), :226-232), which only sets the hash's sizes (no allocation) and Init overwrites at once: harmless, kept verbatim"
+    },
+    {
+      "id": "M-MIKK-COPY-01",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/libs/mikktspace/mikktspace.c",
+          "lines": [
+            1,
+            1899
+          ],
+          "anchor": "whole file",
+          "sha256": "7dab933dec27a0663462a021bfd2c8c561b5ff56f481cc9a72b25e837a13a665",
+          "gitBlob": "34e391f0633e70e8b87e8142ccad7b1191434713"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/mikktspace/mikktspace.c"
+        }
+      ],
+      "note": "LP7.1a (D135, SC606, SC613): the engine-vendored MikkTSpace (Morten S. Mikkelsen, version 1.0 with the engine's m_alloc/m_free interface members), copied whole as a pinned library, compiled as C in TbLitIdLib (M-MIKK-BUILD-01); it allocates through the interface's m_alloc, the copied mkAlloc (R_StaticAlloc, the global allocator), keeps no mutable static (g_iCells is const), so it is pool-safe (M-MODEL-POOL-01). zlib-style licence: LICENSE_EXCEPTIONS.md's \"Mikkelsen Tangent Space library\" entry (neo/libs/mikktspace/*)"
+    },
+    {
+      "id": "M-MIKK-COPY-02",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/libs/mikktspace/mikktspace.h",
+          "lines": [
+            1,
+            151
+          ],
+          "anchor": "whole file",
+          "sha256": "06c7b9ed38d76e61d43905603a2a81f295c739e8b651a4b4d490804b83a4674a",
+          "gitBlob": "94e37da7e65fcf1377289139f4043d5e09472771"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/mikktspace/mikktspace.h"
+        }
+      ],
+      "note": "LP7.1a (D135): MikkTSpace's interface (SMikkTSpaceInterface with m_alloc and m_free, SMikkTSpaceContext, genTangSpaceDefault), which tr_trisurf.cpp includes as <mikktspace.h> (TbLitIdLib's private include of engine/libs/mikktspace)"
+    },
+    {
+      "id": "M-MODEL-PART-01",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1,
+            35
+          ],
+          "anchor": "licence and includes (Model_local.h and the other loaders' headers are left out: shim/src/ShimModels.cpp declares idRenderModelStatic)",
+          "sha256": "47ebd9ec6c078d4cfbcbc965e7e08d278511a63581fab19c554b97752387f76c"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            40,
+            40
+          ],
+          "anchor": "#include \"Model_obj.h\"",
+          "sha256": "5bd5373c40d1a2ac717feee071f9d9a6af86acb90bf139ddc845461e79f63624"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            42,
+            45
+          ],
+          "anchor": "r_mergeModelSurfaces, r_slopVertex, r_slopTexCoord, r_slopNormal",
+          "sha256": "5f3e350e991f53ef07bc0116496203c039813e14ff22f547805d8c4392235121"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            54,
+            90
+          ],
+          "anchor": "idRenderModelStatic::idRenderModelStatic, ~idRenderModelStatic",
+          "sha256": "666243746a4677dba7f428b2b2bd1d95e6417964c0be02f8d6e9dbe31776110b"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            221,
+            296
+          ],
+          "anchor": "AddCubeFace, idRenderModelStatic::MakeDefaultModel",
+          "sha256": "ab951f46a76b0e94d25844b15c2dcfa538901a16964169a9cbd623b4881ca213"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            910,
+            949
+          ],
+          "anchor": "idRenderModelStatic::InitEmpty, AddSurface",
+          "sha256": "d428db5d962f723d962643dc75fec3308bd5caed8c09533b69abdcf3f574af52"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            983,
+            991
+          ],
+          "anchor": "idRenderModelStatic::NumSurfaces",
+          "sha256": "8f1e6082d879a3d66b9dabb41a45b2ed67e0e647a61e25d3cc226c6426d8d6fe"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1167,
+            1367
+          ],
+          "anchor": "idRenderModelStatic::FinishSurfaces",
+          "sha256": "5aadaee2e66f635848ff0aa1f95bb05dbea4d61fb8c3c99a81c8d6db1b5c13f8"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1370,
+            1733
+          ],
+          "anchor": "matchVert_t, idRenderModelStatic::ConvertOBJToModelSurfaces",
+          "sha256": "2832218399709ef3f5ef35cd0266438476d56c8278728a283d7dce48cbba108b"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            3234,
+            3259
+          ],
+          "anchor": "idRenderModelStatic::PurgeModel",
+          "sha256": "1b641116d86edbb23f83117d22982b8e96897cfc2bc6ac50c807439a7704bc83"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Model.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "#include \"renderer/Model.cpp\" after the reduced idRenderModelStatic"
+        }
+      ],
+      "note": "LP7.1a (C51 (3), D137, the director's copy plan): 794 of the file's 3392 lines, in 10 ranges, each preceded by one marker line: the conversion's cvars, the constructor and destructor, the default cube, InitEmpty, AddSurface, NumSurfaces, FinishSurfaces, ConvertOBJToModelSurfaces and PurgeModel, member functions of the reduced idRenderModelStatic ShimModels.cpp declares (M-MODEL-SHIM-01). DMAP stays undefined (M-ID-BUILD-01): MakeDefaultModel's :273-277 (and LP7.1b's :1784-1788) take tr.defaultMaterial, the stand-in's. LoadOBJ (:3211-3229) and InitFromFile (:314-379) are not copied: the load runs on the parse thread and the conversion on the pool (D137); InitFromFile's tail and the 2016 rule are transcribed (M-MODEL-07). LP7.1b adds the ASE and LWO ranges and their headers' includes between these"
+    },
+    {
+      "id": "M-SIMD-PART-01",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/idlib/math/Simd_Generic.cpp",
+          "lines": [
+            1,
+            27
+          ],
+          "anchor": "licence",
+          "sha256": "f5664afb667359f28051827a334c2163c689462c4246d10f36a5a7180f9960bc"
+        },
+        {
+          "file": "neo/idlib/math/Simd_Generic.cpp",
+          "lines": [
+            39,
+            39
+          ],
+          "anchor": "UNROLL1",
+          "sha256": "30a43ac37ff5148316f27d176127d84dc7bfc99ce3c242deab4f3c349a24e5e7"
+        },
+        {
+          "file": "neo/idlib/math/Simd_Generic.cpp",
+          "lines": [
+            76,
+            88
+          ],
+          "anchor": "idSIMD_Generic::MinMax (idVec2 points)",
+          "sha256": "0f1d8e79c7dcde8825f356c13bbb54a6ee42d9249483a83804dc99d84d8e119c"
+        },
+        {
+          "file": "neo/idlib/math/Simd_Generic.cpp",
+          "lines": [
+            104,
+            116
+          ],
+          "anchor": "idSIMD_Generic::MinMax (idDrawVert positions)",
+          "sha256": "749aa8055f3ae7fd7b157130ddc18f152cbba43283aa2fa3623fa79e27e923ac"
+        },
+        {
+          "file": "neo/idlib/math/Simd.h",
+          "lines": [
+            1,
+            30
+          ],
+          "anchor": "licence and include guard",
+          "sha256": "2fe505c0750e09e48c7652a9894fc6c02daf4a34f1e1ead92c8d14d0c9bb33be"
+        },
+        {
+          "file": "neo/idlib/math/Simd.h",
+          "lines": [
+            61,
+            67
+          ],
+          "anchor": "VPCALL",
+          "sha256": "a0ad7a31fa390daeb83619f86494fb50108fd3fd169ab9a5f256f48418d3f9c8"
+        },
+        {
+          "file": "neo/idlib/math/Simd.h",
+          "lines": [
+            122,
+            122
+          ],
+          "anchor": "include guard end",
+          "sha256": "2f23b06fece10c87080b991c7f4d2b99524c9d1f88b750f03ff74d41a0272f9c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Simd_Generic.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/math/Simd.h"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
+          "symbol": "idSIMD_Generic (two members), idSIMDProcessor::MinMax (idVec2, idDrawVert)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimLib.h",
+          "symbol": "idSIMDProcessor, #include \"idlib/math/Simd.h\""
+        }
+      ],
+      "note": "LP7.1a (the director's item 3): the two MinMax overloads ConvertOBJToModelSurfaces (:1554, texture coordinates) and R_BoundTriSurf (tr_trisurf.cpp:608, positions) call, copied byte for byte with UNROLL1 and Simd.h's VPCALL, and compiled inside ShimLib.cpp after a stand-in idSIMD_Generic of exactly those two non-virtual members; the shim's SIMDProcessor calls them. They read only their arguments, so any thread may (C24 (3)). The idVec3 overload stays the earlier transcription (M-GEO-FN-*)"
+    },
+    {
+      "id": "M-MODEL-SHIM-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            548,
+            551
+          ],
+          "anchor": "IsDrawn (EngineModelMaterial::drawn)",
+          "sha256": "c18398c6ff5e0fc9cbdcfd501fe89b20ff1123f006b2dfcc10a80a3431bf01bd"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            584,
+            587
+          ],
+          "anchor": "SurfaceCastsShadow (castsShadow)",
+          "sha256": "41d1836d22ae7ac39010671f4a7af5358d4963e37512ab88eb0608f23e23c97a"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            599,
+            602
+          ],
+          "anchor": "ReceivesLighting (receivesLighting)",
+          "sha256": "f86c00fa18c5582dffd0582b2764c64f6b77a39de167d5ae2f4127a18b794f7b"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            616,
+            619
+          ],
+          "anchor": "ShouldCreateBackSides (createBackSides)",
+          "sha256": "035d0c13e04b4ff8d8f708e9a99d22ed40e8448a074a9b00b32f70350fea5cf6"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            624,
+            627
+          ],
+          "anchor": "UseUnsmoothedTangents (unsmoothedTangents)",
+          "sha256": "e34bffc7c08dffd8c40715833c29480c6872703d6833dc6f34d45fa5ab4ce6bc"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            632,
+            635
+          ],
+          "anchor": "UseMikkTSpace (mikktspace)",
+          "sha256": "b915b15ef71ee2bd2e6cf6bc3f6f6b69f224a81c8bbeee5b569a6270adce60a1"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            671,
+            675
+          ],
+          "anchor": "IsDiscrete (discrete)",
+          "sha256": "6d5565c0a15bb53b421c8111b7d5e47efd99bb8eb58aee3c6a5122a465101812"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            745,
+            748
+          ],
+          "anchor": "GetRenderBump (renderBump)",
+          "sha256": "209931881008334d3e0fb3e9183cd8b80f1978635cb97d1183459d7e9ae30080"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            819,
+            822
+          ],
+          "anchor": "Deform (deform)",
+          "sha256": "fc181f39677276a5f476459a43c4e0da2e666e3173fc3af4fb5b917f8e178aed"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            882,
+            885
+          ],
+          "anchor": "AddToSurfaceArea (the stand-in's own sum, dropped: M-MODEL-DIFF-03)",
+          "sha256": "631e4ac61b83a6baf8771e391619e5d2caaed12136c383cb25a9b10c17c0a949"
+        },
+        {
+          "file": "neo/framework/DeclManager.h",
+          "lines": [
+            148,
+            151
+          ],
+          "anchor": "idDecl::GetName (name)",
+          "sha256": "72bd5d926b2770b936cd19cdc8f74392e621a950e223c92e59652a24081f0a16"
+        },
+        {
+          "file": "neo/renderer/Model_local.h",
+          "lines": [
+            46,
+            170
+          ],
+          "anchor": "idRenderModelStatic, the members the copied ranges touch",
+          "sha256": "45ac37165d86c309b0433fe405eeb1f1843003d894dbb1fb7a1666597b34608b"
+        },
+        {
+          "file": "neo/renderer/Model.h",
+          "lines": [
+            118,
+            123
+          ],
+          "anchor": "modelSurface_t",
+          "sha256": "4b300ba880e39c19486d4b90908ae09e0a44627adce6b6535570977e38e7cf28"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "idRenderModelStatic (the stand-ins idMaterial, modelSurface_t, ModelDecls, ModelRenderSystem; declManager, tr)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineModels.h",
+          "symbol": "EngineModelMaterial, EngineModelMaterials"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "MaterialDecls::modelMaterial, defaultModelMaterial, capture"
+        }
+      ],
+      "note": "LP7.1a (C51 (3), D137; the director's item 1): the copied Model.cpp ranges are idRenderModelStatic's members; Model_local.h (the renderer's whole idRenderModel interface) is not copied, so ShimModels.cpp declares a reduced, non-virtual idRenderModelStatic with the members they read and write, and at its class scope the stand-ins the member functions find before a global (no copied line changes, C7): idMaterial, holding the ten accessor values the parse thread captured from the registry's material through the copied accessors, by name: index (the decl's, for FindMaterial's one pointer per decl), name = GetName(), discrete = IsDiscrete(), renderBump = GetRenderBump(), createBackSides = ShouldCreateBackSides(), mikktspace = UseMikkTSpace(), unsmoothedTangents = UseUnsmoothedTangents(), castsShadow = SurfaceCastsShadow(), drawn = IsDrawn(), receivesLighting = ReceivesLighting(), deform = Deform(); modelSurface_t with that shader; declManager, whose FindMaterial( name ) returns the material the parse thread resolved for the name (the default one, never null, for a name it was not handed: materialMisses counts it); tr, whose defaultMaterial is the decl _default as MakeDefaultModel's DMAP branch finds it (:274), else the implicit material. So the conversion and FinishSurfaces read nothing of the registry: the CPU test runs the finish on a one-worker pool after its registry is destroyed and under another, with the same surfaces"
+    },
+    {
+      "id": "M-MODEL-POOL-01",
+      "kind": "pool-safe",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1167,
+            1367
+          ],
+          "anchor": "idRenderModelStatic::FinishSurfaces",
+          "sha256": "5aadaee2e66f635848ff0aa1f95bb05dbea4d61fb8c3c99a81c8d6db1b5c13f8"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1370,
+            1733
+          ],
+          "anchor": "ConvertOBJToModelSurfaces",
+          "sha256": "2832218399709ef3f5ef35cd0266438476d56c8278728a283d7dce48cbba108b"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            221,
+            296
+          ],
+          "anchor": "AddCubeFace, MakeDefaultModel",
+          "sha256": "ab951f46a76b0e94d25844b15c2dcfa538901a16964169a9cbd623b4881ca213"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            1803,
+            1847
+          ],
+          "anchor": "R_CleanupTriangles",
+          "sha256": "33cd9d4f31bc251ab8d38eeb07dedcc5097b41df2df9307bcc9bdc61cae378f8"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            868,
+            883
+          ],
+          "anchor": "R_DeriveMikktspaceTangents",
+          "sha256": "22154c1000d6ece4d712a267dfea727b8ede6691c5c9dbc790549a520be68473"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            2073,
+            2165
+          ],
+          "anchor": "the MikkTSpace callbacks",
+          "sha256": "e733465422b223312897139615b2f5ae2df87b24273696ee5c40b29942b73b8a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "engineFinishObjModel, engineDefaultModel"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "finishModel"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::startNextFinish (the job), takeFinishedModel"
+        },
+        {
+          "file": "lib/TbLitLib/src/CpuPool.cpp",
+          "symbol": "CpuPool::create( threads ): the service's pool of one worker"
+        }
+      ],
+      "commonCalls": [
+        "Model.cpp:1241, 1246 common->Error (unreachable, M-MODEL-FATAL-03, -04)",
+        "Model.cpp:1600, 1614 common->Error and 1684, 1688 common->FatalError (unreachable, M-MODEL-FATAL-05..08)",
+        "tr_trisurf.cpp:572, 576, 582, 589 common->Error (unreachable, M-GEO-FATAL-06)",
+        "tr_trisurf.cpp:1191 idLib::Warning \"Mikkelsen tangent space calculation failed\" (a warning: the job's messages)"
+      ],
+      "note": "LP7.1a (D137, the director's items 4 and 5): the conversion and FinishSurfaces (R_CleanupTriangles whole, MikkTSpace included) run as a job of the material service's own CpuPool of ONE worker, made on the parse thread with the first finish and stopped there before the registry is destroyed (stopModelPool: no worker outlives the service), one finish at a time (breakHere, M-MODEL-STATIC-03). The job holds its input (the parsed OBJ, read-only, and the captured materials: plain data, M-MODEL-SHIM-01), a mailbox and the service's wake: it finishes, drains the sink of D63 for its thread into the mailbox, then sets modelFinished under the service's mutex and wakes the parse thread, whose Model item publishes the record (a queued work item; an Error among the messages makes it the cube). C24: (1) its common calls go to the sink; (2) its fatal sites are unreachable for a file the validator passed (M-MODEL-GUARD-01) and the conversion's own indexes; (3) SIMDProcessor's MinMax are the copied idSIMD_Generic ranges (M-SIMD-PART-01); (4) it allocates with the tagged new, Mem_Alloc16, R_StaticAlloc and MikkTSpace's m_alloc (all the global allocator); (5) its statics: M-MODEL-STATIC-01..04",
+      "asserts": [
+        "VectorSet.h FindVector assert( epsilon <= boxHalfSize[i] ) (the bounds are expanded by 2 x 32 x epsilon)",
+        "tr_trisurf.cpp:469, 480, 491 the allocators' null asserts (each array allocated once)"
+      ],
+      "statics": [
+        "M-MODEL-STATIC-01 mikkTSpaceInterface (read only after load)",
+        "M-MODEL-STATIC-02 identityColor (read only)",
+        "M-MODEL-STATIC-03 breakHere (written: one finish at a time)",
+        "M-MODEL-STATIC-04 the four cvars (constexpr, read only)"
+      ]
+    },
+    {
+      "id": "M-MODEL-STATIC-01",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            202,
+            202
+          ],
+          "anchor": "static idMikkTSpaceInterface mikkTSpaceInterface",
+          "sha256": "80932114ef666c5c43bdcfe319385f6900ccaa4f5e4f82a050d2eecc2a212f31"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            2147,
+            2158
+          ],
+          "anchor": "idMikkTSpaceInterface::idMikkTSpaceInterface",
+          "sha256": "190063f816286d16b167c1fce9175c8b511b95403e182f3521a79b5d5dc1c078"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "#include \"renderer/tr_trisurf.cpp\""
+        }
+      ],
+      "staticKind": "static-init object",
+      "reason": "LP7.1a (D135, C24 (5), C9): the MikkTSpace interface object, dynamically initialised at program load by its constructor, which stores eight function pointers (mkAlloc ... mkSetTSpaceBasic) and allocates, opens and starts nothing; read only afterwards (SetUpMikkTSpaceContext takes its address), so every thread may use it. Allowed by name in M-ID-STATIC-39's Debug list (\"EngineGeometry.obj mikkTSpaceInterface\"); MSVC constant-initialises it in Release (no ??__E symbol there)"
+    },
+    {
+      "id": "M-MODEL-STATIC-02",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1400,
+            1400
+          ],
+          "anchor": "ConvertOBJToModelSurfaces: static byte identityColor[4]",
+          "sha256": "fe78a05b43debc84edd64764dfeaad3df0383007ff211086fd33d7c7258dccbb"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "LP7.1a: a function-local constant { 255, 255, 255, 255 }, constant-initialised and never written: the OBJ's white"
+    },
+    {
+      "id": "M-MODEL-STATIC-03",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1321,
+            1325
+          ],
+          "anchor": "FinishSurfaces: static int breakHere; breakHere++ for a material named *trigger*",
+          "sha256": "626ef3cfed9a1e01ec5aeacabccfe2a8785afecf63b69ce7d19a5bc01dd2ad46"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::Worker::startNextFinish (one finish at a time)"
+        }
+      ],
+      "staticKind": "balanced counter",
+      "reason": "LP7.1a (the director's item 4): a debugging counter FinishSurfaces increments for a material whose name holds \"trigger\"; it is WRITTEN, so it is pool-safe only because model finishes are serialised: the service's model pool has one worker and starts the next finish only after the last answered; nothing reads it"
+    },
+    {
+      "id": "M-MODEL-STATIC-04",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            42,
+            45
+          ],
+          "anchor": "the four idRenderModelStatic cvars",
+          "sha256": "5f3e350e991f53ef07bc0116496203c039813e14ff22f547805d8c4392235121"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "idRenderModelStatic::r_mergeModelSurfaces ... r_slopNormal (declared)"
+        }
+      ],
+      "staticKind": "static-init object",
+      "reason": "LP7.1a: constexpr idCVar static members, constant-initialised at their engine defaults (D21: \"1\", \"0.01\", \"0.001\", \"0.02\"), read only; EngineFrameDefaults records the same values (M-MODEL-CONST-01)"
+    },
+    {
+      "id": "M-MODEL-CONST-01",
+      "kind": "constant",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            42,
+            45
+          ],
+          "anchor": "r_mergeModelSurfaces, r_slopVertex, r_slopTexCoord, r_slopNormal",
+          "sha256": "5f3e350e991f53ef07bc0116496203c039813e14ff22f547805d8c4392235121"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineFrameDefaults::mergeModelSurfaces, slopVertex, slopTexCoord, slopNormal"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineModels.h",
+          "symbol": "engineModelCvars"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "the OBJ source path: engineModelCvars against EngineFrame"
+        }
+      ],
+      "note": "LP7.1a (C51, SC607): the conversion's merge and slop cvars at the engine's defaults, which the copied conversion reads through its own idCVars; EngineFrameDefaults holds them for the frame log's PRINTED list (LP7.2) and a test proves the two equal"
+    },
+    {
+      "id": "M-MODEL-FATAL-01",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_obj.cpp",
+          "lines": [
+            186,
+            186
+          ],
+          "anchor": "OBJ_Parse: \"Failed to parse face line\"",
+          "sha256": "2e39a483b82a3f87e623795d2da6bf60237ffa0448003e784c8909aff32a866e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "objFileProblem"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "the corner's indexes stay uninitialised (or what sscanf read) and vertexes[ vertidx ], texCoords and normals are read out of range (UNSAFE). Unreachable: the validator passes only f lines of exactly three v/vt/vn corners of positive indexes within the lists read so far (objFileProblem)"
+    },
+    {
+      "id": "M-MODEL-FATAL-02",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_obj.cpp",
+          "lines": [
+            211,
+            211
+          ],
+          "anchor": "OBJ_Parse: \"Unknown or unexpected token\"",
+          "sha256": "ff9e506befab8afd48d37930f1d3bdee981504b740b9f19f130a7a3f9abe3106"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "objFileProblem"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "the loop reads the next token: memory-safe, the stray values lost. Unreachable: the validator passes only the first tokens :88-211 take, a single #, and exact number counts per v, vt and vn line"
+    },
+    {
+      "id": "M-MODEL-FATAL-03",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1241,
+            1241
+          ],
+          "anchor": "FinishSurfaces: \"surface had NULL geometry\"",
+          "sha256": "974b59cdc5d30bdd5941c0623ebaf098408fc6a1554726a10a3fdf787aef30de"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "objFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "MakeDefaultModel has replaced the surfaces with the cube's one, and the loop reads surfaces[ i ] up to the old count (UNSAFE). Unreachable: every surface ConvertOBJToModelSurfaces adds gets a triangle list (an object exists only with corners, Model_obj.cpp:134-158, 216-228)"
+    },
+    {
+      "id": "M-MODEL-FATAL-04",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1246,
+            1246
+          ],
+          "anchor": "FinishSurfaces: \"surface had NULL shader\"",
+          "sha256": "5e1ccf3850d0b5a8822871f9b45f6ca0e25dfab5aab0428fd8de2fd3c1384935"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "objFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "as M-MODEL-FATAL-03. Unreachable: the stand-in FindMaterial never returns null (M-MODEL-SHIM-01)"
+    },
+    {
+      "id": "M-MODEL-FATAL-05",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1600,
+            1600
+          ],
+          "anchor": "ConvertOBJToModelSurfaces: \"bad vertex index\"",
+          "sha256": "f8c78ea7a5b962a5c7240ca7b8a9c8d77b28024725fb21a3f4c121c21f292d80"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "objFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "vRemap[ index ] is read out of range (UNSAFE). Unreachable by construction: index = 3j + k is below indexes.Num(), which equals vertexes.Num() (OBJ_Parse appends one of each per corner)"
+    },
+    {
+      "id": "M-MODEL-FATAL-06",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1614,
+            1614
+          ],
+          "anchor": "ConvertOBJToModelSurfaces: \"bad tex coord index\"",
+          "sha256": "240d06d0eac43299d0643c344ac0aba782dd6d35f8eaa651bae24c6243a3ab3a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "objFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "tvRemap[ tv ] is read out of range (UNSAFE). Unreachable by construction: texcoords.Num() equals vertexes.Num()"
+    },
+    {
+      "id": "M-MODEL-FATAL-07",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1684,
+            1684
+          ],
+          "anchor": "ConvertOBJToModelSurfaces: \"index miscount\"",
+          "sha256": "0d1e61fdd3f1c021d889c4700cd71f9bb4cf5574c2169fdd0ec4a282ad914dcf"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "objFileProblem"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "the surface is built with the counts (its index writes already happened). Unreachable: numIndexes equals indexes.Num()"
+    },
+    {
+      "id": "M-MODEL-FATAL-08",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1688,
+            1688
+          ],
+          "anchor": "ConvertOBJToModelSurfaces: \"vertex miscount\"",
+          "sha256": "d6f9090fbb270b74121b6b15fb8610eac42e3ac4a33207a02165f441ca0857f3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "objFileProblem"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "as M-MODEL-FATAL-07. Unreachable: numVerts is at most numIndexes"
+    },
+    {
+      "id": "M-GEO-FATAL-06",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            572,
+            572
+          ],
+          "anchor": "R_RangeCheckIndexes: numIndexes < 0",
+          "sha256": "5bcb511820fd63591bc71d1814590630b036a5cc198f1d28f14aca543a1dcb5b"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            576,
+            576
+          ],
+          "anchor": "R_RangeCheckIndexes: numVerts < 0",
+          "sha256": "ce402a81e76571eb708cd93d752c265a9cca465a69f6bafb9d7911486f1784a0"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            582,
+            582
+          ],
+          "anchor": "R_RangeCheckIndexes: numIndexes % 3",
+          "sha256": "79a657c3e6f548e94e665e389ef2cf44db4f627312d6071eabfb77b5ccf5bfb0"
+        },
+        {
+          "file": "neo/renderer/tr_trisurf.cpp",
+          "lines": [
+            589,
+            589
+          ],
+          "anchor": "R_RangeCheckIndexes: index out of range",
+          "sha256": "e28b5712c014e8907fd231bd819827d2d8de8da12ac5d0a8af285dd9b473ee70"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineGeometry.cpp",
+          "symbol": "engineCleanupModelTriangles (pre-validation)"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "the cleanup reads the indexes (UNSAFE for the out-of-range index). Unreachable: the conversion's indexes are below its numVerts and come in threes, the cube's are fixed, and engineCleanupModelTriangles checks a hand surface first (as engineCleanupTriangles); the validator's 32767 corners keep every index in 16 bits (M-MODEL-GUARD-01)"
+    },
+    {
+      "id": "M-MODEL-GUARD-01",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_obj.cpp",
+          "lines": [
+            56,
+            235
+          ],
+          "anchor": "OBJ_Parse",
+          "sha256": "122fe9ec4502a478378c978e808d72ccfec8614741a3b4a74fd77c6deb00ccf9"
+        },
+        {
+          "file": "neo/idlib/Lexer.cpp",
+          "lines": [
+            804,
+            910
+          ],
+          "anchor": "idLexer::ReadNumber: the octal start (:818) and the decimal and exponent paths",
+          "sha256": "386790f307debe638b07025c2ec36b99f6c43281eb217bcc79cc6ad752461232"
+        },
+        {
+          "file": "neo/idlib/Lexer.cpp",
+          "lines": [
+            1678,
+            1718
+          ],
+          "anchor": "idLexer::ParseFloat",
+          "sha256": "f5905aaaf0977bb8add5d888b54c1a81dad72ff37c6eb6552bf380ece31afe0e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "objFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "readObjSource"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "ModelLoading: the OBJ validator"
+        }
+      ],
+      "note": "LP7.1a (D136, P7.2, R5.3's rule): every OBJ passes the preview's own validator before the copies see it, and a failing one is drawn as the default cube with the reason (the copies never read it): no NUL, not empty, under 2 GB; each line's first token one of v vt vn f usemtl o g mtllib s l, a single #, or blank (covers M-MODEL-FATAL-02); v and vn three numbers, vt two, each in the copied lexer's decimal grammar (a '-', no leading 0 before a digit, which ReadNumber reads as octal, at most one '.', a lowercase exponent) (covers M-ID-FATAL-10's OBJ path); f exactly three a/b/c corners of positive indexes within the lists read before (covers M-MODEL-FATAL-01); usemtl under 256 characters (FindMaterial's canonicalisation, M-ID-GUARD-01); at most 32767 corners, so the 16-bit indexes hold a merged surface and its mirrored duplicates (Model.cpp:1676, tr_trisurf.cpp:1742) and the conversion's _alloca of one int per object stays small. M-MODEL-FATAL-03..08 and M-GEO-FATAL-06 are unreachable by construction once a file passes"
+    },
+    {
+      "id": "M-MODEL-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/ModelManager.cpp",
+          "lines": [
+            270,
+            291
+          ],
+          "anchor": "Init: _DEFAULT, _BEAM, _SPRITE",
+          "sha256": "98d557b21b5a72f589553341e19da5b299540573901f2006f1484dd193e46644"
+        },
+        {
+          "file": "neo/renderer/ModelManager.cpp",
+          "lines": [
+            409,
+            441
+          ],
+          "anchor": "GetModel: the extension's dispatch",
+          "sha256": "e2e9f8bc1891b64217533e0a1639f3459b2bbfaf1886849ca46463f947281177"
+        },
+        {
+          "file": "neo/renderer/ModelManager.cpp",
+          "lines": [
+            512,
+            523
+          ],
+          "anchor": "GetModel: an unknown type, InitEmpty and MakeDefaultModel",
+          "sha256": "351996e78cb5851fe10ee161975617fdb94cc5a776fabebb7af012ba44451b41"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            314,
+            361
+          ],
+          "anchor": "InitFromFile: the loaders, no flt branch, Couldn't load model",
+          "sha256": "421977ff0674a140dfbff5762ac4976dc12a5450a20841fb56429a690ed0ac89"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/ModelLoading.h",
+          "symbol": "ModelPath, ModelDispatch, modelDispatch"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "modelDispatch"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "ModelLoading: the dispatch of a canonical name"
+        }
+      ],
+      "note": "LP7.1a (C51 (1), D127, K40, K41, K46, K47): GetModel's order for a canonical name: an empty name no model; the built-ins found by the name hash (_default the engine's default model, the cube; _beam and _sprite the cube, K47); then the extension: obj the binary then the source; ase and lwo the binary then the cube with a notice until LP7.1b (ModelRecord::pendingLoader); ma the binary then the cube (K46); glb and gltf the binary only (K40); md5mesh the Skinned record, nothing drawn (K41, the fifth record state); md3, prt and liquid the cube (K47: the engine's own classes); flt the cube (dispatched to idRenderModelStatic, but InitFromFile has no flt loader, :350-361); an unknown extension or none the cube (:512-523). A .proc model's name is the scene's to tell apart before it asks (LP7.2)"
+    },
+    {
+      "id": "M-MODEL-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            400,
+            406
+          ],
+          "anchor": "LoadBinaryModel: the stored time and the time test",
+          "sha256": "b6c1ce885ef6e7a5ff96e680f3cc02695527bcd5756c0ab925e2bb6708e59309"
+        },
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            841,
+            845
+          ],
+          "anchor": "InProductionMode: com_productionMode",
+          "sha256": "e0fbdf814be7294bcfeef74d20219c4d1cb729dee09860998e7f2a0bdf51052e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/ModelLoading.h",
+          "symbol": "binaryModelTimeAccepted, lookUpModelBinary"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "binaryModelTimeAccepted, lookUpModelBinary"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "ModelLoading, the binary lookup and the engine's time test"
+        }
+      ],
+      "note": "LP7.1a (C51 (2), D125, SC602, A4): a binary is rejected only when not in production mode (com_productionMode 0: the preview never is) and the source's time is neither FILE_NOT_FOUND_TIMESTAMP (-1) nor 0 (a container entry, File.cpp:960-963, 1814-1817) and differs from the stored one; the source time is the file source's probe's (A4), never the checkout's. An accepted binary is a Ready record of its stored data with no FinishSurfaces (modelRecordFromBinary); a stale or unreadable one passes to the source; an .md5mesh's binary is MD5B and never read"
+    },
+    {
+      "id": "M-MODEL-04",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            762,
+            787
+          ],
+          "anchor": "idRenderModelGLTF::LoadBinaryModel: the GLMB tail's magic, declTimeStamp, names, model_state, rootID, the data file, animCnt",
+          "sha256": "9f86b813bf8d53a33b6518acd7478db3f8a591483f09688f042c267a37ec411f"
+        },
+        {
+          "file": "neo/renderer/Model_gltf.cpp",
+          "lines": [
+            52,
+            53
+          ],
+          "anchor": "GLMB_VERSION, GLMB_MAGIC",
+          "sha256": "45c53598734b40d41480100d5b7562dd92b09f7e734d5bb99a55f3b8c134d8cd"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/BprocModel.h",
+          "symbol": "GlmbTail, readGlmbTail"
+        },
+        {
+          "file": "lib/TbLitLib/src/BprocModel.cpp",
+          "symbol": "readGlmbTail"
+        }
+      ],
+      "note": "LP7.1a (P7.19): a .bglb's GLMB tail after its BRM stream: the magic, the modelDef's declTimeStamp (tested as :773 tests it, with the preview's declSourceTimeStamp 0: accepted), model_state as stored and the animation count, which reach the record (glbModelState, glbAnimations: an animated .bglb is K41's); the ids, joints, bones and poses after them are not read"
+    },
+    {
+      "id": "M-MODEL-05",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            607,
+            622
+          ],
+          "anchor": "LoadBinaryModel: the model's bounds, the three frame counters, the name, the nine bools",
+          "sha256": "d3ab7684aa839323257ea4c9d4a415c0434f8c0856abe991c45a1e7896856660"
+        },
+        {
+          "file": "neo/renderer/ModelManager.cpp",
+          "lines": [
+            446,
+            450
+          ],
+          "anchor": "GetModel: generated/rendermodels/<canonical> with the extension b<ext>",
+          "sha256": "960d311ff26e78c1ec97b6674cb0f06095ef5800f6c892d230d0a55fcaa18703"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/BprocModel.cpp",
+          "symbol": "readBinaryModel (the nine bools)"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/BprocModel.h",
+          "symbol": "BprocModel::hasDrawingSurfaces, hasInteractingSurfaces, hasShadowCastingSurfaces"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "engineGeneratedModelPath, engineFileExtension (the copied idStr)"
+        }
+      ],
+      "note": "LP7.1a (C51 (2)): readBinaryModel reads the nine bools after the name (isStaticWorldModel, defaulted, purged, fastLoad, reloadable and levelLoadReferenced dropped; the three has-surfaces flags kept), so the stream ends where the engine's does (a .bglb's tail follows); the binary's name is the copied idStr's AppendPath and SetFileExtension"
+    },
+    {
+      "id": "M-MODEL-07",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            366,
+            378
+          ],
+          "anchor": "InitFromFile: min2016, useMikktspace, FinishSurfaces( useMikktspace )",
+          "sha256": "853d4e8d073c0f42afbde81be42261fbb229ebcaf2a69e9512a753858480fb50"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            3211,
+            3229
+          ],
+          "anchor": "LoadOBJ: *sourceTimeStamp = obj->timeStamp, ConvertOBJToModelSurfaces",
+          "sha256": "251160d2d33dc0ab661cd3df4b9277d2a5954855ce3e8c32408aaf060e6f0785"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "engineUseMikktspace, engineFinishObjModel"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "readObjSource"
+        }
+      ],
+      "note": "LP7.1a (C51 (3)): InitFromFile's tail for an OBJ transcribed: InitEmpty, the model's time the OBJ's, the copied conversion (its result ignored, as LoadOBJ ignores it), purged false, then FinishSurfaces( useMikktspace ) with useMikktspace = sourceTimeStamp > 1451638800 (strict) on the time the caller hands in (the probe's, A4; a container entry's 0 never takes it)"
+    },
+    {
+      "id": "M-MODEL-FS-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_obj.cpp",
+          "lines": [
+            237,
+            255
+          ],
+          "anchor": "OBJ_Load: ReadFile, OBJ_Parse, the time, FreeFile",
+          "sha256": "3817b4651bb988f4a3f4a5a4feec8e71423f5dbff1f0ca0d64716747696552fa"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/Registry.h",
+          "symbol": "idFileSystemLocal::beginModelRead, endModelRead; tb::lit::shim::ModelRead"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idFileSystemLocal::readModelFile"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "MaterialDecls::parseObjModel"
+        }
+      ],
+      "note": "LP7.1a (P7.4, P7.13): the copied OBJ_Load's ReadFile is served the bytes and the time the caller hands in (the file source's read and probe, A4) through a model-read scope of the shim's file system: the handed name reads as FileSystem.cpp's ReadFile returns a file (a Mem_Alloc'ed, NUL-terminated buffer of length + 1), any other as missing; never a read of the disk or the checkout's time"
+    },
+    {
+      "id": "M-MODEL-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/ModelManager.cpp",
+          "lines": [
+            311,
+            336
+          ],
+          "anchor": "GetModel: the canonical name and the loaded model's lookup",
+          "sha256": "6e618ad674f993564abbd03e7859b171addf1b60c9da7b1ca4f3121b84432644"
+        },
+        {
+          "file": "neo/renderer/ModelManager.cpp",
+          "lines": [
+            446,
+            499
+          ],
+          "anchor": "GetModel: the binary, InitFromFile and WriteBinaryModel",
+          "sha256": "97afbb729938b36cdfd6d7b48b854e2f329c2484681f3c36fbdd39da1ca2db9a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/MaterialService.h",
+          "symbol": "MaterialService::requestModel, MaterialServiceStats::models ... longestModelFinishMs"
+        },
+        {
+          "file": "lib/TbLitLib/src/MaterialService.cpp",
+          "symbol": "MaterialService::requestModel; Worker::modelItem, readModel, queueFinish, queueCube, startNextFinish, takeFinishedModel, dropModel, pollModelFiles, recheckModelMaterials"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_MaterialService.cpp",
+          "symbol": "MaterialService loads models; serves Model items after Image items; the leak test's model path"
+        }
+      ],
+      "note": "LP7.1a (C51, D125, D126, D52, P7.20, P7.22): the engine loads a model synchronously in GetModel and writes its binary; the preview never writes one (R5.32, Q36) and loads on the material service: requestModel (any thread) answers the latest table's record or null and queues the canonical name; a Model work item, after the images and ahead of the bulk parse, publishes a finish that answered, reads one name (the dispatch, the binary with the time test, else the .obj source through the validator, the copied OBJ_Load and the materials' capture) and starts the next finish on the one-worker pool; a record that needs FinishSurfaces is Pending meanwhile. The poll probes each record's source and binary (two probes a record, PollSliceTime with a cursor) and drops a changed one as an image is dropped (modelChanges, changedModels, its generation moved so that a finish of the old file is not published), then reads it again. A Source record keeps the materials it was finished with (P7.22): a re-parse that moves materialsRevision, or a reload, drops and re-reads a record whose materials' values changed; a binary record keeps the stored data, as the engine's binary does"
+    },
+    {
+      "id": "M-MODEL-DIFF-03",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            878,
+            885
+          ],
+          "anchor": "GetSurfaceArea, AddToSurfaceArea",
+          "sha256": "e48e5e25b5ac6aa560162c97c7974c0236923e1222f64bd0a4d3d9ff1ed160f1"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            1068,
+            1068
+          ],
+          "anchor": "surfaceArea: only for listSurfaceAreas",
+          "sha256": "396905ac3444cf35d452c5d5187e087df1b745235857870408849c61661a8b9a"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1291,
+            1303
+          ],
+          "anchor": "FinishSurfaces: the surface area added to each material",
+          "sha256": "10560e9d0028a842188b98fe185d445ce7921d0fa31dac5e4d33196d51cfe3cb"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            744,
+            744
+          ],
+          "anchor": "R_ListSurfaceAreas_f's sort: ea->GetSurfaceArea()",
+          "sha256": "244690ee7b552f054837127f1ffc36f60e8bec25bc17bdb58581ca60ae7ea77e"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            753,
+            753
+          ],
+          "anchor": "the sort: eb->GetSurfaceArea()",
+          "sha256": "4ad6fc30c128f61eaff867105e6552688f853237b5382374e43fabde0bc09a2a"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            800,
+            800
+          ],
+          "anchor": "the listing: GetSurfaceArea() > 0",
+          "sha256": "3fd4e5ba88a1d7f561ad9a236775f8898901ef8655f084043b706521c6c2ce8a"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            809,
+            809
+          ],
+          "anchor": "the listing: the blocks of 4096",
+          "sha256": "40704b48b4dec3f5f5660041503c7412562381c2eb583f03b39a97c1dfe0e825"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "idRenderModelStatic::idMaterial::AddToSurfaceArea"
+        }
+      ],
+      "note": "LP7.1a (the director's item 1): FinishSurfaces adds each triangle's area to its material through a const_cast (:1301); the preview's lands in the stand-in material the finish owns and is dropped with it, so no registry state is written from the pool. In the engine a material's surface area is read only by the listSurfaceAreas console command (RenderSystem_init.cpp:744-809, by git grep of GetSurfaceArea at 285ea4d1: its sort and its print; Material.h:1068 \"only for listSurfaceAreas\"): nothing the renderer draws depends on it"
+    },
+    {
+      "id": "M-MODEL-DIFF-04",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_obj.cpp",
+          "lines": [
+            174,
+            187
+          ],
+          "anchor": "OBJ_Parse: an f line through sscanf of nine integers",
+          "sha256": "7c019c096b663efe73c85d40b167c4bfd33e9e2ccd84fe7d86b80194d5d1ca49"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "objFileProblem"
+        }
+      ],
+      "note": "LP7.1a (D136): the validator accepts a subset of what the copies read: an f line of four or more corners (sscanf matches the first nine numbers, so the engine draws the first triangle and drops the rest), a C or C++ comment the lexer skips, a v line whose numbers run on to the next line, a number the lexer reads otherwise (an octal 07, a hex 0x10, '+1') are refused and drawn as the default cube with the reason, where the engine loads them; an empty file is the cube on both sides (OBJ_Load's NULL)"
+    },
+    {
+      "id": "M-MIKK-BUILD-01",
+      "kind": "build",
+      "engine": [],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/CMakeLists.txt",
+          "symbol": "TbLitIdLib: engine/libs/mikktspace/mikktspace.c, the private include engine/libs/mikktspace"
+        }
+      ],
+      "note": "LP7.1a (D135): mikktspace.c compiles as C (the project declares C and CXX, CMakeLists.txt:41) inside TbLitIdLib with that target's options: on MSVC /w (suppress_dependency_warnings), /bigobj in Debug and /Z7 in Release, the compiler's default /fp:precise and CMake's default C flags; on GCC and Clang -w, -fno-strict-aliasing, -ffp-contract=off and, outside Debug, -fno-math-errno -fno-trapping-math (M-ID-BUILD-01's set). No define is needed (it includes the C headers only). The goldens' N03 (MikkTSpace on the engine's MSVC build) equals the preview's byte for byte"
+    },
+    {
+      "id": "M-TEST-MODEL-01",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            386,
+            625
+          ],
+          "anchor": "LoadBinaryModel (the goldens' reader)",
+          "sha256": "6b3f2180a3126a0c0920e92d1f0a0a16a5fcb492e9496a09a0422c57419e5212"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "ModelLoading, the source path against the engine's binaries; the fixture models before the capture"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/models/stamps.json"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/models/test",
+          "symbol": "n01.bobj, n02.bobj, n03.bobj, n04.base, n05.blwo (the engine's)"
+        }
+      ],
+      "note": "LP7.1a (C56, the goldens): the engine's own binaries of the fixture models (parity.py capture-models, one engine process) are the goldens of the source path: for N01 (2015, WithoutNormals), N02 (the same OBJ under another name) and N03 (2017, MikkTSpace on smooth normals with sheared, mirrored texture coordinates) the preview's source load with the stamp of stamps.json handed in equals the binary byte for byte: every vertex (xyz, st, normal, tangent, colour, color2), the indexes, dupVerts, mirroredVerts, the surface and model bounds, the three flags, tangentsCalculated, generateNormals; the mutant (N03 through the WithoutNormals path) differs in the tangents alone. N04's ASE and N05's LWO goldens are LP7.1b's. Never in the product"
+    },
+    {
+      "id": "M-TEST-MODEL-02",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            386,
+            625
+          ],
+          "anchor": "LoadBinaryModel",
+          "sha256": "6b3f2180a3126a0c0920e92d1f0a0a16a5fcb492e9496a09a0422c57419e5212"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/tst_RetailModels.cpp",
+          "symbol": "Retail models: the engine's binaries read"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/GameFileSource.h",
+          "symbol": "GameFileSource::containerEntryNamesForTesting"
+        }
+      ],
+      "note": "LP7.1a (C51, P7.19), test only, [.][retail]: every generated/rendermodels/**.b* the C8 search finds (the .resources and .pk4 entries by name, a container's listing being flat; the loose ones through listFiles) reads through readBinaryModel, a .bglb's GLMB tail too, an .bmd5mesh (MD5B) counted apart; counted by extension with bytes and time. The retail game at LP7.1a: 1,518 binaries (.base 188, .bglb 5, .blwo 1,026, .bma 40, .bobj 2, all read; .bmd5mesh 257 apart), 16.4 s in Debug. The source half is LP7.1b's"
+    },
+    {
+      "id": "M-TEST-PARITY-07",
+      "kind": "difference",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            3977,
+            3983
+          ],
+          "anchor": "OpenFileWrite: fs_basepath/<fs_game>/<path>, where the engine writes a binary",
+          "sha256": "595fee81d744e7bdd1a3fd744009ba7f7a8f8246012371162b4dfed8cfe89fd8"
+        },
+        {
+          "file": "neo/renderer/ModelManager.cpp",
+          "lines": [
+            489,
+            499
+          ],
+          "anchor": "GetModel: WriteBinaryModel unless a default model",
+          "sha256": "11f23f6dddb7fe6f09d8d1b597aeab89c74c7558679cad61a2b38be182b58af8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "MODELS_MAP, MODEL_SOURCES, build_models_map, the fixture generators, stage, remove_rendermodels, staged_digest, assemble_preview, cmd_capture_models (outside the repository)"
+        }
+      ],
+      "note": "LP7.1a (C56, P7.4, P7.10, P7.21), test only: the parity tool's fifth map, litpreview_models (rooms N01-N05, a func_static naming a generated fixture model and a point light each, no row before LP7.2), its generated models (OBJ, ASE and md5mesh as text, LWO2 by a struct writer), the staging table's per-file stamps (2015-12-31, N03 2017-01-01) applied after the copy, the rendermodels folder of game/tb_parity emptied by name before every run, model sources copied into the preview root with their stamps but the withheld ones (N02), and only the binaries a row's \"binary\" list names; capture-models runs the engine once as run does (the junction, the proof listing, the timeout) to write the goldens"
     }
   ],
   "retired": [
