@@ -62,6 +62,29 @@ struct BprocModel
   // ReadVec3s after the surfaces): FinishSurfaces' bounds, Zero for a model without
   // surfaces, the surfaces of a deforming material grown
   std::array<EngineVec3, 2> bounds = {};
+  // LP7.1a (C51, D125): the last three of the nine bools after the name
+  // (Model.cpp:614-622: isStaticWorldModel, defaulted, purged, fastLoad, reloadable and
+  // levelLoadReferenced are read and dropped), the model's has-surfaces flags as
+  // FinishSurfaces set them
+  bool hasDrawingSurfaces = false;
+  bool hasInteractingSurfaces = false;
+  bool hasShadowCastingSurfaces = false;
+};
+
+/**
+ * LP7.1a (C51, P7.19): the GLMB tail a .bglb holds after its BRM stream
+ * (Model_gltf.cpp:762-787, idRenderModelGLTF::LoadBinaryModel): its magic
+ * ('M' << 24 | 'L' << 16 | 'G' << 8 | 106, :52-53), the modelDef's declTimeStamp (big
+ * int64), the modelDef name and the command line (strings), model_state as stored (a
+ * big int32; LoadBinaryModel then sets it from the animation count, :850), rootID, the
+ * data file's name and the animation count (big int32). The animation ids, joints, bones
+ * and poses after them are not read.
+ */
+struct GlmbTail
+{
+  std::int64_t declTimeStamp = 0;
+  int modelState = 0;
+  int animationCount = 0;
 };
 
 /**
@@ -72,6 +95,10 @@ struct BprocModel
  * is checked against the bytes left. Pure; any thread. LP1c.1's .bproc reader reuses it.
  */
 Result<BprocModel> readBinaryModel(std::span<const std::byte> data, std::size_t& offset);
+
+// LP7.1a: the GLMB tail at offset (GlmbTail); offset moves past what is read. Pure; any
+// thread
+Result<GlmbTail> readGlmbTail(std::span<const std::byte> data, std::size_t& offset);
 
 // a .bproc (RenderWorld_load.cpp:764-998 InitFromMap's binary branch): version 3, or
 // the BFG's 1 (models saved as "shadowmodel") and 2, which InitFromMap takes only without

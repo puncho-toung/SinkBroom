@@ -19,8 +19,8 @@
 
 // ---- engine notice ----
 // Parts of this file transcribe, altered for SinkBroom, code of the Doom 3 BFG Edition
-// GPL Source Code and RBDOOM-3-BFG (neo/renderer/Model.cpp, renderer/RenderWorld_load.cpp
-// and framework/File.cpp):
+// GPL Source Code and RBDOOM-3-BFG (neo/renderer/Model.cpp, renderer/Model_gltf.cpp,
+// renderer/RenderWorld_load.cpp and framework/File.cpp):
 //   Copyright (C) 1993-2012 id Software LLC, a ZeniMax Media company.
 //   Copyright (C) 2014-2024 Robert Beckebans
 // That code is also subject to the additional terms that follow the GNU General
@@ -310,20 +310,54 @@ Result<BprocModel> readBinaryModel(
              });
   }
   return std::move(read) | kdl::and_then([&]() -> Result<BprocModel> {
-           // Model.cpp:607-619: the model's bounds (C31), then overlaysAdded,
+           // Model.cpp:607-622: the model's bounds (C31), then overlaysAdded,
            // lastModifiedFrame, lastArchivedFrame, the name and nine bools
            const auto min = in.vec3();
            const auto max = in.vec3();
            model.bounds = {min, max};
            in.skip(12);
            model.name = in.string();
-           in.skip(9);
+           // LP7.1a: isStaticWorldModel, defaulted, purged, fastLoad, reloadable and
+           // levelLoadReferenced, dropped; the has-surfaces flags kept
+           for (auto i = 0; i < 6; ++i)
+           {
+             static_cast<void>(in.boolean());
+           }
+           model.hasDrawingSurfaces = in.boolean();
+           model.hasInteractingSurfaces = in.boolean();
+           model.hasShadowCastingSurfaces = in.boolean();
            if (in.failed())
            {
              return streamError("the model is cut short", offset);
            }
            return std::move(model);
          });
+}
+
+Result<GlmbTail> readGlmbTail(const std::span<const std::byte> data, std::size_t& offset)
+{
+  auto in = Reader{data, offset};
+  // Model_gltf.cpp:52-53, 762-769
+  constexpr auto GlmbMagic = magicOf('M', 'L', 'G', 106);
+  const auto magic = in.big<std::uint32_t>();
+  if (in.failed() || magic != GlmbMagic)
+  {
+    return Error{fmt::format("The GLMB tail cannot be read: magic {:08x}", magic)};
+  }
+  auto tail = GlmbTail{};
+  // :772-787
+  tail.declTimeStamp = in.big<std::int64_t>();
+  static_cast<void>(in.string());
+  static_cast<void>(in.string());
+  tail.modelState = in.big<std::int32_t>();
+  static_cast<void>(in.big<std::int32_t>());
+  static_cast<void>(in.string());
+  tail.animationCount = in.big<std::int32_t>();
+  if (in.failed())
+  {
+    return Error{"The GLMB tail cannot be read: it is cut short"};
+  }
+  return tail;
 }
 
 Result<BprocFile> readBprocFile(const std::span<const std::byte> data)

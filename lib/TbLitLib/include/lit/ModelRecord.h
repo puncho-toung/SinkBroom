@@ -20,6 +20,7 @@
 #pragma once
 
 #include "lit/EngineGeometry.h"
+#include "lit/EngineModels.h"
 
 #include <array>
 #include <cstdint>
@@ -57,6 +58,13 @@ struct ModelSurface
   bool generateNormals = false;
   bool tangentsCalculated = false;
   std::array<EngineVec3, 2> bounds = {};
+  // LP7.1a: srfTriangles_t's derived data the binary stores and FinishSurfaces makes:
+  // modelSurface_t::id, the mirrored duplicates at the end of verts
+  // (R_DuplicateMirroredVertexes) and R_CreateDupVerts' pairs (the duplicate, then the
+  // first vertex of its position)
+  int id = 0;
+  std::vector<int> mirroredVerts;
+  std::vector<int> dupVerts;
 };
 
 /**
@@ -70,7 +78,16 @@ struct ModelSurface
  * - Ready: the surfaces of the binary (no FinishSurfaces) or of the source path;
  * - Missing: no file: the default cube's surfaces, flagged (reason);
  * - Default: an unknown type, a validator or loader failure, a modelDef name on an
- *   idEntity spawnclass: the default cube, flagged (reason).
+ *   idEntity spawnclass: the default cube, flagged (reason);
+ * - Skinned (LP7.1a, K41, D127): an .md5mesh: nothing is drawn, as the engine draws
+ *   nothing for it on an idEntity (SC614); no surfaces, no file read.
+ *
+ * LP7.1a fills the table (MaterialService::requestModel): a record from the engine's
+ * binary (Binary) carries the stored vertices, flags and time as they are, with no
+ * FinishSurfaces (SC602); a record from the source (Source) carries what the copied
+ * conversion and FinishSurfaces made, and the materials it was finished with
+ * (sourceMaterials, P7.22: a re-parse of one finishes it again; a binary's are frozen,
+ * as the engine's).
  */
 struct ModelRecord
 {
@@ -80,6 +97,7 @@ struct ModelRecord
     Ready,
     Missing,
     Default,
+    Skinned,
   };
 
   // where the surfaces came from (C51's lookup order): the engine's
@@ -119,6 +137,13 @@ struct ModelRecord
   int glbAnimations = 0;
   // Missing and Default: why, for the entity's once-notice (C52)
   std::string reason;
+  // LP7.1a: a Default record whose source has a loader still to come (ASE and LWO until
+  // LP7.1b): the cube stands in, and the notice names the gap
+  bool pendingLoader = false;
+  // LP7.1a (P7.22): a Source record's materials as its finish read them (the ten values
+  // the copies call, lit/EngineModels.h) and the names its objects asked for them by
+  std::vector<std::string> sourceMaterialNames;
+  std::vector<EngineModelMaterial> sourceMaterials;
 };
 
 /**
