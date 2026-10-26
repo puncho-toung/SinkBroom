@@ -19971,7 +19971,7 @@
           "symbol": "LitSession the .proc's triangles adopted on a GPU (LP7.4)"
         }
       ],
-      "note": "LP7.4 (C55, D133, D138, P7.1, P7.11, K44, SC638-SC644): the engine always draws dmap's triangles; the preview takes them where they match the editor's faces and keeps its own triangulation elsewhere. dmap groups a side's triangles by (area, material, plane, mergeGroup, texVec within TEXTURE_VECTOR_EQUAL_EPSILON 0.001 and TEXTURE_OFFSET_EQUAL_EPSILON 0.005; usurface.cpp:36-37, 48-106; the texVec M-GEO-FN-18), optimizes each group (OptimizeIsland drops every interior and colinear vertex, optimize.cpp:1967-2000), snaps every vertex to 1/32 and merges it into a hash vertex within one snap unit (up to 3/64 per axis, tritjunction.cpp:80, 122-151), and welds the surface's vertices (MatchVert: xyz 0.01, st 0.001, normal 0.999, output.cpp:127-177); ParseModel recentres the st per island of triangles sharing a vertex (RenderWorld_load.cpp:224-268). The preview partitions each .proc surface into those islands (a union-find makes the walk's partition); an island is planar when every triangle's normal is within 0.999 of its largest triangle's and every vertex within 1/32 of that plane (a patch is one curved island, faces within 2.6 degrees that MatchVert welds too: never adopted). A planar island's candidates are the face pieces (not patches) of its model (a world piece's area, a brush entity's own model, K17) and material (before any remap) whose plane is its own (0.999, the centroid within epsilon = 3/64 + 0.01), whose texture vectors give its st at its vertices (M-GEO-FN-18), and whose polygon overlaps it by more than a sliver; the test: every island vertex within epsilon times the square root of 3 of the candidates' union in the plane, every candidate vertex within it of the island's triangles, no two candidates overlapping beyond a sliver (an addition to C55's test: so that a face moved within its plane, which leaves a strip bare and overlaps its neighbour, cannot pay for the hole with the overlap), and the summed areas within the candidates' perimeter times epsilon; positions as ParseModel reads back what dmap wrote. An adopted island's vertices are loadProcSurface's (loadProcIsland: the same per-vertex code, so the same bytes), its triangles dmap's in their vertex order, tangents by the material's path over it (R_DeriveTangentsWithoutNormals for most, tr_trisurf.cpp:1184-1325, as FinishSurfaces runs it on the area model, Model.cpp:1255-1288; a vertex belongs to one island, so the island's tangents are the whole surface's), back sides from its material, the caster version its chunk's own; the pieces it replaces build no triangles and keep their other roles (references through the island's chunk, the solid count). The evaluation runs after a batch applies, per (entity, model, material) group whose pieces changed, beside the references (M-REF-01), synchronously on the render thread; the islands are built with the bake's read on the parse thread. Measured: the fixture's 37 planar islands of 39 adopted, its 182 adopted vertices byte-equal to the engine's own finished vertices in its .bproc; the sandbox's four parity pairs every planar island adopted (areas 112, stages 420, parity 304 with its patch curved, ambient 182). The differences: an island whose candidate face was edited, or whose faces no longer match for any other reason (a material, an alignment, an overlap), keeps the editor's triangulation until the next dmap (K44), and so does every curved island; a .bproc's finished surfaces are never adopted (D138, M-PROC-02); an island of more than MaxChunkWeldedVerts vertices is not adopted (a chunk holds an island whole); dress fragments (C54) and inlined models' triangles match no face and are counted unmatched until LP7.3 identifies the dress"
+      "note": "LP7.4 (C55, D133, D138, P7.1, P7.11, K44, SC638-SC644): the engine always draws dmap's triangles; the preview takes them where they match the editor's faces and keeps its own triangulation elsewhere. dmap groups a side's triangles by (area, material, plane, mergeGroup, texVec within TEXTURE_VECTOR_EQUAL_EPSILON 0.001 and TEXTURE_OFFSET_EQUAL_EPSILON 0.005; usurface.cpp:36-37, 48-106; the texVec M-GEO-FN-18), optimizes each group (OptimizeIsland drops every interior and colinear vertex, optimize.cpp:1967-2000), snaps every vertex to 1/32 and merges it into a hash vertex within one snap unit (up to 3/64 per axis, tritjunction.cpp:80, 122-151), and welds the surface's vertices (MatchVert: xyz 0.01, st 0.001, normal 0.999, output.cpp:127-177); ParseModel recentres the st per island of triangles sharing a vertex (RenderWorld_load.cpp:224-268). The preview partitions each .proc surface into those islands (a union-find makes the walk's partition); an island is planar when every triangle's normal is within 0.999 of its largest triangle's and every vertex within 1/32 of that plane (a patch is one curved island, faces within 2.6 degrees that MatchVert welds too: never adopted). A planar island's candidates are the face pieces (not patches) of its model (a world piece's area, a brush entity's own model, K17) and material (before any remap) whose plane is its own (0.999, the centroid within epsilon = 3/64 + 0.01), whose texture vectors give its st at its vertices (M-GEO-FN-18), and whose polygon overlaps it by more than a sliver; the test: every island vertex within epsilon times the square root of 3 of the candidates' union in the plane, every candidate vertex within it of the island's triangles, no two candidates overlapping beyond a sliver (an addition to C55's test: so that a face moved within its plane, which leaves a strip bare and overlaps its neighbour, cannot pay for the hole with the overlap), and the summed areas within the candidates' perimeter times epsilon; positions as ParseModel reads back what dmap wrote. An adopted island's vertices are loadProcSurface's (loadProcIsland: the same per-vertex code, so the same bytes), its triangles dmap's in their vertex order, tangents by the material's path over it (R_DeriveTangentsWithoutNormals for most, tr_trisurf.cpp:1184-1325, as FinishSurfaces runs it on the area model, Model.cpp:1255-1288; a vertex belongs to one island, so the island's tangents are the whole surface's), back sides from its material, the caster version its chunk's own; the pieces it replaces build no triangles and keep their other roles (references through the island's chunk, the solid count). The evaluation runs after a batch applies, per (entity, model, material) group whose pieces changed, beside the references (M-REF-01), synchronously on the render thread; the islands are built with the bake's read on the parse thread. Measured: the fixture's 37 planar islands of 39 adopted, its 182 adopted vertices byte-equal to the engine's own finished vertices in its .bproc; the sandbox's four parity pairs every planar island adopted (areas 112, stages 420, parity 304 with its patch curved, ambient 182). The differences: an island whose candidate face was edited, or whose faces no longer match for any other reason (a material, an alignment, an overlap), keeps the editor's triangulation until the next dmap (K44), and so does every curved island; a .bproc's finished surfaces are never adopted (D138, M-PROC-02); an island of more than MaxChunkWeldedVerts vertices is not adopted (a chunk holds an island whole); dress fragments (C54) and inlined models' triangles match no face; LP7.3: the dress surfaces it identifies are counted apart (their planar islands leave unmatched_islands, M-DRESS-02), the inlined copies stay counted unmatched (M-DRESS-06)"
     },
     {
       "id": "M-FEED-DIFF-05",
@@ -27472,6 +27472,15 @@
         {
           "file": "neo/renderer/RenderBackend.cpp",
           "lines": [
+            934,
+            1041
+          ],
+          "anchor": "idRenderBackend::FillDepthBufferFast: the opaque surfaces, GLS_DEFAULT, no polygon offset",
+          "sha256": "ff7700ed106a70d5c48d96a7d4012ea9cc1ca021b76042073be9bfb952df066d"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
             1703,
             2247
           ],
@@ -27490,19 +27499,563 @@
       ],
       "sinkbroom": [
         {
-          "file": "lib/TbLitLib/src/LitStages.cpp",
-          "symbol": "engineGenericDepthDraws (the prepass's surface offset, FillDepthBufferGeneric's)"
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordPrepass (FillDepthBufferFast: an opaque surface drawn with gls::Default, 0, 0; the SS_SUBVIEW and perforated ones through genericDepth and engineGenericDepthDraws, FillDepthBufferGeneric's offset)"
         },
         {
           "file": "lib/TbLitLib/src/LitPasses.cpp",
-          "symbol": "LitPasses::recordPrepass (the draw with prepassDraw's slope and depth bias), renderInteractions and the ambient pass (their draws with 0, 0 and no GLS_POLYGON_OFFSET)"
+          "symbol": "LitPasses::renderInteractions and the ambient pass (their draws with 0, 0 and no GLS_POLYGON_OFFSET)"
         },
         {
           "file": "TOOLS/lit-preview/parity.py",
-          "symbol": "the row J03's label (the derived picture, recorded before LP7.3's engine run)"
+          "symbol": "the row J03's label (the derived picture: written before LP7.3's engine run, corrected after it)"
         }
       ],
-      "note": "LP7.3 step 4 (C54, P7.23), a mirrored engine fact, derived before the run from the engine's two passes: a lit (diffusemap) DECAL_MACRO stage on a dress fragment is opaque (MC_OPAQUE), so the depth prepass draws it with GLS_POLYGON_OFFSET and GL_PolygonOffset( r_offsetFactor 0, r_offsetUnits -600 x polygonOffset 1 ) (RenderBackend.cpp:751-755, the preview's engineGenericDepthDraws), which pulls its depth in front of the wall it lies on and writes it; the interaction pass draws every surface with GLS_DEPTHFUNC_EQUAL and no polygon offset (RenderInteractions sets none; the preview's renderInteractions draws with 0, 0), and so does the ambient pass (its offset is commented out, RenderBackend.cpp:2504-2536, P4.19). The depth-equal test therefore passes no pixel of the decal's footprint: neither the fragment's own unoffset depth nor the wall's equals the offset depth in the buffer. The picture: none of the lit decal shows and its footprint is black on the lit wall (the prepass's black; the material has no ambient stage for pass 8). Both sides draw it so; the row J03 is exact whatever it shows, and its label records this derivation"
+      "note": "LP7.3 step 4 (C54, P7.23), a mirrored engine fact. Derived before the run from the two facts the brief names, the prepass's polygon offset (RenderBackend.cpp:751-755) and the interaction pass without one (:1703), the picture was none: an opaque fragment's depth pulled in front of the wall, so that the depth-equal test passes no pixel of it nor of the wall. The run showed the lit decal, on both sides alike (J03 exact), and the derivation's first premise is wrong: lines 751-755 are FillDepthBufferGeneric's, which the engine runs only for the SS_SUBVIEW surfaces at the head of the list and the perforated ones; an opaque surface, the lit DECAL_MACRO fragment among them (a diffusemap stage: MC_OPAQUE), is drawn by FillDepthBufferFast (:934-1041: GLS_DEFAULT, no polygon offset; the preview's recordPrepass, M-PASS-01). So the prepass writes the fragment at its own depth, coplanar with the wall (GLS_DEPTHFUNC_LESS: where they are equal the wall, drawn first, keeps the pixel), and the interaction pass (GLS_DEPTHFUNC_EQUAL, no offset; the ambient pass's offset is commented out, RenderBackend.cpp:2504-2536, P4.19) passes both the wall and the fragment wherever their depths agree: every pixel of the lit decal shows, added (ONE, ONE) to the wall's own lighting there. A perforated (alpha-tested) lit decal stage would take the generic path with the offset and show none. The row J03 is exact; its label in the sandbox's rows.json (written by the run) still holds the derivation before the run, parity.py's label is corrected for the next run"
+    },
+    {
+      "id": "M-DRESS-COPY-01",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/DecalProjection.cpp",
+          "lines": [
+            1,
+            195
+          ],
+          "anchor": "whole file",
+          "sha256": "d613f007587052beac9874a2cd8dd6b06e85a8a6b1e7463c4b350342dfa3c213",
+          "gitBlob": "350eea7cf05a37f1c997cf95ddb0cc77d793353a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/geometry/DecalProjection.cpp"
+        }
+      ],
+      "note": "LP7.3 (C54, C7, SC630, SC637): the decal projection dmap's func_decal pass and the runtime decals share, copied whole: idDecalProjection::CreateParms (the six bounding planes, the projection bounds, the two fade planes, the texture axes from a four-point far cap winding and a projection origin) and ClipTriangle (compiled, not called: the preview reads the bake's fragments, Q34); its own translation unit in TbLitIdLib, with the shim's precompiled.h. Its dependencies are copied already: idFixedWinding (Winding.h/.cpp: GetPlane, GetBounds, ClipInPlace, ON_EPSILON 0.1), idPlane (Plane.h: FromPoints, FitThroughPoint, RayIntersection, Normalize), idBounds (Bounds.h: ExpandSelf, AddPoint), idVec5; the material is only carried (M-DRESS-PURE-01). No Error or FatalError site; its one assert is the material's, non-null by construction"
+    },
+    {
+      "id": "M-DRESS-COPY-02",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/DecalProjection.h",
+          "lines": [
+            1,
+            123
+          ],
+          "anchor": "whole file",
+          "sha256": "500890b88244471f70033dae68f8f58e6d928262bd49a3b3e12ee4a2561d01ae",
+          "gitBlob": "a52ac2f7687056ba03fdb7287cab1acccaabd890"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/geometry/DecalProjection.h"
+        }
+      ],
+      "note": "LP7.3 (C54): decalProjectionParms_t, NUM_DECAL_BOUNDING_PLANES 6 and the inline DepthFade and ClampDepthFade (0 in front of the fade plane, 1 from 0.99), which the facade's engineDecalFadeColor runs; the shim's ShimLib.h (lib/TbLitLib/idtech/shim/private/shim/ShimLib.h) includes it after Winding.h, where the engine's idlib/Lib.h does (Lib.h:311-312), so DecalProjection.cpp and the facade see it through precompiled.h"
+    },
+    {
+      "id": "M-DRESS-PURE-01",
+      "kind": "pure-function",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/DecalProjection.cpp",
+          "lines": [
+            43,
+            138
+          ],
+          "anchor": "idDecalProjection::CreateParms",
+          "sha256": "90061f1dfd2003ae4f90adcf3b97c653a811193194f56e45db39ba62a69bb131"
+        },
+        {
+          "file": "neo/idlib/geometry/DecalProjection.h",
+          "lines": [
+            98,
+            121
+          ],
+          "anchor": "idDecalProjection::DepthFade, ClampDepthFade",
+          "sha256": "332e8e032d4ac7ddbbac32d3200cf5c398c71e9568287a56c6c1f8f78a8e960c"
+        },
+        {
+          "file": "neo/idlib/geometry/Winding.cpp",
+          "lines": [
+            792,
+            809
+          ],
+          "anchor": "idWinding::GetPlane",
+          "sha256": "846a7d9c3016eade243e6b243cb9e3bf5ec20831b19cb34170aa785247765a90"
+        },
+        {
+          "file": "neo/idlib/math/Vector.h",
+          "lines": [
+            795,
+            805
+          ],
+          "anchor": "idVec3::Normalize",
+          "sha256": "808c320807e3eb5d8932c6e82e5aa7763e2520518a46cf1f45de1f374b51fc15"
+        },
+        {
+          "file": "neo/idlib/math/Vector.h",
+          "lines": [
+            892,
+            911
+          ],
+          "anchor": "idVec3::NormalVectors",
+          "sha256": "9da259b4341332c6abbaf5ddddc47a8f34148dc7099731092cfaa72a8d13700a"
+        },
+        {
+          "file": "neo/idlib/math/Math.h",
+          "lines": [
+            527,
+            532
+          ],
+          "anchor": "idMath::InvSqrt: INFINITUM at or below FLT_SMALLEST_NON_DENORMAL",
+          "sha256": "f7e6dac2456dd14129160ed03834a551dfec117d8853e80aaf58f771acba6ca1"
+        },
+        {
+          "file": "neo/idlib/math/Math.cpp",
+          "lines": [
+            50,
+            50
+          ],
+          "anchor": "idMath::INFINITUM = 1e30f",
+          "sha256": "527fa9bf6c3a33a4c42a9075a7244000627e3a95f1016400141edc2b2fb13d3f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineDecal.cpp",
+          "symbol": "engineDecalTargetAxis, engineDecalProjection, engineDecalFadeColor, materialStandIn"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineDecal.h",
+          "symbol": "EngineDecalParms, engineDecalTargetAxis, engineDecalProjection, engineDecalFadeColor"
+        }
+      ],
+      "note": "LP7.3 (C24, A25, C20): the render thread runs the copied CreateParms, DepthFade and ClampDepthFade and the facade's transcriptions on the copied idVec3, idMat3 and idFixedWinding (SceneGeometry's dress pass, SceneDress.cpp, through parseDecalProjector; tests on their thread). C24's five conditions: (1) no common or idLib::common call is reachable; (2) no FatalError site; (3) no SIMDProcessor (GetBounds is a loop of AddPoint); (4) no allocation: the far cap is an idFixedWinding of four points on the calling thread's stack; (5) no static but the facade's constant stand-in byte. CreateParms asserts its material non-null and only stores it (DecalProjection.cpp:51-54): the facade passes the address of a constant byte, never read as an idMaterial (the table carries no id pointer, D32); the preview keeps the projector's material by name. Pure: each reads its arguments and writes its result. A target at the origin: InvSqrt( 0 ) is INFINITUM (1e30), so Normalize returns 1e30 x 0 = 0 and dmap's fallback warning is reachable (mirrored)"
+    },
+    {
+      "id": "M-DRESS-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/tools/compilers/dmap/dress_decal.cpp",
+          "lines": [
+            93,
+            101
+          ],
+          "anchor": "DecalName: the name key, else entity <n>",
+          "sha256": "fff99d97124181bfb56b3e23e4e4c423e512f8f1775913bb5444162ce02c6971"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/dress_decal.cpp",
+          "lines": [
+            146,
+            273
+          ],
+          "anchor": "ParseDecalProjector",
+          "sha256": "0ca28fc90626da14c1893f019285a04164c5e2a68b65b9d74e25bc28d780a6f7"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/dress_decal.cpp",
+          "lines": [
+            312,
+            325
+          ],
+          "anchor": "DressDecalsPreOptimize: every dmapOnly func_decal of the map in its order",
+          "sha256": "3577621b15f339187688c3ee8b7c6b3717ab977791505d6d181893689a7d33ca"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/dress.h",
+          "lines": [
+            68,
+            68
+          ],
+          "anchor": "FUNC_DECAL_CLASSNAME",
+          "sha256": "9f3210049a52cbb873e3410e72a9d835b0f914c5a4d124d9b32bb99d1e68d329"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            671,
+            675
+          ],
+          "anchor": "idMaterial::IsDiscrete",
+          "sha256": "6d5565c0a15bb53b421c8111b7d5e47efd99bb8eb58aee3c6a5122a465101812"
+        },
+        {
+          "file": "neo/idlib/Dict.cpp",
+          "lines": [
+            381,
+            395
+          ],
+          "anchor": "idDict::GetVec2",
+          "sha256": "c654c704829b4eac2f1389ca690baa1fac824bddc2cff8ccd737b11cec79b3ca"
+        },
+        {
+          "file": "neo/idlib/math/Math.h",
+          "lines": [
+            1518,
+            1521
+          ],
+          "anchor": "idMath::ClampFloat",
+          "sha256": "2b071dc2d5ff4317e67f92d059764152bbc9b7cf576275d6389747c2d887628f"
+        },
+        {
+          "file": "neo/idlib/math/Angles.cpp",
+          "lines": [
+            223,
+            237
+          ],
+          "anchor": "idAngles::ToMat3",
+          "sha256": "02aa3c6f70c313bb3793e715c2c1565ceff3ee97b6da0e7fa7356f944a7fef5b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/DecalProjectors.cpp",
+          "symbol": "parseDecalProjector, engineMaterialIsDiscrete, engineClampFloat, procSurfaceWithin"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/DecalProjectors.h",
+          "symbol": "FuncDecalClassname, DressBoundsGrowth, InlineBoundsGrowth, DecalProjector, DecalProjectorParse, DecalProjectorInputs, DecalProjectorOutcome"
+        },
+        {
+          "file": "lib/TbLitLib/src/EntityState.cpp",
+          "symbol": "spawnVec2"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneDress.cpp",
+          "symbol": "SceneGeometry::updateDress (the projectors: the merged keys, the target by name, the table's material, the warnings as notices once)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_DecalProjectors.cpp",
+          "symbol": "DecalProjectors (LP7.3, C54)"
+        }
+      ],
+      "note": "LP7.3 (C54, SC627-SC629, P7.18): dmap's ParseDecalProjector transcribed onto EntityState's getters: the map keys with the func_decal entityDef's under them (mergeSpawnArgs, SetDefaults :152-157; base/def/func.def:16-32 holds the defaults, the getters' fallbacks are the same); material required, its table entry IsDiscrete (no entry or an implicit material: FindMaterial's default, not discrete), else no projector and the engine's warning; decalSize ( GetVec2: zero, sscanf %f %f ) 64 64 both positive; depth 32 positive, half depth / 2; fade 8 through ClampFloat( 0, half, fade ) (Max( min, Min( max, value ) )), warned when it moved; parallel; origin (GetVector, %f); the axis aimed at the target's raw origin key (the entity whose name key equals it, case aside, the first in preview-id order for dmap's FindEntity on its map: the snapshot's entities, no def defaults, no origin-brush offset), dir.Normalize(), axis[0] = -dir, NormalVectors' left and -down (roll 0), the fallback to the angles when the target is missing or Normalize returns 0 (a target at the origin), each warned as the engine words it; else rotation (GetMatrix), else angles (GetAngles, ToMat3), else angle (yaw), without modelscale; the far cap (capScale 0.5 when parallel), the projection origin and CreateParms through the facade (M-DRESS-PURE-01). Each projector is parsed again on every dress pass, so a moved target or a changed key is a new projector (K43: the bake stays as it is). The engine's warnings are the panel's notices, once per entity and text"
+    },
+    {
+      "id": "M-DRESS-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/tools/compilers/dmap/dress_decal.cpp",
+          "lines": [
+            308,
+            428
+          ],
+          "anchor": "DressDecalsPreOptimize: the targets, the bounds test, ClipTriangle, the fade split",
+          "sha256": "47f63259d8399a721a7cf5d26f12f4e61ab60576775f19ee40b071dc40aee10a"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/dress_decal.cpp",
+          "lines": [
+            435,
+            498
+          ],
+          "anchor": "DressDecalsPostTjunction: the fade as vertex colour, the band's merge group back",
+          "sha256": "f0d06836f10feaabe1e67e20e048a1ee918f234b379ba3a0711fbee90c921ff5"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/output.cpp",
+          "lines": [
+            439,
+            450
+          ],
+          "anchor": "GroupsAreSurfaceCompatible: the material and the merge group",
+          "sha256": "b4dd3b260b19df147a91ec8d9f8eda86a771198fb1f2dccb6dabeaed9738a202"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/output.cpp",
+          "lines": [
+            518,
+            548
+          ],
+          "anchor": "WriteOutputSurfaces: mixing coloured and plain groups an Error; vertexFormat COLOR only with the colour",
+          "sha256": "c76bdd7e2b5cf771647932a1a8c8f337aa41e531db636590e25eba46a5ee2f34"
+        },
+        {
+          "file": "neo/idlib/geometry/DecalProjection.cpp",
+          "lines": [
+            183,
+            192
+          ],
+          "anchor": "ClipTriangle: ClipInPlace against the masked planes (ON_EPSILON 0.1)",
+          "sha256": "c9723843acea32917015a1f280a4115119ed570d987d389bcdac7d6308cbfc9f"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            224,
+            321
+          ],
+          "anchor": "ParseModel: islands, recentred st, half st, byte normals, the colour",
+          "sha256": "55d74355d3c6a3afcfcdeb377ea518207b9d48e802c34166cbe5dc2f9c7a8943"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/SceneDress.cpp",
+          "symbol": "SceneGeometry::updateDress, dressNotice, dressCounts, dressTable"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/SceneGeometry.h",
+          "symbol": "SceneGeometry::DressCounts, m_dress"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneGeometry.cpp",
+          "symbol": "the dress pass marked (a snapshot, a table, a new tree, an applied batch, a model change) and run (collectChunks after updateAdoption, collect); a world job's ChunkJobInput::dress; unmatched_islands without the dress surfaces' planar islands; waitsForMaterials"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/ChunkBuilder.h",
+          "symbol": "DressSurface, DressTable, ChunkJobInput::dress, Chunk::dress"
+        },
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "Builder::addDressSurfaces, finishDress, finishChunk( ..., dress )"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "FrontendLists::dressSurfaces (the frame log's dress_surfaces)"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "the frame row's dress_surfaces, dress_unmatched, inlined_surfaces; RenderFrameAccess::dress"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameLog.cpp",
+          "symbol": "inlined_surfaces, the twelfth of LP7's columns"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_Geometry.cpp",
+          "symbol": "SceneGeometry, the dress decals from the .proc (LP7.3, C54)"
+        }
+      ],
+      "note": "LP7.3 (C54, D132, K43, P7.18, SC632-SC636): the engine draws every surface of the .proc's _areaN models; a func_decal's fragments are among them, one surface per projector per area it reaches (GroupsAreSurfaceCompatible compares the material and the merge group; the band's groups get the projector's back), vertex format 1 when its fade is above 0 (the corners' colour PackColorRound( 1, 1, 1, 1 - ClampDepthFade( DepthFade( fadePlanes[0] ) ) )), and no marker names them. The preview draws a .proc surface only where it stands for something the editor lacks, so it identifies them, per surface: its material is a projector's (the decl's canonical name, case aside), every vertex lies within that projector's projectionBounds grown by 0.2 (ClipInPlace keeps a point up to ON_EPSILON 0.1 outside a plane, P7.18), and no island of it matches an editor face: none is in worldspawn's adoption table and matchProcIsland (LP7.4's test, M-GEO-DIFF-04) finds no candidate for any planar one (a candidate that fails the test still disqualifies it: an edited hand-placed decal face's old bake is never drawn as a fragment), and no editor patch of its material touches a curved one (an addition: a hand-placed DECAL_MACRO patch would otherwise be drawn twice; patches are no candidates of LP7.4's). An identified surface is a world chunk of its area (one per surface, its part after the adopted islands'), loadProcSurface's vertices with the file's colour, dmap's triangles, the material's tangent path as FinishSurfaces runs it on the area model, back sides from the material, the cell of its bounds' centre; it draws under its material as any world surface. The differences: K43, a projector added, moved, re-aimed or re-keyed since the bake shows its old fragments where they still fall within its bounds, or none, until the next dmap (nothing is projected live, Q34); a func_decal without a fragment surface (no projector, or one that claims none) is counted (dress_unmatched) and named once (\"func_decal <name> has no baked fragments: dmap the map\") once the bake is known; dmap bakes only a func_decal whose entityDef is dmapOnly (dress_decal.cpp:315, func.def:26), the preview identifies by the classname alone (a def without dmapOnly bakes nothing: its func_decal is unmatched); the dress surfaces' planar islands are counted apart from unmatched_islands (dress_surfaces counts the dress chunks a frame's lists draw). Measured on the sandbox's models map (LP7.3's run, the [.][parity] frame logs): six surfaces identified (J01-J04 one each, J05 two), J01's hand-placed DECAL_MACRO face adopted and not identified (120 islands adopted, 6 unmatched: N10's inlined copy, 1 inlined surface), J04's projector on a material that is not discrete the one unmatched func_decal"
+    },
+    {
+      "id": "M-DRESS-03",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            386,
+            623
+          ],
+          "anchor": "idRenderModelStatic::LoadBinaryModel",
+          "sha256": "8c42dfb90b84006a9ffbd6f19bc812066924f516628f4164edf5f11987e9b7a3"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_load.cpp",
+          "lines": [
+            128,
+            141
+          ],
+          "anchor": "ReadBinaryModel",
+          "sha256": "d0761dad01664b6b36ec0739705f0d953d87aee9d108aa2a4c60305273fa44d8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/SceneDress.cpp",
+          "symbol": "SceneGeometry::updateDress (no islands: none identified)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_Geometry.cpp",
+          "symbol": "SceneGeometry, the dress decals from the .proc (LP7.3, C54): D138, a .bproc yields no dress surface"
+        }
+      ],
+      "note": "LP7.3 (D138, P7.12, Q37): a .bproc holds the engine's finished surfaces without a vertex format (M-PROC-02), and its tree has no islands (M-GEO-DIFF-04): no dress surface is identified from one, dress_surfaces 0 and every func_decal unmatched (admin, a retail map's .bproc, has none); the engine draws the .bproc's surfaces, its baked fragments among them. Q37 decides whether a later package reads finished surfaces by a rule of their own"
+    },
+    {
+      "id": "M-DRESS-05",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/tools/compilers/dmap/dress_decal.cpp",
+          "lines": [
+            341,
+            412
+          ],
+          "anchor": "DressDecalsPreOptimize: each projector's fragments in its own merge groups",
+          "sha256": "111921ee6878a001c562fb0742dc6b36a08f1bd986edc0d6814458ffcd083244"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/SceneDress.cpp",
+          "symbol": "SceneGeometry::updateDress (the claimants in preview-id order, DressCounts::ties, the tie's notice)"
+        }
+      ],
+      "note": "LP7.3 (C54, P7.18): dmap writes each projector's fragments as their own surfaces (their merge groups are the projector's address), so two projectors never share a surface; the preview identifies a surface by bounds, so overlapping projectors of one material can both claim one: the first by preview id takes it (DressSurface::projector), each other claim is counted (DressCounts::ties) and named once (\"func_decal 'b': a fragment surface within its projection is drawn as func_decal 'a''s, the first by id\"); the surface is drawn once either way, as the engine draws it, and neither projector is unmatched. For the end decision file"
+    },
+    {
+      "id": "M-DRESS-06",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/tools/compilers/dmap/usurface.cpp",
+          "lines": [
+            779,
+            782
+          ],
+          "anchor": "dmap: a func_static or misc_model is inlined with inline 1 (or inlineAllStatics)",
+          "sha256": "6f9b20976487c2756f850e8bdbe28aabaa59de4cb19189bd2c7798b23670b806"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/output.cpp",
+          "lines": [
+            127,
+            177
+          ],
+          "anchor": "MatchVert: xyz 0.01, st 0.001, normal cosine 0.999",
+          "sha256": "afdd221b998431080d0a5b16a67e49d7febbe43c1633d50ae62dbfccf1fb995b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/SceneDress.cpp",
+          "symbol": "isInlined, SceneGeometry::updateDress (the inlined instances; DressCounts::inlined)"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameLog.cpp",
+          "symbol": "inlined_surfaces"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_Geometry.cpp",
+          "symbol": "SceneGeometry, the dress decals from the .proc (LP7.3, C54): K42, an inline 1 model's dmap copy"
+        }
+      ],
+      "note": "LP7.3 (K42, LP7.2's finding): dmap draws an inline 1 func_static's or misc_model's model (or every one with worldspawn's inlineAllStatics; dmap reads inline from the raw map keys) into the world: its copy sits in _areaN as surfaces of the model's own material (skinless) that match no editor face, and the game hides the entity; the preview draws the model from its file at the entity's place (K42) and never the copy. Before the dress test, a surface whose material is an inlined model entity's own material (ModelInstance's source material) and whose every vertex lies within that instance's world bounds grown by MatchVert's weld 0.01 is the inlined copy: never a fragment, counted as the frame log's inlined_surfaces (its islands stay counted in unmatched_islands, as LP7.4 counts every island no face matches). The T-junction snap may move a copy's vertex up to 3/64 per axis where the model's corners are off the 1/32 grid: such a copy would fall outside the grown bounds and could then be identified as a fragment only if it also lay within a projector's bounds with its material (a K42 note). The models map's N10 copy is counted (1)"
+    },
+    {
+      "id": "M-DRESS-DEFECT-01",
+      "kind": "known-defect",
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/DecalProjection.cpp",
+          "lines": [
+            145,
+            195
+          ],
+          "anchor": "idDecalProjection::ClipTriangle: the projective st per source corner, ClipInPlace interpolating them linearly",
+          "sha256": "12d7169bbfa94f962defde79fa870d32a6bea44d9196023ebde97fefcc622cfe"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "the row J01 (perspective, 30 degrees off the wall)"
+        }
+      ],
+      "note": "LP7.3, found in the sandbox's bake (the engine's own .proc of the models map): ClipTriangle gives each corner of the source triangle its perspective st (the ray from the projection origin through the corner, hit on the far cap's plane) and ClipInPlace then interpolates st linearly along the clipped edges. For the runtime decals the source triangles are a model's (small, near the projector); dmap feeds the world's triangles, whose corners lie far outside the volume, some behind the projection origin, and on a surface oblique to the projector's axis the st are projective, not affine: the fragment's st are not the projection's. J01 (yaw 210, 4 in front of the wall) bakes s 0.037 .. 0.060 and t 0.585 .. 0.766 where the projection gives about 0.35 .. 1 and 0 .. 1; a head-on perspective decal (J03, J04, J05) and a parallel one (J02) bake 0 .. 1. The preview draws the bake's st, so the parity is exact and the defect is the engine's alone (for the user: a perspective func_decal on a surface it does not face head-on bakes a distorted image; the corners' st would need the projection evaluated per clipped vertex)"
+    },
+    {
+      "id": "M-TEST-DRESS-01",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/idlib/geometry/DecalProjection.cpp",
+          "lines": [
+            43,
+            138
+          ],
+          "anchor": "idDecalProjection::CreateParms (transcribed in double in the test)",
+          "sha256": "90061f1dfd2003ae4f90adcf3b97c653a811193194f56e45db39ba62a69bb131"
+        },
+        {
+          "file": "neo/idlib/math/Plane.h",
+          "lines": [
+            325,
+            334
+          ],
+          "anchor": "idPlane::FromPoints (in double in the test)",
+          "sha256": "d1fbade6d1865bd6ca05fa8adbe827cdfc4d48eedad6e9f4a93247293fc287f3"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/dress_decal.cpp",
+          "lines": [
+            249,
+            265
+          ],
+          "anchor": "ParseDecalProjector's far cap and projection origin (in double in the test)",
+          "sha256": "fd99aaefa1bea45e896c500a672337a1e851ea1aebfe7d10d372142232e11f15"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/dress_decal.cpp",
+          "lines": [
+            211,
+            225
+          ],
+          "anchor": "the target's axis (in double in the test)",
+          "sha256": "3fcca2962fe9721659bd95391ab5a5346de46cee5bd29748fa556f4e1315de53"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/tst_DecalProjectors.cpp",
+          "symbol": "DecalProjectors (LP7.3, C54): reference, anglesAxis, checkParms"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_Geometry.cpp",
+          "symbol": "SceneGeometry, the dress decals from the .proc (LP7.3, C54): DressScene, procWithSurfaces, dressSurface, decalEntities"
+        }
+      ],
+      "note": "LP7.3 (C54), CPU only, in the normal run: the parms of hand projectors (perspective defaults, parallel with its edges' planes and the bounds grown by the depth, rotation over angles over angle without modelscale, a target) against CreateParms' arithmetic transcribed in double (within 1e-5 on the planes, 1e-3 on the bounds), every default, the fade clamp and its warning, the target's fallbacks (missing, at the origin) and the refusals with the engine's wording, a moved target, the fade colour (alpha 191 two units into the band, 0 at the far cap), the 0.2 containment; the fixture scene (lp1b_geometry's map and golden .proc, a hand-written format-1 surface in _area0 with rgba ( 1, 1, 1, 0.5 ) and ( 1, 1, 1, 1 )): one world chunk of area 0 with alphas 128, 128, 255, 255 and loadProcSurface's positions, st and colours, a changed material and bounds 0.3 short unmatched and named once, 0.1 short matched, a hand-placed DECAL_MACRO face (the floor on a decal material in the map and the .proc) adopted and never a fragment, two projectors (the first by id, one tie), a moved target unmatched and identified again, a .bproc yielding none, an inline 1 model's hand-written copy counted inlined, neither adopted nor identified"
+    },
+    {
+      "id": "M-TEST-PARITY-09",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/tools/compilers/dmap/dress_decal.cpp",
+          "lines": [
+            146,
+            273
+          ],
+          "anchor": "ParseDecalProjector: the J rooms' projectors",
+          "sha256": "0ca28fc90626da14c1893f019285a04164c5e2a68b65b9d74e25bc28d780a6f7"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/dress_decal.cpp",
+          "lines": [
+            435,
+            498
+          ],
+          "anchor": "DressDecalsPostTjunction: the fade as vertex colour",
+          "sha256": "f0d06836f10feaabe1e67e20e048a1ee918f234b379ba3a0711fbee90c921ff5"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "J_ROOMS, DECAL, lp7_decal_texture, MODELS_MTR (textures/lp7/decal, decal_lit), models_light_specs and build_models_map (the J rooms), the rows J01-J05 with their dress_surfaces and dress_unmatched expectations"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/maps/test/litpreview_models.map",
+          "symbol": "the rooms J01-J05 (parity.py fixtures)"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/materials/lp7_models.mtr",
+          "symbol": "textures/lp7/decal, textures/lp7/decal_lit"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/textures/lp7/decal.tga",
+          "symbol": "the decal's image: black, its shape in the alpha"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession parity rows (LP2.3): dress_surfaces, dress_unmatched (ParityLists' dress totals, the row .json's dress_surfaces, dress_unmatched, dress_identified, inlined_surfaces)"
+        }
+      ],
+      "note": "LP7.3 (C54, C56; P7.18, P7.23), test only: the models map's rooms J01-J05 from k 12 (the fifth map's rooms from k 17 are free), each with its noshadows light and func_decal projectors on textures/lp7/decal (DECAL_MACRO, blend blend, vertexColor, a black image: the lights-off controls black): J01 perspective fade 8 at yaw 210 from 4 in front of the east wall (the bake: one surface of 9 vertices, format 1, alphas 0 and 1 across the band) beside a hand-placed DECAL_MACRO face of the material inside its bounds (format 0, 4 vertices: adopted, not identified); J02 parallel aimed by a target_null inside the wall (11 vertices, alphas 0, 208/255, 1); J03 the lit twin (6 vertices; M-DRESS-04's derived picture: its footprint black); J04 fade 0 (6 vertices, format 0) beside a projector on lp7/wall (not discrete: the engine's warning, nothing baked, dress_unmatched 1); J05 a floor decal across a doorway's areaportal (two surfaces, 4 and 12 vertices, one per area). Each decal surface is its area's first surface (dmap prepends new groups). Every row exact with its control black; \"expect\": the dress surfaces the row's frame draws (J01-J04 1, J05 2) and J04's dress_unmatched 1, which the [.][parity] test asserts and writes into each row's .json beside the scene's identified surfaces and inlined copies. LP7.3's engine run of 2026-10-26 (11:26-11:46): 180 rows, every repeat 0, the proof listing 21,261 entries"
     }
   ],
   "retired": [
