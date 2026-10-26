@@ -1187,7 +1187,8 @@ RenderFrameAccess RenderThread::frameAccess(nvrhi::ICommandList& commandList)
     arenaChunks(),
     arenaInstances(),
     models,
-    dress};
+    dress,
+    m_frameStart};
 }
 
 void RenderThread::runAfterPassHooks(nvrhi::ICommandList& commandList)
@@ -1588,6 +1589,7 @@ void RenderThread::runLoop()
     if (next && *next <= now)
     {
       m_pacer.frameStarted(now);
+      m_frameStart = now;
       const auto frameCamera = m_camera;
       // S31, B0.3: the frame takes the snapshot offered once the last one's chunks are
       // applied; ReadyForSnapshot then says the inbox is free again

@@ -9754,7 +9754,11 @@ std::unique_ptr<MaterialService> feedService(
 struct FeedFrame
 {
   std::uint64_t index = 0;
+  // the hook's time: after the frame's snapshot, acquire and uploads
   std::chrono::steady_clock::time_point start;
+  // LP7.5 step 0: the frame's true start, the pacer's own stamp (RenderFrameAccess::
+  // frameStart), before any of them
+  std::chrono::steady_clock::time_point paced;
   // the key has a slot
   bool slotted = false;
   // its binding: the texture (compared, never used), whether the intrinsic stands in, the
@@ -9805,6 +9809,7 @@ void recordFeedFrames(
     auto frame = FeedFrame{};
     frame.index = access.frameIndex;
     frame.start = std::chrono::steady_clock::now();
+    frame.paced = access.frameStart;
     frame.lastGeometryInFlight = access.convergence.geometryInFlight;
     const auto& stats = access.passes.lastStats();
     frame.lastSkippedDraws = stats.skippedDraws;
@@ -11322,16 +11327,46 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu2]")
         }
         const auto stormSeconds =
           std::chrono::duration<double>(stormEnd - stormStart).count();
+        // LP7.5 step 0 (the LPF.1 storm flake: 20.5 and 23.1 ms at two gates): the gaps
+        // are measured between the frames' true starts, the pacer's stamps; the hook's
+        // time follows each start by the frame's snapshot, acquire and uploads, so one
+        // late hook shrank the old measure while the pacer's floor stood
+        using Ms = std::chrono::duration<double, std::milli>;
         auto closest = std::chrono::steady_clock::duration::max();
+        auto hookClosest = std::chrono::steady_clock::duration::max();
         for (std::size_t i = 1; i < inStorm.size(); ++i)
         {
-          closest = std::min(closest, inStorm[i].start - inStorm[i - 1].start);
+          closest = std::min(closest, inStorm[i].paced - inStorm[i - 1].paced);
+          hookClosest = std::min(hookClosest, inStorm[i].start - inStorm[i - 1].start);
         }
-        // the pacer's floor: 30 frame starts a second at most (the hook's time follows
-        // each start by the frame's uploads, so a little jitter)
+        // the hook never precedes its frame's start
+        auto lags = std::vector<double>{};
+        for (const auto& frame : inStorm)
+        {
+          CHECK(frame.start >= frame.paced);
+          lags.push_back(Ms(frame.start - frame.paced).count());
+        }
+        std::ranges::sort(lags);
+        // the pacer's floor: 30 frame starts a second at most
         CHECK(double(inStorm.size()) <= stormSeconds * 30.0 + 2.0);
         CHECK(inStorm.size() >= 10u);
         CHECK(closest >= 25ms);
+        CHECK(closest >= MinFrameInterval - 1ms);
+        if (!lags.empty())
+        {
+          std::cout << fmt::format(
+            "LP7.5 step 0, the storm's {} frames: the hook after the frame's start by "
+            "min {:.2f}, median {:.2f}, p90 {:.2f}, max {:.2f} ms; closest true starts "
+            "{:.2f} ms apart (the floor {:.2f} ms), closest hook stamps {:.2f} ms\n",
+            lags.size(),
+            lags.front(),
+            lags[lags.size() / 2],
+            lags[lags.size() * 9 / 10],
+            lags.back(),
+            Ms(closest).count(),
+            Ms(MinFrameInterval).count(),
+            Ms(hookClosest).count());
+        }
         const auto afterStorm = rig.frames->since(*lastPublication);
         CHECK_FALSE(afterStorm.empty());
         CHECK(afterStorm.size() <= 2u);

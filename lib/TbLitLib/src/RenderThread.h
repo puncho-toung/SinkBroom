@@ -277,6 +277,9 @@ struct RenderFrameAccess
   ModelTotals models;
   // LP7.3 (C54): and its dress decals
   DressTotals dress;
+  // LP7.5 step 0: the pacer's stamp of the frame's start (FramePacer::frameStarted),
+  // taken before the snapshot, the acquire and the uploads
+  FrameClock::time_point frameStart;
 };
 
 /**
@@ -442,6 +445,8 @@ private:
   std::array<bool, FramesInFlight> m_frameEventSet = {};
   FrameTimers m_timers;
   std::uint64_t m_frameIndex = 0;
+  // the started frame's FramePacer::frameStarted stamp (RenderFrameAccess::frameStart)
+  FrameClock::time_point m_frameStart;
   // D35: the frames known to have finished on the GPU (frames 0 to m_completedFrames - 1)
   std::uint64_t m_completedFrames = 0;
   std::uint64_t m_framesSkipped = 0;
