@@ -27379,6 +27379,24 @@
           ],
           "anchor": "RemapShaderBySkin: N06's skin and shader twins",
           "sha256": "252f6f1953c6bf903de1a54248db0c94af1d06395b139590e3b723e805ae165a"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            1777,
+            1783
+          ],
+          "anchor": "R_InitMaterials: the game's _default decl or FatalError",
+          "sha256": "6972ed1fa589f4b9a307b9185f4ef3f1aa71b91399395601ab358be8384221f6"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            273,
+            277
+          ],
+          "anchor": "MakeDefaultModel: the cube's surface takes tr.defaultMaterial",
+          "sha256": "be826da73c88a2428ff9b8a28920457f72324b6f9b7d938016138f554a03955b"
         }
       ],
       "sinkbroom": [
@@ -27396,7 +27414,7 @@
         },
         {
           "file": "lib/TbLitLib/test/fixture/lit/materials/lp7_models.mtr",
-          "symbol": "textures/lp7/n06_skin, n06_shader, n10_flat"
+          "symbol": "textures/lp7/n06_skin, n06_shader, n10_flat; _default (the game's, transcribed verbatim from its materials/shaderdemo.mtr:101-106)"
         },
         {
           "file": "lib/TbLitLib/test/fixture/lit/skins/lp7_models.skin",
@@ -27411,61 +27429,7 @@
           "symbol": "LitSession parity rows (LP2.3): model_draws, models_pending, models_skinned (ParityLists' model totals from RenderFrameAccess::models)"
         }
       ],
-      "note": "LP7.2 (C56, P7.4, P7.9, P7.10), test only: the models map's rows, a camera 40 from each room's west wall looking east (N07b from its second room looking west), exact (N10 K28), every control black, \"expect\" model_draws (a minimum), models_pending 0 and N11's models_skinned 2, which the [.][parity] test asserts and writes into each row's .json with model_entities and model_instances. N06 a box rotated and scaled with _color and a skin and a shader twin; N07 and N07b a box through a shared wall; N08 an .fbx name and a missing .obj (the default cube, M-TEST-PARITY-09); N09 a light with a model key; N10 hide 1 and inline 1 on a flat material; N11 an .md5mesh func_static (nothing), a modelDef name on idStaticEntity (the cube) and an idAnimatedEntity def behind the camera (K41). The engine run of 2026-10-26: 170 rows, every repeat 0, the proof listing 21,261 entries; N01-N07b and N09 every |d| 0, N10 within its K28 record (max 2), the controls black; the thresholds of the twelve rows recorded into a copy outside the sandbox (--thresholds), the sandbox's thresholds.json unchanged. lp7_n07b_point's reach names both rooms of the pair (150 from the shared wall with a radius of 190: the engine's 2 references)"
-    },
-    {
-      "id": "M-TEST-PARITY-09",
-      "kind": "difference",
-      "testOnly": true,
-      "engine": [
-        {
-          "file": "neo/renderer/RenderSystem_init.cpp",
-          "lines": [
-            1777,
-            1783
-          ],
-          "anchor": "R_InitMaterials: the game's _default decl or FatalError",
-          "sha256": "6972ed1fa589f4b9a307b9185f4ef3f1aa71b91399395601ab358be8384221f6"
-        },
-        {
-          "file": "neo/renderer/Model.cpp",
-          "lines": [
-            273,
-            277
-          ],
-          "anchor": "MakeDefaultModel: the cube's surface takes tr.defaultMaterial (dmap: FindMaterial( _default, false ))",
-          "sha256": "be826da73c88a2428ff9b8a28920457f72324b6f9b7d938016138f554a03955b"
-        },
-        {
-          "file": "neo/renderer/Material.cpp",
-          "lines": [
-            3779,
-            3788
-          ],
-          "anchor": "idMaterial::DefaultDefinition: a blend blend stage of the _default image",
-          "sha256": "b7e88a193183efd66cea02af5ac31fd1714dda24ed8c0190018b13ce33ad78cc"
-        },
-        {
-          "file": "neo/renderer/Image_intrinsic.cpp",
-          "lines": [
-            56,
-            118
-          ],
-          "anchor": "idImage::MakeDefault: black with alpha 0 at developer 0",
-          "sha256": "ece727c165b4322d20481d7b3b246c8ee9328cff5b2280d784c2ca16413c2d3b"
-        }
-      ],
-      "sinkbroom": [
-        {
-          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
-          "symbol": "MaterialDecls::defaultModelMaterial (the _default decl, else the implicit material of the name)"
-        },
-        {
-          "file": "TOOLS/lit-preview/parity.py",
-          "symbol": "assemble_preview (the preview root: the fixture's decls, no game material file; outside the repository)"
-        }
-      ],
-      "note": "LP7.2's finding, test only (N08, N11): the engine's default cube draws the game's _default decl, which R_InitMaterials requires: opaque black in the engine's shots (N08 [893,602] and N11 [374,605] 0 0 0); the parity preview root holds the fixture's decls alone, so the preview's cube takes the implicit DefaultDefinition, a blend blend stage of the _default image, black with alpha 0 at developer 0: drawn (model_draws counts it) but invisible, the wall behind it showing (127 146 162, 107 99 77). Over the game folder the preview finds the game's decl as the engine does; the two rows fail until parity.py stages the game's _default decl into the preview root (or the fixture defines the cube's material on both sides)"
+      "note": "LP7.2 (C56, P7.4, P7.9, P7.10), test only: the models map's rows, a camera 40 from each room's west wall looking east (N07b from its second room looking west), exact (N10 K28), every control black, \"expect\" model_draws (a minimum), models_pending 0 and N11's models_skinned 2, which the [.][parity] test asserts and writes into each row's .json with model_entities and model_instances. N06 a box rotated and scaled with _color and a skin and a shader twin; N07 and N07b a box through a shared wall; N08 an .fbx name and a missing .obj (the default cube: the game's _default decl, which R_InitMaterials requires and MakeDefaultModel's cube draws, is staged in lp7_models.mtr verbatim from the game's materials/shaderdemo.mtr:101-106, read only, so both sides draw the same opaque stage of the black _default image; the engine keeps the fixture's definition and warns on the game's, the same text); N09 a light with a model key; N10 hide 1 and inline 1 on a flat material; N11 an .md5mesh func_static (nothing), a modelDef name on idStaticEntity (the cube) and an idAnimatedEntity def behind the camera (K41). The fix round's engine run of 2026-10-26 (09:24-09:44): 170 rows, every repeat 0, the proof listing 21,261 entries; N01-N09 and N11 every |d| 0 (N08 and N11 the default cubes), N10 within its K28 record (max 2), the controls black; the twelve rows' thresholds recorded in preview-game/parity/thresholds.json. lp7_n07b_point's reach names both rooms of the pair (150 from the shared wall with a radius of 190: the engine's 2 references)"
     },
     {
       "id": "M-TEST-MEASURE-02",
@@ -27528,6 +27492,11 @@
       "id": "M-STAGE-TEMP-01",
       "commit": "35e24cc80",
       "reason": "the cube and sky texgens are drawn since LP5.2b (M-STAGE-08); nothing is deferred"
+    },
+    {
+      "id": "M-TEST-PARITY-09",
+      "commit": "c70b8654c",
+      "reason": "the parity root's default cube: the game's _default decl is staged in the models map's lp7_models.mtr since the LP7.2 fix round (M-TEST-PARITY-08), so N08 and N11 draw the same cube on both sides (max 0)"
     }
   ]
 }
