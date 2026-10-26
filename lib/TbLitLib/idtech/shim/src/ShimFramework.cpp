@@ -676,7 +676,7 @@ int idFileSystemLocal::GetFileLength(const char* relativePath)
 int idFile::ReadUnsignedInt(unsigned int& value)
 {
   // File.cpp:351-356
-  int result = Read(&value, sizeof(value));
+  const int result = Read(&value, sizeof(value));
   value = static_cast<unsigned int>(LittleLong(static_cast<int>(value)));
   return result;
 }
