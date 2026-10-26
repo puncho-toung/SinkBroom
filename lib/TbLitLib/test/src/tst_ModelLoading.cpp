@@ -1254,4 +1254,218 @@ TEST_CASE("ModelLoading, the fixture models before the capture (LP7.1a, C56, P7.
   }
 }
 
+namespace
+{
+
+// stamps.json's "stamps" object: each fixture source's stamp (parity.py capture-models)
+std::int64_t fixtureStamp(const std::string& source)
+{
+  const auto text = readTextFile(modelsFixture() / "stamps.json");
+  const auto key = "\"" + source + "\": ";
+  const auto at = text.find(key, text.find("\"stamps\""));
+  REQUIRE(at != std::string::npos);
+  return std::stoll(text.substr(at + key.size(), 16));
+}
+
+// the engine's binary of a fixture source, as the preview reads it
+ModelRecord goldenRecord(const std::string& golden, const std::int64_t sourceTime)
+{
+  const auto bytes = readTextFile(litFixtureFolder() / golden);
+  auto offset = std::size_t{0};
+  const auto read = readBinaryModel(
+    std::span<const std::byte>{
+      reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()},
+    offset);
+  REQUIRE(read.is_success());
+  CHECK(offset == bytes.size());
+  return modelRecordFromBinary(golden, read.value(), std::nullopt, sourceTime);
+}
+
+// every field of the record the golden holds, compared; the first that differs is named
+std::vector<std::string> recordDifferences(
+  const ModelRecord& preview, const ModelRecord& engine)
+{
+  auto differences = std::vector<std::string>{};
+  const auto differ = [&](const std::string& what) { differences.push_back(what); };
+  if (preview.surfaces.size() != engine.surfaces.size())
+  {
+    differ(fmt::format(
+      "surface count {} != {}", preview.surfaces.size(), engine.surfaces.size()));
+    return differences;
+  }
+  for (std::size_t s = 0; s < preview.surfaces.size(); ++s)
+  {
+    const auto& a = preview.surfaces[s];
+    const auto& b = engine.surfaces[s];
+    if (a.material != b.material)
+    {
+      differ(fmt::format("surface {} material {} != {}", s, a.material, b.material));
+    }
+    if (a.verts.size() != b.verts.size())
+    {
+      differ(fmt::format(
+        "surface {} vertex count {} != {}", s, a.verts.size(), b.verts.size()));
+    }
+    for (std::size_t v = 0; v < std::min(a.verts.size(), b.verts.size()); ++v)
+    {
+      const auto& p = a.verts[v];
+      const auto& q = b.verts[v];
+      if (p.xyz != q.xyz)
+      {
+        differ(fmt::format("surface {} vertex {} xyz", s, v));
+      }
+      if (p.st != q.st)
+      {
+        differ(fmt::format("surface {} vertex {} st", s, v));
+      }
+      if (p.normal != q.normal)
+      {
+        differ(fmt::format("surface {} vertex {} normal", s, v));
+      }
+      if (p.tangent != q.tangent)
+      {
+        differ(fmt::format(
+          "surface {} vertex {} tangent ({} {} {} {} != {} {} {} {})",
+          s,
+          v,
+          p.tangent[0],
+          p.tangent[1],
+          p.tangent[2],
+          p.tangent[3],
+          q.tangent[0],
+          q.tangent[1],
+          q.tangent[2],
+          q.tangent[3]));
+      }
+      if (p.color != q.color)
+      {
+        differ(fmt::format("surface {} vertex {} color", s, v));
+      }
+      if (p.color2 != q.color2)
+      {
+        differ(fmt::format("surface {} vertex {} color2", s, v));
+      }
+    }
+    if (a.indexes != b.indexes)
+    {
+      differ(fmt::format("surface {} indexes", s));
+    }
+    if (a.dupVerts != b.dupVerts)
+    {
+      differ(fmt::format("surface {} dupVerts", s));
+    }
+    if (a.mirroredVerts != b.mirroredVerts)
+    {
+      differ(fmt::format("surface {} mirroredVerts", s));
+    }
+    if (a.bounds != b.bounds)
+    {
+      differ(fmt::format("surface {} bounds", s));
+    }
+    if (a.generateNormals != b.generateNormals)
+    {
+      differ(fmt::format("surface {} generateNormals", s));
+    }
+    if (a.tangentsCalculated != b.tangentsCalculated)
+    {
+      differ(fmt::format("surface {} tangentsCalculated", s));
+    }
+  }
+  if (preview.bounds != engine.bounds)
+  {
+    differ("the model's bounds");
+  }
+  if (
+    preview.hasDrawingSurfaces != engine.hasDrawingSurfaces
+    || preview.hasInteractingSurfaces != engine.hasInteractingSurfaces
+    || preview.hasShadowCastingSurfaces != engine.hasShadowCastingSurfaces)
+  {
+    differ("the has-surfaces flags");
+  }
+  return differences;
+}
+
+} // namespace
+
+TEST_CASE(
+  "ModelLoading, the source path against the engine's binaries (LP7.1a, C56, the "
+  "goldens)")
+{
+  auto source = MemoryDeclSource{fixtureModelDecls()};
+  auto decls = MaterialDecls{source};
+
+  // N01 (2015, WithoutNormals), N02 (the same OBJ under a second name), N03 (2017,
+  // MikkTSpace on smooth normals with sheared, mirrored coordinates)
+  for (const auto& [name, golden] : std::vector<std::pair<std::string, std::string>>{
+         {"models/test/n01.obj", "models/test/n01.bobj"},
+         {"models/test/n02.obj", "models/test/n02.bobj"},
+         {"models/test/n03.obj", "models/test/n03.bobj"}})
+  {
+    DYNAMIC_SECTION(name)
+    {
+      const auto stamp = fixtureStamp(name);
+      const auto engine = goldenRecord(golden, stamp);
+      // the engine stored the source's time it read (Model.cpp:400, MM:496)
+      CHECK(engine.binaryTime == stamp);
+      CHECK(binaryModelTimeAccepted(stamp, engine.binaryTime));
+
+      const auto model = sourceLoad(decls, name, stamp);
+      const auto preview = modelRecordFromEngine(
+        name,
+        model,
+        ModelRecord::State::Ready,
+        ModelRecord::SourceKind::Source,
+        stamp,
+        {});
+      const auto differences = recordDifferences(preview, engine);
+      for (const auto& difference : differences)
+      {
+        UNSCOPED_INFO(difference);
+      }
+      CHECK(differences.empty());
+
+      // the binary reader on the same file: the golden itself, read twice the same
+      CHECK(recordDifferences(goldenRecord(golden, stamp), engine).empty());
+    }
+  }
+
+  SECTION("the mutant: N03 through the WithoutNormals path fails its golden (P7.10)")
+  {
+    const auto stamp = fixtureStamp("models/test/n03.obj");
+    const auto engine = goldenRecord("models/test/n03.bobj", stamp);
+    const auto without = false;
+    const auto model = sourceLoad(decls, "models/test/n03.obj", stamp, &without);
+    const auto preview = modelRecordFromEngine(
+      "models/test/n03.obj",
+      model,
+      ModelRecord::State::Ready,
+      ModelRecord::SourceKind::Source,
+      stamp,
+      {});
+    const auto differences = recordDifferences(preview, engine);
+    CHECK_FALSE(differences.empty());
+    CHECK(std::all_of(differences.begin(), differences.end(), [](const auto& d) {
+      return d.find("tangent") != std::string::npos;
+    }));
+  }
+
+  SECTION("N01 and N02 hold the same geometry; their names make their bytes differ")
+  {
+    const auto n01 =
+      goldenRecord("models/test/n01.bobj", fixtureStamp("models/test/n01.obj"));
+    const auto n02 =
+      goldenRecord("models/test/n02.bobj", fixtureStamp("models/test/n02.obj"));
+    CHECK(recordDifferences(n01, n02).empty());
+  }
+
+  SECTION("N04's ASE and N05's LWO goldens exist for LP7.1b, their stamps 2015")
+  {
+    CHECK(std::filesystem::is_regular_file(modelsFixture() / "test" / "n04.base"));
+    CHECK(std::filesystem::is_regular_file(modelsFixture() / "test" / "n05.blwo"));
+    CHECK(fixtureStamp("models/test/n04.ase") == 1451520000);
+    CHECK(fixtureStamp("models/test/n05.lwo") == 1451520000);
+    CHECK(goldenRecord("models/test/n04.base", 1451520000).binaryTime == 1451520000);
+  }
+}
+
 } // namespace tb::lit
