@@ -715,6 +715,23 @@ std::size_t GameFileSource::looseListingsForTesting() const
   return m_looseListings;
 }
 
+std::vector<std::string> GameFileSource::containerEntryNamesForTesting() const
+{
+  auto names = std::vector<std::string>{};
+  for (const auto& resources : m_resources)
+  {
+    for (const auto& entry : resources->container.entries())
+    {
+      names.push_back(entry.name);
+    }
+  }
+  for (const auto& pk4 : m_pk4s)
+  {
+    names.insert(names.end(), pk4->names.begin(), pk4->names.end());
+  }
+  return names;
+}
+
 GameFileProbe GameFileSource::probeFile(const std::string& path)
 {
   const auto relative = checkedRelativePath(path);

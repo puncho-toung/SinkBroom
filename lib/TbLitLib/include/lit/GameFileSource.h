@@ -138,6 +138,10 @@ public:
   std::size_t openContainers() const;
   // how many times a loose folder was listed (Y.3)
   std::size_t looseListingsForTesting() const;
+  // LP7.1a: every container entry's name (the .resources files', then the .pk4 files',
+  // as their tables hold them), for the retail model sweep, which lists a folder's
+  // entries below its subfolders too; a listing (listFiles) of a container is flat
+  std::vector<std::string> containerEntryNamesForTesting() const;
 
 private:
   bool cancelled() const;
