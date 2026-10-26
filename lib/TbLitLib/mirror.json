@@ -11119,7 +11119,7 @@
           "symbol": "FrameLog: LP7.0's columns"
         }
       ],
-      "note": "LP7.0 (C51, C52, C53, D126, P7.19, P7.20): the engine loads a model synchronously on the calling thread (GetModel) and keeps it in its model list by canonical name; the preview's model table is the material service's, published with the materials (C20), so a record has states of its own: Pending (requested, read or finishing: its entities draw nothing and keep the frame unconverged, D124), Ready, Missing (no file: the default cube, flagged) and Default (an unknown type, a validator or loader failure, a modelDef name on an idEntity spawnclass: the cube, flagged). A record carries per surface the material, EngineDrawVert vertices, 16-bit indexes, generateNormals, tangentsCalculated and bounds; the model bounds, the three has-surfaces flags, the source kind (binary, source, default), the source time (A4, the file source's), the binary's stored time (LoadBinaryModel's test is LP7.1a's), a .bglb's model_state and animation count (P7.19), a version and the notice's reason. MaterialTable::models is kept across reloads with modelChanges and changedModels, as the images' slots are (a model does not depend on the decls; LP7.1a's source path re-finishes records whose materials change, P7.22); MaterialTable::skins is per registry, as the entityDefs. LP7.0 has no loader and no request path: the maps are empty, so every model name finds no record. The skins are not reachable from the parse thread through the facade today: the shim registers DECL_SKIN with the copied idDeclSkin (DeclManagerShim.cpp Init, Init2: the skins folder) and the registry parses a skin when FindSkin asks, but MaterialDecls has no skin call and idDeclSkin's mappings are private (RemapShaderBySkin is its only lookup), so the map stays empty until LP7.2 adds a facade call. The frame log carries LP7's eleven counts (model_entities, model_instances, model_draws, models_pending, models_skinned, dress_surfaces, dress_unmatched, adopted_islands, adopted_tris, unmatched_islands, curved_islands) after proc_bytes at the end of the header, 0 in every frame row until LP7.2-LP7.4 fill them, empty in start and stop rows: 69 fields LP7.1a: the table is filled (MaterialService::requestModel, M-MODEL-DIFF-02); a fifth state Skinned (an .md5mesh: nothing drawn, K41, D127); the time test is binaryModelTimeAccepted (M-MODEL-03), the GLMB tail readGlmbTail (M-MODEL-04); a surface keeps its id, mirroredVerts and dupVerts, a record pendingLoader and its Source materials (P7.22)"
+      "note": "LP7.0 (C51, C52, C53, D126, P7.19, P7.20): the engine loads a model synchronously on the calling thread (GetModel) and keeps it in its model list by canonical name; the preview's model table is the material service's, published with the materials (C20), so a record has states of its own: Pending (requested, read or finishing: its entities draw nothing and keep the frame unconverged, D124), Ready, Missing (no file: the default cube, flagged) and Default (an unknown type, a validator or loader failure, a modelDef name on an idEntity spawnclass: the cube, flagged). A record carries per surface the material, EngineDrawVert vertices, 16-bit indexes, generateNormals, tangentsCalculated and bounds; the model bounds, the three has-surfaces flags, the source kind (binary, source, default), the source time (A4, the file source's), the binary's stored time (LoadBinaryModel's test is LP7.1a's), a .bglb's model_state and animation count (P7.19), a version and the notice's reason. MaterialTable::models is kept across reloads with modelChanges and changedModels, as the images' slots are (a model does not depend on the decls; LP7.1a's source path re-finishes records whose materials change, P7.22); MaterialTable::skins is per registry, as the entityDefs. LP7.0 has no loader and no request path: the maps are empty, so every model name finds no record. The skins are not reachable from the parse thread through the facade today: the shim registers DECL_SKIN with the copied idDeclSkin (DeclManagerShim.cpp Init, Init2: the skins folder) and the registry parses a skin when FindSkin asks, but MaterialDecls has no skin call and idDeclSkin's mappings are private (RemapShaderBySkin is its only lookup), so the map stays empty until LP7.2 adds a facade call. The frame log carries LP7's eleven counts (model_entities, model_instances, model_draws, models_pending, models_skinned, dress_surfaces, dress_unmatched, adopted_islands, adopted_tris, unmatched_islands, curved_islands) after proc_bytes at the end of the header, 0 in every frame row until LP7.2-LP7.4 fill them, empty in start and stop rows: 69 fields LP7.1a: the table is filled (MaterialService::requestModel, M-MODEL-DIFF-02); a fifth state Skinned (an .md5mesh: nothing drawn, K41, D127); the time test is binaryModelTimeAccepted (M-MODEL-03), the GLMB tail readGlmbTail (M-MODEL-04); a surface keeps its id, mirroredVerts and dupVerts, a record pendingLoader (gone in LP7.1b: ASE and LWO have their loaders) and its Source materials (P7.22)"
     },
     {
       "id": "M-BAKE-DIFF-02",
@@ -24075,9 +24075,13 @@
         {
           "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
           "symbol": "ModelLoading: the dispatch of a canonical name"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "readModelSource (LP7.1b)"
         }
       ],
-      "note": "LP7.1a (C51 (1), D127, K40, K41, K46, K47): GetModel's order for a canonical name: an empty name no model; the built-ins found by the name hash (_default the engine's default model, the cube; _beam and _sprite the cube, K47); then the extension: obj the binary then the source; ase and lwo the binary then the cube with a notice until LP7.1b (ModelRecord::pendingLoader); ma the binary then the cube (K46); glb and gltf the binary only (K40); md5mesh the Skinned record, nothing drawn (K41, the fifth record state); md3, prt and liquid the cube (K47: the engine's own classes); flt the cube (dispatched to idRenderModelStatic, but InitFromFile has no flt loader, :350-361); an unknown extension or none the cube (:512-523). A .proc model's name is the scene's to tell apart before it asks (LP7.2)"
+      "note": "LP7.1a (C51 (1), D127, K40, K41, K46, K47): GetModel's order for a canonical name: an empty name no model; the built-ins found by the name hash (_default the engine's default model, the cube; _beam and _sprite the cube, K47); then the extension: obj the binary then the source; ase and lwo (LP7.1b) the binary then the source through their validators and the copied loaders (M-MODEL-GUARD-02, -03), ModelRecord::pendingLoader gone; ma the binary then the cube (K46; as an LWOB source draws the cube where the engine reads it, M-MODEL-DIFF-08); glb and gltf the binary only (K40); md5mesh the Skinned record, nothing drawn (K41, the fifth record state); md3, prt and liquid the cube (K47: the engine's own classes); flt the cube (dispatched to idRenderModelStatic, but InitFromFile has no flt loader, :350-361); an unknown extension or none the cube (:512-523). A .proc model's name is the scene's to tell apart before it asks (LP7.2)"
     },
     {
       "id": "M-MODEL-03",
@@ -24253,9 +24257,13 @@
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
           "symbol": "MaterialDecls::parseObjModel"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "MaterialDecls::parseAseModel, parseLwoModel"
         }
       ],
-      "note": "LP7.1a (P7.4, P7.13): the copied OBJ_Load's ReadFile is served the bytes and the time the caller hands in (the file source's read and probe, A4) through a model-read scope of the shim's file system: the handed name reads as FileSystem.cpp's ReadFile returns a file (a Mem_Alloc'ed, NUL-terminated buffer of length + 1), any other as missing; never a read of the disk or the checkout's time"
+      "note": "LP7.1a (P7.4, P7.13): the copied OBJ_Load's ReadFile is served the bytes and the time the caller hands in (the file source's read and probe, A4) through a model-read scope of the shim's file system: the handed name reads as FileSystem.cpp's ReadFile returns a file (a Mem_Alloc'ed, NUL-terminated buffer of length + 1), any other as missing; never a read of the disk or the checkout's time. LP7.1b: the copied ASE_Load reads through the same scope (ReadFile), the copied lwGetObject through its OpenFileRead (M-MODEL-FS-03)"
     },
     {
       "id": "M-MODEL-DIFF-02",
@@ -24434,7 +24442,7 @@
           "symbol": "n01.bobj, n02.bobj, n03.bobj, n04.base, n05.blwo (the engine's)"
         }
       ],
-      "note": "LP7.1a (C56, the goldens): the engine's own binaries of the fixture models (parity.py capture-models, one engine process) are the goldens of the source path: for N01 (2015, WithoutNormals), N02 (the same OBJ under another name) and N03 (2017, MikkTSpace on smooth normals with sheared, mirrored texture coordinates) the preview's source load with the stamp of stamps.json handed in equals the binary byte for byte: every vertex (xyz, st, normal, tangent, colour, color2), the indexes, dupVerts, mirroredVerts, the surface and model bounds, the three flags, tangentsCalculated, generateNormals; the mutant (N03 through the WithoutNormals path) differs in the tangents alone. N04's ASE and N05's LWO goldens are LP7.1b's. Never in the product"
+      "note": "LP7.1a (C56, the goldens): the engine's own binaries of the fixture models (parity.py capture-models, one engine process) are the goldens of the source path: for N01 (2015, WithoutNormals), N02 (the same OBJ under another name) and N03 (2017, MikkTSpace on smooth normals with sheared, mirrored texture coordinates) the preview's source load with the stamp of stamps.json handed in equals the binary byte for byte: every vertex (xyz, st, normal, tangent, colour, color2), the indexes, dupVerts, mirroredVerts, the surface and model bounds, the three flags, tangentsCalculated, generateNormals; the mutant (N03 through the WithoutNormals path) differs in the tangents alone. N04's ASE and N05's LWO goldens are LP7.1b's. Never in the product; LP7.1b: N04's and N05's goldens are compared too (M-TEST-MODEL-03)"
     },
     {
       "id": "M-TEST-MODEL-02",
@@ -24494,6 +24502,2054 @@
         }
       ],
       "note": "LP7.1a (C56, P7.4, P7.10, P7.21), test only: the parity tool's fifth map, litpreview_models (rooms N01-N05, a func_static naming a generated fixture model and a point light each, no row before LP7.2), its generated models (OBJ, ASE and md5mesh as text, LWO2 by a struct writer), the staging table's per-file stamps (2015-12-31, N03 2017-01-01) applied after the copy, the rendermodels folder of game/tb_parity emptied by name before every run, model sources copied into the preview root with their stamps but the withheld ones (N02), and only the binaries a row's \"binary\" list names; capture-models runs the engine once as run does (the junction, the proof listing, the timeout) to write the goldens"
+    },
+    {
+      "id": "M-MODEL-COPY-04",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            1,
+            1032
+          ],
+          "anchor": "whole file",
+          "sha256": "d63d44d8ec9fbd6aea266e030bd745499ceabc094d53b2d6bf362c53c411a048",
+          "gitBlob": "ac5756b5828e324edef97fa6394b55cb9cdc6603"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Model_ase.cpp"
+        }
+      ],
+      "note": "LP7.1b (C51 (3), D136, D137, P7.2): the ASE reader, copied whole: ASE_Parse (its own tokenizer, ASE_GetToken, not idLexer; atof and atoi for the numbers), ASE_Load, whose ReadFile the shim serves from the bytes and time handed in (M-MODEL-FS-01's scope), and ASE_Free; its own translation unit. Parse thread only (C20: its static ase_t, M-MODEL-STATIC-05): MaterialDecls::parseAseModel calls ASE_Load inside shim::ClearedAllocations (M-GEO-DEFECT-02); the parsed aseModel_t is plain data the pool's finish reads. Every file passes aseFileProblem first (M-MODEL-GUARD-02); its fatal sites: M-MODEL-FATAL-09 ... -29"
+    },
+    {
+      "id": "M-MODEL-COPY-05",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.h",
+          "lines": [
+            1,
+            100
+          ],
+          "anchor": "whole file",
+          "sha256": "006a4528ebad9c7c5710ec37912704409b957ac97003d39c4190ae4967997185",
+          "gitBlob": "a12f801a69b081021b8f865b2861181b0b7eca42"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Model_ase.h"
+        }
+      ],
+      "note": "LP7.1b: the ASE reader's structs (aseFace_t, aseMesh_t, aseMaterial_t, aseObject_t, aseModel_t) and ASE_Load/ASE_Free, included by the copied Model_ase.cpp and Model.cpp's line 37"
+    },
+    {
+      "id": "M-MODEL-COPY-06",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            1,
+            5233
+          ],
+          "anchor": "whole file",
+          "sha256": "4784389fda522cc11205ebd81e543a3092952cc12e9475c4172feb67b95b339a",
+          "gitBlob": "c30972c7ba7b5d4934b79a9efcc9666ed0d014e0"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Model_lwo.cpp"
+        }
+      ],
+      "note": "LP7.1b (C51 (3), D136, D137, P7.13): the LightWave reader, copied whole: lwGetObject (LWO2) and lwGetObject5 (LWOB, never reached: the validator refuses LWOB, M-MODEL-DIFF-08), the chunk readers, the post-processing and lwFreeObject; its own translation unit. It opens the file by name through fileSystem->OpenFileRead and reads it in pieces: the shim's memory file (M-MODEL-FS-03), and swaps its big-endian reads through BigRevBytes (M-MODEL-08). Parse thread only (C20: its static flen, M-MODEL-STATIC-08): MaterialDecls::parseLwoModel calls lwGetObject inside shim::ClearedAllocations; the object is plain data the pool's finish reads (the conversion writes its vmaps' offsets, M-MODEL-POOL-02). Every file passes lwoFileProblem first (M-MODEL-GUARD-03); its failure returns are each a NULL object freed by lwFreeObject, which the preview draws as the default cube with the reason, as the engine's MakeDefaultModel"
+    },
+    {
+      "id": "M-MODEL-COPY-07",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_lwo.h",
+          "lines": [
+            1,
+            716
+          ],
+          "anchor": "whole file",
+          "sha256": "287404a00aa107c32f5b58a9631f08cce61076807c67fbfe71519c31eb5444d7",
+          "gitBlob": "e1baa7f699a18dddb38b6ee080ef315775e86835"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Model_lwo.h"
+        }
+      ],
+      "note": "LP7.1b: the LightWave reader's ids (LWID_), structs and prototypes, with the global dot, cross, normalize, set_flen, get* and sget* it defines (no name in TbLitIdLib collides), included by the copied Model_lwo.cpp and Model.cpp's line 38"
+    },
+    {
+      "id": "M-MODEL-PART-02",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            37,
+            37
+          ],
+          "anchor": "#include \"Model_ase.h\"",
+          "sha256": "625c6ebeeda5c9b15fb14dc4be06e3828d7f85007bc0c13d8c612c2f97f01f3e"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1736,
+            2107
+          ],
+          "anchor": "idRenderModelStatic::ConvertASEToModelSurfaces",
+          "sha256": "0148e0b2a07b99902dc5e1dbd0e41e230b06c5ecd374fecaf88c93c5ee4943df"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Model.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "idRenderModelStatic (ConvertASEToModelSurfaces declared), engineFinishAseModel, engineConvertAseModelForTesting"
+        }
+      ],
+      "note": "LP7.1b (C51 (3)): the ASE conversion, compiled inside shim/src/ShimModels.cpp against the stand-in idRenderModelStatic of M-MODEL-SHIM-01 (its class-scope declManager, idMaterial and tr); FindMaterial( NULL ) of a model without materials (:1860) finds the parse thread's capture of \"\" (the engine's _emptyName, DeclManager.cpp:712-715); the slop merges with the four constant cvars (M-MODEL-CONST-01)"
+    },
+    {
+      "id": "M-MODEL-PART-03",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            38,
+            38
+          ],
+          "anchor": "#include \"Model_lwo.h\"",
+          "sha256": "a8f88c4e1e229bda0c88ebed225e5f4373c48dab18ed668226f29fe99c79c7c3"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            2109,
+            2529
+          ],
+          "anchor": "idRenderModelStatic::ConvertLWOToModelSurfaces",
+          "sha256": "84b5aed0d50b07dc13576f6f026b67b86fa27f7240c7afc2f1a0cd27a7aaf71f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Model.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "idRenderModelStatic (ConvertLWOToModelSurfaces declared), engineFinishLwoModel"
+        }
+      ],
+      "note": "LP7.1b (C51 (3)): the LWO conversion, compiled inside shim/src/ShimModels.cpp against the stand-ins; the first layer only (:2209), (x, z, y) and t inverted, the surface colour x 255 with alpha 255 or an RGBA vmap (:2392-2433), a polygon of other than three vertices skipped with its warning (:2372-2376), normals parsed (:2328)"
+    },
+    {
+      "id": "M-MODEL-PART-04",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/framework/File.h",
+          "lines": [
+            1,
+            46
+          ],
+          "anchor": "licence, include guard, fsOrigin_t (Seek's origins)",
+          "sha256": "09cac565ceabc88e8a538ba42fea35b63de5ac4855444176ce6947ef48c8aa5e"
+        },
+        {
+          "file": "neo/framework/File.h",
+          "lines": [
+            453,
+            453
+          ],
+          "anchor": "include guard end",
+          "sha256": "ec50c417093bc14c65d7db4e5eb7b0a146014a2c3f47c13d7dedd8b126cfe67b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/framework/File.h"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
+          "symbol": "idFile (Tell, Seek)"
+        }
+      ],
+      "note": "LP7.1b (P7.13): FS_SEEK_CUR, FS_SEEK_END and FS_SEEK_SET for the shim's idFile stand-in's Seek, which the copied LWO reader calls; the rest of File.h (the engine's idFile and its subclasses) is not copied: the shim declares the members the copies call"
+    },
+    {
+      "id": "M-MODEL-PART-05",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/idlib/Lib.cpp",
+          "lines": [
+            1,
+            27
+          ],
+          "anchor": "licence",
+          "sha256": "f5664afb667359f28051827a334c2163c689462c4246d10f36a5a7180f9960bc"
+        },
+        {
+          "file": "neo/idlib/Lib.cpp",
+          "lines": [
+            490,
+            537
+          ],
+          "anchor": "RevBytesSwap",
+          "sha256": "c2e80716dfb95e0feccfe986ea910c7f464eea143a9eecd3840677470d537360"
+        },
+        {
+          "file": "neo/idlib/Lib.cpp",
+          "lines": [
+            574,
+            582
+          ],
+          "anchor": "RevBytesNoSwap",
+          "sha256": "fea41c9094d17faad83f10a303e073c5a150b233efb76b7b42d9b5bfea0926cf"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/Lib.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
+          "symbol": "BigRevBytes (the copied ranges compiled inside it)"
+        }
+      ],
+      "note": "LP7.1b (the director's decision a): the two byte swaps Swap_Init picks between for BigRevBytes, self-contained; compiled inside shim/src/ShimLib.cpp (HEADER_FILE_ONLY in the build), whose BigRevBytes picks them as M-MODEL-08 says. Pure; any thread"
+    },
+    {
+      "id": "M-MODEL-08",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/idlib/Lib.cpp",
+          "lines": [
+            384,
+            387
+          ],
+          "anchor": "BigRevBytes: _BigRevBytes( bp, elsize, elcount )",
+          "sha256": "129419b696cd496754ffc764f739ff889990da9cef4ea271460fcf093ae827ac"
+        },
+        {
+          "file": "neo/idlib/Lib.cpp",
+          "lines": [
+            662,
+            697
+          ],
+          "anchor": "Swap_Init: RevBytesSwap on a little-endian host, RevBytesNoSwap on a big-endian one",
+          "sha256": "e925d8bdb74802b4cd53203aec80ba0be3192ed8b13c9fe09f640f2c8a8e7db0"
+        },
+        {
+          "file": "neo/idlib/Lib.h",
+          "lines": [
+            170,
+            170
+          ],
+          "anchor": "BigRevBytes's declaration",
+          "sha256": "d60f2de63ceab238028588401bfaacf6e8c70f1fc7738f22a392ffa47578114a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
+          "symbol": "BigRevBytes"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimLib.h",
+          "symbol": "BigRevBytes"
+        }
+      ],
+      "note": "LP7.1b (decision a): BigRevBytes transcribed as LittleShort is (M-ID-FN-*): the wrapper goes through Swap_Init's function pointers, which the shim does not copy, so it tests the host as Swap_Init does (a short of bytes 1, 0 reads 1 on a little-endian host) and calls the copied RevBytesSwap or RevBytesNoSwap (M-MODEL-PART-05). Its callers: the copied LWO reader's getI2 ... getF4, sgetI2 ... sgetF4 and lwGetPoints (Model_lwo.cpp:1307-1666, :3066). Pure; any thread"
+    },
+    {
+      "id": "M-MODEL-FS-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            1841,
+            1917
+          ],
+          "anchor": "idFileSystemLocal::OSPathToRelativePath",
+          "sha256": "f8dd4074740ba4132122f45c6b12f3b63a184ced3f0b28365d18ee9b2bf36973"
+        },
+        {
+          "file": "neo/framework/FileSystem.h",
+          "lines": [
+            138,
+            138
+          ],
+          "anchor": "idFileSystem::OSPathToRelativePath",
+          "sha256": "641d74b7c303c3f4ed408ea6950a7fcb36d60cbdcbc41fbd972f7ed530e904ce"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "tb::lit::shim::osPathToRelativePath, idFileSystemLocal::OSPathToRelativePath"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
+          "symbol": "idFileSystem::OSPathToRelativePath"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "engineOSPathToRelativePath"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "ModelLoading: OSPathToRelativePath transcribed"
+        }
+      ],
+      "note": "LP7.1b (P7.13): transcribed: a path not starting with a slash or a backslash and without ':' is returned as it is; else the first directory component equal (idStr::Icmpn) to a base name is cut away with what precedes it, the second when two base names follow each other (the engine's W:/d3xp/base/ case); with none, idLib::Warning \"OSPathToRelativePath failed on %s\" and the path; the slashes kept as an idStaticList< int, MAX_OSPATH > keeps them. The copied ASE reader calls it on *BITMAP and *MATERIAL_NAME (Model_ase.cpp:212, :276): //lp7/base/textures/lp7/n04.tga is textures/lp7/n04.tga. The base names: M-MODEL-DIFF-05. Pure but for the warning; any thread"
+    },
+    {
+      "id": "M-MODEL-DIFF-05",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/framework/FileSystem.cpp",
+          "lines": [
+            1849,
+            1860
+          ],
+          "anchor": "OSPathToRelativePath: the base names base, d3xp, d3le, fs_game, fs_game_base",
+          "sha256": "a243d5e3b28d1d5bd3c7c61c6d0ebf48122c60275279fe676939bd17f1e6d1fe"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "tb::lit::shim::osPathToRelativePath"
+        }
+      ],
+      "note": "LP7.1b: the preview's fs_game and fs_game_base are empty (C8: it reads base/ only), so its base names are base, d3xp and d3le; the parity engine runs with fs_game tb_parity, so a *BITMAP through a tb_parity/ folder is cut there in the engine and not in the preview (no fixture has one)"
+    },
+    {
+      "id": "M-MODEL-FS-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            780,
+            796
+          ],
+          "anchor": "idFile_Memory::Read: what is left when asked for more",
+          "sha256": "befd906e645e1c2baad4c3a5c4fbaf8e851f0cded6bcb5c62ece8480d7cb1e42"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            970,
+            973
+          ],
+          "anchor": "idFile_Memory::Tell",
+          "sha256": "24f30a8c8577c2003ad49ee7dfcfffdb245d59c9bbe2c091ce46477d607e13fe"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            1000,
+            1037
+          ],
+          "anchor": "idFile_Memory::Seek: clamped, -1 when it had to be",
+          "sha256": "6577a017bbb04a44fb10c28c13ef2b84fe9c1b7c4796425fd418a05893370ecd"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            1784,
+            1784
+          ],
+          "anchor": "lwGetObject: fileSystem->OpenFileRead( filename )",
+          "sha256": "dd2a5b8a21e3ffa1c08768b8a5dbe8080ea17d2d88275331190371bb3d1385f1"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            1846,
+            1846
+          ],
+          "anchor": "lwGetObject: object->timeStamp = fp->Timestamp()",
+          "sha256": "25eb6978a185ae924eaa515bb3214635a6f91454b09b37d98353453cae3c2cdb"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/Registry.h",
+          "symbol": "tb::lit::shim::MemoryFile"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "MemoryFile, idFileSystemLocal::OpenFileRead"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
+          "symbol": "idFile (Tell, Seek)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "EngineMemoryFileForTesting, MaterialDecls::openModelFileForTesting"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "ModelLoading: the model read's memory file"
+        }
+      ],
+      "note": "LP7.1b (P7.13): inside a model read (M-MODEL-FS-01), OpenFileRead of the read's one name opens a MemoryFile over a copy of its bytes (lwGetObject opens the file by name and reads it in pieces); any other name, and any name outside a read, opens nothing, as before (M-ID-FN-27). Written, not idFile_Memory copied (M-MODEL-NC-01). Its Read, Tell and Seek are idFile_Memory's: Read takes what is left when asked for more, Seek from the current place, the end or the start, clamped to the file and -1 when it had to be; a negative Read length reads nothing (idFile_Memory would memcpy it: no copied caller asks for one, getbytes refuses a negative size, :1228); Timestamp() is the time handed in, as the engine's OpenFileRead of a loose file returns the file's time (idFile_Permanent, Sys_FileTimeStamp) and a container entry 0 (A4), which lwGetObject stores as the object's and the conversion as the model's time. The validator keeps every read and seek inside the file, where idFile_Permanent's fseek past the end and the memory file's clamp would differ. Parse thread"
+    },
+    {
+      "id": "M-MODEL-NC-01",
+      "kind": "not-copied",
+      "engine": [
+        {
+          "file": "neo/framework/File.h",
+          "lines": [
+            148,
+            235
+          ],
+          "anchor": "idFile_Memory",
+          "sha256": "85372ed81c3ad3078562fd3eea90df618d5e79db3afbadffcaff58760221f9c2"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            798,
+            831
+          ],
+          "anchor": "the memcpyImpl cvar, memcpy2, the histogram idHashTableT and its two console commands",
+          "sha256": "06b914fb96e9570af27f2b87519e0be986bbd1d5b6406d7a550b23bcf1e8d2e0"
+        },
+        {
+          "file": "neo/framework/File.cpp",
+          "lines": [
+            960,
+            963
+          ],
+          "anchor": "idFile_Memory::Timestamp: 0",
+          "sha256": "49f168050e0eb7e641491d088e25f27daafc01a2c4beb83e0c4bfa7927deb500"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/Registry.h",
+          "symbol": "tb::lit::shim::MemoryFile"
+        }
+      ],
+      "note": "LP7.1b (P7.13): a byte-identical idFile_Memory drags in a global idHashTableT with a dynamic initialiser (C9, C24), two CONSOLE_COMMANDs and a cvar inside its Write's range, Rewind and idLib::Error of the engine's idFile, and its Timestamp() is 0 where the engine's file is the file's time: the shim writes the reads and seeks it needs (M-MODEL-FS-03)"
+    },
+    {
+      "id": "M-MODEL-SHIM-02",
+      "kind": "shim-virtual",
+      "engine": [
+        {
+          "file": "neo/framework/File.h",
+          "lines": [
+            68,
+            68
+          ],
+          "anchor": "idFile::Tell",
+          "sha256": "d38db4543573d9bcfd41cf200ebc64969e6c7dae988566fa33ce2f80b01b999c"
+        },
+        {
+          "file": "neo/framework/File.h",
+          "lines": [
+            74,
+            74
+          ],
+          "anchor": "idFile::Seek",
+          "sha256": "9461fe5a5f0278ea925d289824aa8a6aad3c1f46f54fdfc62e10fd687f543299"
+        },
+        {
+          "file": "neo/framework/FileSystem.h",
+          "lines": [
+            138,
+            138
+          ],
+          "anchor": "idFileSystem::OSPathToRelativePath",
+          "sha256": "641d74b7c303c3f4ed408ea6950a7fcb36d60cbdcbc41fbd972f7ed530e904ce"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
+          "symbol": "idFile, idFileSystem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "MemoryFile::Tell, MemoryFile::Seek, idFileSystemLocal::OSPathToRelativePath"
+        }
+      ],
+      "note": "LP7.1b: the shim's stand-ins of idFile and idFileSystem declare only what the copied code calls; the LWO reader calls Tell and Seek, the ASE reader OSPathToRelativePath"
+    },
+    {
+      "id": "M-MODEL-09",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            3134,
+            3152
+          ],
+          "anchor": "LoadASE: ASE_Load, *sourceTimeStamp = ase->timeStamp, ConvertASEToModelSurfaces (result ignored), ASE_Free",
+          "sha256": "3049843a9c92d4a332805a755de8692112d8a052bda0460797652918d1f8a77e"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            3159,
+            3179
+          ],
+          "anchor": "LoadLWO: lwGetObject, *sourceTimeStamp = fileSystem->GetTimestamp( fileName ), ConvertLWOToModelSurfaces (result ignored), lwFreeObject",
+          "sha256": "b09b98b58228544ec6b71c281bb3da06551ec0263b59896352b1482259ca07d9"
+        },
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            939,
+            957
+          ],
+          "anchor": "ASE_Load: ReadFile with its time, ASE_Parse, FreeFile",
+          "sha256": "36cf8007cefdc9ea1470facd3181413a20a2b5aed36b50cc365918dabfb74d06"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "MaterialDecls::parseAseModel, parseLwoModel, engineFinishAseModel, engineFinishLwoModel, EngineAseModel, EngineLwoModel"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "readAseSource, readLwoSource, readModelSource, finishModel"
+        }
+      ],
+      "note": "LP7.1b (D137): LoadASE and LoadLWO transcribed, split as LoadOBJ is (M-MODEL-07): the parse on the parse thread (ASE_Load and lwGetObject of the bytes and the time handed in, inside the model read and shim::ClearedAllocations), the conversion and FinishSurfaces on the pool; the 2016 rule on the time the caller hands in (ASE: ReadFile's, LWO: GetTimestamp's, both the file source's, A4); a NULL parse (lwGetObject's failID and failpos) and an engine error the parse reached are a Default record with the reason, the engine's Couldn't load model and MakeDefaultModel"
+    },
+    {
+      "id": "M-MODEL-STATIC-05",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            67,
+            67
+          ],
+          "anchor": "static ase_t ase",
+          "sha256": "b7cfd6c04207dd83aac08cd303db5e7da7d40b587bb7f85ad5cc265781655bf0"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "per-call working state",
+      "reason": "LP7.1b: the ASE reader's working state (the buffer, the cursor, the token, the current object, mesh and material), zero-initialised; ASE_Parse clears it (:876) and fills it; written on the parse thread only (C20), one parse at a time (the process's one registry, C17); its pointers dangle after the parse and nothing reads them"
+    },
+    {
+      "id": "M-MODEL-STATIC-06",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            464,
+            464
+          ],
+          "anchor": "ASE_KeyCFACE_LIST: static int remap[3]",
+          "sha256": "12bd32de19687ba462113c8c37d60130776f38df37481df768146d5409c46605"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "LP7.1b: a function-local constant { 0, 2, 1 }, constant-initialised and never written"
+    },
+    {
+      "id": "M-MODEL-STATIC-07",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1762,
+            1762
+          ],
+          "anchor": "ConvertASEToModelSurfaces: static byte identityColor[4]",
+          "sha256": "fe78a05b43debc84edd64764dfeaad3df0383007ff211086fd33d7c7258dccbb"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "idempotent table",
+      "reason": "LP7.1b: a function-local constant { 255, 255, 255, 255 }, constant-initialised and never written: an ASE without colours is white; read on the pool"
+    },
+    {
+      "id": "M-MODEL-STATIC-08",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            1210,
+            1210
+          ],
+          "anchor": "static int flen",
+          "sha256": "9df8e86248b60374fb132422d5eec6ce2a6419b8060ed8fc5e9dd3b15a3a7819"
+        }
+      ],
+      "sinkbroom": [],
+      "staticKind": "per-call working state",
+      "reason": "LP7.1b: the LWO reader's count of the bytes read, zero-initialised; set and read by the reader on the parse thread only (C20), one parse at a time"
+    },
+    {
+      "id": "M-MODEL-STATIC-09",
+      "kind": "static",
+      "engine": [],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
+          "symbol": "s_clearedAllocations"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/private/shim/ShimLib.h",
+          "symbol": "tb::lit::shim::ClearedAllocations"
+        }
+      ],
+      "staticKind": "binding",
+      "reason": "LP7.1b (M-GEO-DEFECT-02): the count of ClearedAllocations scopes alive, a constant-initialised std::atomic<int>, raised and lowered around the ASE and LWO parse on the parse thread; Mem_Alloc16 reads it on any thread (a block cleared meanwhile on another thread costs only time). No thread_local: the Release app's TLS stays 0x273C"
+    },
+    {
+      "id": "M-MODEL-POOL-02",
+      "kind": "pool-safe",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1736,
+            2107
+          ],
+          "anchor": "ConvertASEToModelSurfaces",
+          "sha256": "0148e0b2a07b99902dc5e1dbd0e41e230b06c5ecd374fecaf88c93c5ee4943df"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            2109,
+            2529
+          ],
+          "anchor": "ConvertLWOToModelSurfaces",
+          "sha256": "84b5aed0d50b07dc13576f6f026b67b86fa27f7240c7afc2f1a0cd27a7aaf71f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "engineFinishAseModel, engineFinishLwoModel"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "finishModel"
+        }
+      ],
+      "note": "LP7.1b (D137, C24): as M-MODEL-POOL-01: the conversions read the parsed model (plain data) and the parse thread's material captures through the stand-ins, never the registry; their common calls go to the permanent sink (their Warnings drained by the job); their FatalError and Error sites are unreachable (M-MODEL-FATAL-30 ... -36); their statics are constants (M-MODEL-STATIC-07). The LWO conversion writes each TXUV vmap's offset into the parsed object (:2248), which only the one finish holding it reads, one finish at a time"
+    },
+    {
+      "id": "M-GEO-DEFECT-02",
+      "kind": "known-defect",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            454,
+            470
+          ],
+          "anchor": "ASE_KeyCFACE_LIST: bytes 0-2 of each corner's vertexColors written",
+          "sha256": "456d010aa5606dcced4e5306d95e478e8d8c64ee137dda5edbb1560b3da19814"
+        },
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            719,
+            721
+          ],
+          "anchor": "ASE_KeyMESH: faces = Mem_Alloc( sizeof( aseFace_t ) * numFaces ), not cleared",
+          "sha256": "8dfe12cc85e8105fa353277e811381d63c7c32a1869c3281656c0be0a713997e"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1985,
+            1989
+          ],
+          "anchor": "ConvertASEToModelSurfaces: the corner's colour taken from the face",
+          "sha256": "b1646e843a1f707240bb69a2bac4aa7e74a20ac0f7420af4f5d02e4a4470e6ff"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1998,
+            1998
+          ],
+          "anchor": "the weld compares all four bytes",
+          "sha256": "7d987abfe2db37abdeb63bd5dfbc0a163b3bd519e02905a5a9c6884d043b6d21"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            2076,
+            2076
+          ],
+          "anchor": "the four bytes stored into the vertex",
+          "sha256": "70d03fc8b0c78c93a41c6e65f0eb90dc80a98f758b4860abb9ac7b34067bbf55"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
+          "symbol": "Mem_Alloc16, tb::lit::shim::ClearedAllocations"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "MaterialDecls::parseAseModel"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "readAseSource (the record's note)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "ModelLoading, the ASE source path: *MESH_CFACE"
+        }
+      ],
+      "note": "E-LIT-4 (47-LP7-PACKAGES.md section 3; P7.3): an ASE with *MESH_CFACE colours leaves the alpha byte of each corner's colour as Mem_Alloc's block had it (uninitialised heap; Heap.h's Mem_Alloc does not clear), then welds the corners on all four bytes and stores them: the engine's vertex count, tangent sums and any alpha-reading stage of such a model depend on heap contents. The copies are kept (C7); the preview's parse clears its allocations (M-MODEL-DIFF-06), so the alpha is 0, deterministic, and the record notes it (ModelRecord::note). N04, the golden, has no *MESH_CFACE. The colours themselves are read correctly: ASE_KeyMESH_CVERTLIST's token parameter is ase.token itself (ASE_ParseBracedBlock passes the buffer, :155), refilled by each ASE_GetToken, so atof( token ) reads the value (no E-LIT-5: the step-1 report's reading was wrong)"
+    },
+    {
+      "id": "M-MODEL-DIFF-06",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            465,
+            467
+          ],
+          "anchor": "ASE_KeyCFACE_LIST: bytes 0-2 only",
+          "sha256": "cda1fb306f99df01e6f5a6291c54f6903b47bac5e4eedcca70964afd5a00cf8b"
+        },
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            721,
+            721
+          ],
+          "anchor": "faces from Mem_Alloc",
+          "sha256": "7dcd9ccf3a7a76e2f1fee6a66fcc8f8001f40c5313fd50ea266cb3de998bb128"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimLib.cpp",
+          "symbol": "Mem_Alloc16 under ClearedAllocations"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimModels.cpp",
+          "symbol": "MaterialDecls::parseAseModel, parseLwoModel"
+        }
+      ],
+      "note": "LP7.1b (M-GEO-DEFECT-02, the director's decision c): the ASE and LWO parse run inside shim::ClearedAllocations, so every block Mem_Alloc16 gives them is cleared: an ASE's *MESH_CFACE alpha byte is 0 where the engine's is heap. The LWO reader clears what it reads into already (Mem_ClearedAlloc and memset), so it changes nothing there"
+    },
+    {
+      "id": "M-MODEL-GUARD-02",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            84,
+            123
+          ],
+          "anchor": "ASE_GetToken: the 1024-character token, written without a bound",
+          "sha256": "02eb6fa36249197daa48782b10f7073eaa82b3fe24251d966fba313fe83d1e8c"
+        },
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            125,
+            184
+          ],
+          "anchor": "ASE_ParseBracedBlock, ASE_SkipEnclosingBraces",
+          "sha256": "7ba0a9f4c90c27f6718c1e4dc6d1b5c397a17dddd9269dc74691fe392fb43355"
+        },
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            191,
+            306
+          ],
+          "anchor": "the material keys",
+          "sha256": "5331f4fd4944970efb9e6de74dcb85d7a3e9cf53d40cdfbf7285eb6a11c7f2d3"
+        },
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            346,
+            548
+          ],
+          "anchor": "the vertex, face, tface, cface, tvert and cvert lists",
+          "sha256": "4696285f657a710f29a55348ff2b81ebc38cb65880bdb5c3932c9cbe8606e5a0"
+        },
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            550,
+            633
+          ],
+          "anchor": "ASE_KeyMESH_NORMALS",
+          "sha256": "297d00de1f0156aadad5abcd83b9bdf96e912f66da1bc93f70850c138d768c2e"
+        },
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            635,
+            756
+          ],
+          "anchor": "ASE_KeyMESH: the counts, the allocations, the lists' order",
+          "sha256": "d77013ceaff07e30a6bd12fb7c5070f4e0f7ec415f8bd7b8c87786e0d0c91fef"
+        },
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            781,
+            843
+          ],
+          "anchor": "ASE_KeyGEOMOBJECT: :813 clears a mesh's lists",
+          "sha256": "2e0a56a15be5bd06b4ecbba6498247265ff673ee77c3983d9594f3e7561b2fcd"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1779,
+            1779
+          ],
+          "anchor": "ConvertASEToModelSurfaces: _alloca( objects )",
+          "sha256": "dfbb0232e42b80aad8fe5d19bc56bf9e2824262ab3d79ac4869db2f132d5b248"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1803,
+            1803
+          ],
+          "anchor": "materials[object->materialRef] (no merge)",
+          "sha256": "f1155939eb4ceda55107bddc7de0fa0c35ae1780d7727975e23b09596dd95a38"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1815,
+            1815
+          ],
+          "anchor": "materials[object->materialRef] (merge)",
+          "sha256": "f1155939eb4ceda55107bddc7de0fa0c35ae1780d7727975e23b09596dd95a38"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1859,
+            1860
+          ],
+          "anchor": "a negative materialRef passes",
+          "sha256": "909b9469ceec950baeb07822ebd1a78179edd4c3d81a19c87ce66612d60f0dba"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            2033,
+            2033
+          ],
+          "anchor": "tri->indexes[...] = mv - mvTable (16 bits)",
+          "sha256": "6e50ecfde1571658c596f0ac25bd98d2e78a1d2f2c80bd35d7521b795642444b"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            2058,
+            2058
+          ],
+          "anchor": "materials[object->materialRef] (UVW)",
+          "sha256": "f1155939eb4ceda55107bddc7de0fa0c35ae1780d7727975e23b09596dd95a38"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem, AseShadow"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "readAseSource"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "ModelLoading: the ASE validator"
+        }
+      ],
+      "note": "LP7.1b (D136, P7.2): every ASE passes the preview's own walk of the copied reader before the copies see it (the same tokenizer, 0x80-0xFF delimiting as the engine's signed char does; the same blocks and keys; nothing written); a failing one is the default cube with the reason. It refuses: a NUL, a line over 1,000 characters (the token buffer); an unclosed block or a '}' before its block (M-MODEL-FATAL-09, -10), a brace outside a block; a *MESH_NUM* count twice, after its list or outside 0..2^20; a list twice (a leak), with another token (M-MODEL-FATAL-12, -13, -14, -15, -17, -19, -29), not exactly its count of entries (M-MODEL-FATAL-11, -16, -18; the face, tface and cface lists have no check at all); *MESH_NUMTVFACES other than *MESH_NUMFACES, *MESH_NUMCVFACES then (M-MODEL-FATAL-24, -25); the tface, cface and normals lists before the face list (M-MODEL-FATAL-26, -27, -28: the normals' Warning, then NULL faces), the cface list before the cvert list or with an index out of range (:465); face normals out of order or range (M-MODEL-FATAL-20, -21), a vertex normal before one, out of range or no corner of its face (M-MODEL-FATAL-22, -23; :604 reads faces[-1]), a corner without one, a normal of zero length after the mesh's *NODE_TM; a second *MESH in an object (:813 leaks); a declared count without its list, a vertex or coordinate index out of range (M-MODEL-FATAL-30, -31), coordinates in use without a tface list, colours without a cface list (uninitialised in the engine), a *MATERIAL_REF naming no material, more than 32,767 corners, 1,024 objects or 1,024 materials; a number outside a finite decimal grammar (at most 1e30) or an index not a plain integer; a *BITMAP or *MATERIAL_NAME of 256 characters or more (OSPathToRelativePath's slashes). A file without a *GEOMOBJECT passes (M-MODEL-DIFF-07)"
+    },
+    {
+      "id": "M-MODEL-DIFF-07",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            874,
+            932
+          ],
+          "anchor": "ASE_Parse",
+          "sha256": "ff924317365e44c1bdf41ba1b47023c5ede5e535566593c310f873761398a46d"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1768,
+            1771
+          ],
+          "anchor": "ConvertASEToModelSurfaces: no objects, false",
+          "sha256": "59f7fa0ab2b8181b4f3f9156ed179ddf7fb32854a3d874c01e3dd347a065cf10"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "note": "LP7.1b (D136): the ASE validator accepts a subset of what the copies read: a stray brace at the top level, a list shorter than its count (the rest uninitialised in the engine), a count after its list, a second list, a *MESH_NORMALS or a colour list left incomplete, a number atof reads otherwise (nan, inf, 0x1p3, a trailing character) are refused and drawn as the default cube with the reason, where the engine loads them (or reads heap). A file without a *GEOMOBJECT, an empty one among them, is a Ready model without surfaces on both sides (LoadASE returns true, ConvertASEToModelSurfaces false: FinishSurfaces of no surface): the director's decision of 2026-10-26, against the brief's Default"
+    },
+    {
+      "id": "M-MODEL-GUARD-03",
+      "kind": "guard",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            1775,
+            2067
+          ],
+          "anchor": "lwGetObject: the chunk loop and the post-processing",
+          "sha256": "811ab358393fff91ac37ea62c287b4574ac9a3815047ea254751999047be7fb8"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            1678,
+            1708
+          ],
+          "anchor": "sgetS0: strlen to the NUL",
+          "sha256": "ab8f21caaf20356bcda2061db37c63a11fa324261be37069a69a371e5e64c96b"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            3031,
+            3079
+          ],
+          "anchor": "lwGetPoints",
+          "sha256": "354a0ff4b28300e283cfd4af6a4b31b27c218341d5715f48780b298dfb09995a"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            3131,
+            3173
+          ],
+          "anchor": "lwAllocPolygons: pol[0] of an empty list (:3153)",
+          "sha256": "eeb8e6f7f505b823650425c41c91a589d7d2c55782b118d109cb4e0067b3d24c"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            3184,
+            3269
+          ],
+          "anchor": "lwGetPolygons: the records read past the chunk",
+          "sha256": "30fe35ab798b69e900c34b91a272a6326d908e338c46d7fcf5845b46b1c65026"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            3281,
+            3310
+          ],
+          "anchor": "lwGetPolyNormals: the indexes unchecked (:3295 FIXME)",
+          "sha256": "ad354451cfbd8900da479378ffb810cda10302ccbeceb12280a183800d1f2ec8"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            3322,
+            3363
+          ],
+          "anchor": "lwGetPointPolygons: the indexes unchecked",
+          "sha256": "36ea4d1a41d7ea2b63898b0ea00afafe19e94fcdbc145da40606d6e978c38db7"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            3375,
+            3436
+          ],
+          "anchor": "lwResolvePolySurfaces: index > count (:3411), strcmp and strlen of NULL (:3397, :3422)",
+          "sha256": "449e972aa0ffd1ef4c244cb0595cf3f03210a51b2a86a329251007b9f694d8a0"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            3454,
+            3502
+          ],
+          "anchor": "lwGetVertNormals: surf.ptr NULL without tags (:3468)",
+          "sha256": "fe9c3097fef67ee719d3f72d19c756e041092f499546a4898a4fa63477d3413a"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            3540,
+            3605
+          ],
+          "anchor": "lwGetTags: strlen past the chunk (:3565)",
+          "sha256": "dd9b8bdab988a7964b78d45a89feaaa23067d157a36deac1fecc4b7b2abb0b41"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            3615,
+            3659
+          ],
+          "anchor": "lwGetPolygonTags: pol[i] unchecked (:3647)",
+          "sha256": "62fe9625463e6ea62dc1d674f3c2b5502f58768ae861f20aacd47ef188791d08"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            4420,
+            4524
+          ],
+          "anchor": "lwGetShader: the header loop (:4444-4458)",
+          "sha256": "6175f289f976e332d5c35bfef72dc357b70f054f92829e78500fc938b5637505"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            4536,
+            4545
+          ],
+          "anchor": "compare_textures, compare_shaders: strcmp of the ordinals",
+          "sha256": "09b95da7e40c6519495fd617b0ee74eadf6a36cbcf05bf94f4f1401a9f368dc7"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            4939,
+            4965
+          ],
+          "anchor": "lwFreeVMap: val[0] (:4957)",
+          "sha256": "d7ae283240966b0b07604fd312b021424417be935f3b9c2ff7628af04361b44b"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            4975,
+            5086
+          ],
+          "anchor": "lwGetVMap: the records read past the chunk",
+          "sha256": "779d880414f2b0009dd17480d6ea95d11727bd77fe76901628a66584835e59e9"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            5096,
+            5149
+          ],
+          "anchor": "lwGetPointVMaps: vindex unchecked",
+          "sha256": "cab135634129869f82aeafff3a382c2745784bf018bb8fb8542ade3f2a70bc59"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            5159,
+            5233
+          ],
+          "anchor": "lwGetPolyVMaps: pindex unchecked",
+          "sha256": "56c87afac2419aa164d40d2543ffebc8edbf33cc3740dbf926999339e2aec707"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            2155,
+            2155
+          ],
+          "anchor": "ConvertLWOToModelSurfaces: _alloca( surfaces )",
+          "sha256": "8e6812ed9f881f0aeb534f3a0c7e93a964858b963b12f4c5152e1fd3906aa437"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            2212,
+            2216
+          ],
+          "anchor": "no points: false after AddSurface",
+          "sha256": "73897843873954eb5b138976780a927ac13ea6cd5a3db193b95bddc415a23745"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            2252,
+            2252
+          ],
+          "anchor": "a TXUV's val[k][1]",
+          "sha256": "1fc1c573bd7ba032673509b18d0efc66d6bc671fe8a2ce19da30a727c7f7e446"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            2381,
+            2381
+          ],
+          "anchor": "vRemap[poly->v[k].index]",
+          "sha256": "950d54ef7ae8c459e4b86a67458ca30b9c01185549ccc160eb63a546cca1a0a0"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            2392,
+            2395
+          ],
+          "anchor": "the surface colour x 255",
+          "sha256": "6e91deaf3b0a0b31b50cbde239a49df1594eeced77e410c6f55baa281f904206"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            2402,
+            2433
+          ],
+          "anchor": "an RGBA vmap's val[index][0..3] x 255",
+          "sha256": "f83a16b0385ffc021bdfbad7eeb4b8a84f119234550dc5d8a9ee7a42f08e33a9"
+        },
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            2477,
+            2477
+          ],
+          "anchor": "tri->indexes[...] = mv - mvTable (16 bits)",
+          "sha256": "6e50ecfde1571658c596f0ac25bd98d2e78a1d2f2c80bd35d7521b795642444b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "lwoFileProblem, LwoWalk"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "readLwoSource"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "ModelLoading: the LWO validator"
+        }
+      ],
+      "note": "LP7.1b (D136, P7.2): every LWO passes the preview's own IFF walk before the copies see it; a failing one is the default cube with the reason. The reader's own failure returns (the header, LAYR :1872, POLS :3203 and :3232, PTAG :3624 and :3641, BBOX :1946, the VMAP, TAGS, ENVL, CLIP and SURF readers and their blocks, lwGetPointPolygons, lwResolvePolySurfaces, lwGetPointVMaps, lwGetPolyVMaps) each free the partial object with lwFreeObject and give NULL, the engine's default cube: safe, and the walk refuses most of their causes too. It refuses what is not: a FORM type other than LWO2 (LWOB: M-MODEL-DIFF-08); a chunk past the FORM; an odd chunk a reader parses; PNTS not of 12-byte points or not finite; POLS without a polygon (:3153), not exactly filled by its records, a vertex index past the layer's points (:3295, :3330, :3353, Model.cpp:2381); VMAP/VMAD without records (:4957) or not exactly filled, a TXUV under two values or not finite, an RGBA under four or outside 0..1 (Model.cpp:2252, :2402-2433), an index past the layer's points or polygons at the end; PTAG not exactly filled, a polygon past the layer's (:3647), a SURF tag at or past the tag count (:3411); TAGS not terminated in the chunk (:3565, :1689), empty (:3397, :3422) or of 256 characters; polygons without a TAGS chunk (:3468); a SURF without a non-empty name (:3397) under 256 characters or not filled by its sub-chunks, COLR outside 0..1 (Model.cpp:2392-2395); a texture block not filled by its header and body sub-chunks or with an empty ordinal (:4538), an allocating sub-chunk twice (VMAP, FUNC, PNAM, INAM, FKEY, IKEY, TMAP's OREF: the first leaks); a shader block whose header loop meets a zero-size sub-chunk (:4447 never ends) or no ENAB, or with an empty ordinal (:4544); surfaces without points in the first layer (Model.cpp:2212-2216, then M-MODEL-FATAL-03); more than 32,767 polygons or triangle corners in the first layer (:2477), 256 SURF chunks, tags or layers (:2155's _alloca). Non-triangles pass: the conversion skips them with its Warning"
+    },
+    {
+      "id": "M-MODEL-DIFF-08",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            1814,
+            1829
+          ],
+          "anchor": "lwGetObject: an LWOB goes to lwGetObject5",
+          "sha256": "71112b86a193bf56f62031939bc331eb17c8901b6dbe159d19005958c429ca99"
+        },
+        {
+          "file": "neo/renderer/Model_lwo.cpp",
+          "lines": [
+            2787,
+            2951
+          ],
+          "anchor": "lwGetObject5",
+          "sha256": "15fa1084d3678e537a4eaa452bc974e55203725c5b2df0adec401ce59d4a4723"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "lwoFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelLoading.cpp",
+          "symbol": "readLwoSource"
+        }
+      ],
+      "note": "LP7.1b (the director's decision b, 2026-10-26): an LWOB (LightWave 5) file is a validator refusal, drawn as the default cube with the notice \"<name> cannot be read: LightWave 5 objects (LWOB) are not read by the preview\", where the engine reads it through lwGetObject5 (whose surface reader dereferences a NULL texture after its asserts, :2464-2614, and writes s[-1], :2130); lwGetObject5's hazards are never walked. The LWO2 validator also accepts a subset of what the copies read (M-MODEL-GUARD-03): a refused LWO2 the engine reads is drawn as the cube with the reason"
+    },
+    {
+      "id": "M-MODEL-FATAL-09",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            144,
+            144
+          ],
+          "anchor": "ASE_ParseBracedBlock: \"Unexpected '}'\"",
+          "sha256": "b6d9af880bbd1b58bfbbb0aef83b0fc1a0dacb878ea47762d84cf0b9f072a37d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "the block's loop goes on at a negative indent, the following keys parsed at the wrong level (memory-safe in itself). Unreachable: no '}' before its block (aseFileProblem)"
+    },
+    {
+      "id": "M-MODEL-FATAL-10",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            180,
+            180
+          ],
+          "anchor": "ASE_SkipEnclosingBraces: \"Unexpected '}'\"",
+          "sha256": "b6d9af880bbd1b58bfbbb0aef83b0fc1a0dacb878ea47762d84cf0b9f072a37d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "as :144. Unreachable likewise"
+    },
+    {
+      "id": "M-MODEL-FATAL-11",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            367,
+            367
+          ],
+          "anchor": "ASE_KeyMESH_VERTEX_LIST: \"ase.currentVertex >= pMesh->numVertexes\"",
+          "sha256": "460b5ebd2791468e0acf261493b08fc28a6de6a7ea27235262e36f9f82dab992"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "the vertex past the list was written already (:355-361) and the next ones are too (UNSAFE). Unreachable: each list exactly its count"
+    },
+    {
+      "id": "M-MODEL-FATAL-12",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            372,
+            372
+          ],
+          "anchor": "ASE_KeyMESH_VERTEX_LIST: unknown token",
+          "sha256": "9b24b691f897e76f079c27f8c6da423fd410a3200241a23f4802f2dcd41db0ae"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "the token is skipped (memory-safe). Unreachable: only *MESH_VERTEX in the list"
+    },
+    {
+      "id": "M-MODEL-FATAL-13",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            417,
+            417
+          ],
+          "anchor": "ASE_KeyMESH_FACE_LIST: unknown token",
+          "sha256": "03bdfe93ffe8a35b4b3dc835fdb5acc2f836f35cbc865756039e62770c328196"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "the token is skipped; the face list itself has no count check (:380-413 write faces[currentFace], UNSAFE past the count). Unreachable: only *MESH_FACE, exactly *MESH_NUMFACES of them"
+    },
+    {
+      "id": "M-MODEL-FATAL-14",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            446,
+            446
+          ],
+          "anchor": "ASE_KeyTFACE_LIST: unknown token",
+          "sha256": "3dffeb29604e910526aee60397cfe8856c516ac087fcfae6b55ac257bfb7f0da"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "skipped; the tface list has no count check (:438-440). Unreachable: only *MESH_TFACE, exactly the faces' count"
+    },
+    {
+      "id": "M-MODEL-FATAL-15",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            474,
+            474
+          ],
+          "anchor": "ASE_KeyCFACE_LIST: unknown token",
+          "sha256": "80afdd59ba35fa1cf7b53f196fdd02e0c7dafc710093a7a9e57511a820cf1e2e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "skipped; the cface list has no count check and reads cvertexes[a] unchecked (:465-467, UNSAFE). Unreachable: only *MESH_CFACE, exactly the faces' count, its indexes within the cvertices, after the cvert list"
+    },
+    {
+      "id": "M-MODEL-FATAL-16",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            509,
+            509
+          ],
+          "anchor": "ASE_KeyMESH_TVERTLIST: \"ase.currentVertex > pMesh->numTVertexes\"",
+          "sha256": "76e3a4260c5b4aeabd2298eadbea089751f225618e5f8acd347dbe24a1aaca35"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "written before the check (:501-503, UNSAFE). Unreachable: exactly its count"
+    },
+    {
+      "id": "M-MODEL-FATAL-17",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            514,
+            514
+          ],
+          "anchor": "ASE_KeyMESH_TVERTLIST: unknown token",
+          "sha256": "06eac1fe4279809d9a4f9932b27103f70d82d3616b7f947dec3994218dd1b9e3"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "skipped. Unreachable: only *MESH_TVERT"
+    },
+    {
+      "id": "M-MODEL-FATAL-18",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            541,
+            541
+          ],
+          "anchor": "ASE_KeyMESH_CVERTLIST: \"ase.currentVertex > pMesh->numCVertexes\"",
+          "sha256": "441f9e455f12e06f328b2a4c6b3ec2eeed9df5513a975a47a9eead20b618f97c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "written before the check (:529-535, UNSAFE). Unreachable: exactly its count"
+    },
+    {
+      "id": "M-MODEL-FATAL-19",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            546,
+            546
+          ],
+          "anchor": "ASE_KeyMESH_CVERTLIST: unknown token",
+          "sha256": "3f163bad66f376fcf54bef9186d6ae3b1ae9d844da68e0bebe0436740b18d55f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "skipped (colorsParsed set). Unreachable: only *MESH_VERTCOL"
+    },
+    {
+      "id": "M-MODEL-FATAL-20",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            568,
+            568
+          ],
+          "anchor": "ASE_KeyMESH_NORMALS: \"face index out of range\"",
+          "sha256": "ae653782b07d5fea9f6613f528d0de84041ffb637ca64738df9b730b328ff726"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "faces[currentFace] written past the faces (UNSAFE). Unreachable: each face normal's number its running index below the face count"
+    },
+    {
+      "id": "M-MODEL-FATAL-21",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            573,
+            573
+          ],
+          "anchor": "ASE_KeyMESH_NORMALS: \"face index != currentFace\"",
+          "sha256": "2bc580edc81985ac1f4e95b2d4b10fa6e86a9cc17e9e86a512187b2c54dca409"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "the normal written to faces[currentFace] all the same. Unreachable likewise"
+    },
+    {
+      "id": "M-MODEL-FATAL-22",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            601,
+            601
+          ],
+          "anchor": "ASE_KeyMESH_NORMALS: \"vertex index out of range\"",
+          "sha256": "05248004cc6b945fbe32df89c1cc8850f53da46ed408ba70abb43fde1c63065a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "then faces[currentFace - 1] read, faces[-1] before any face normal (UNSAFE). Unreachable: a vertex normal after a face normal, its index within the vertices"
+    },
+    {
+      "id": "M-MODEL-FATAL-23",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            616,
+            616
+          ],
+          "anchor": "ASE_KeyMESH_NORMALS: \"vertex index doesn't match face\"",
+          "sha256": "90e3bc565cd287bcf1d591e926824122e97117eba1ce086d4273459ef5b1d745"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "returns (memory-safe; the corner's normal left uninitialised). Unreachable: its index one of the face's corners, every corner given"
+    },
+    {
+      "id": "M-MODEL-FATAL-24",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            683,
+            683
+          ],
+          "anchor": "ASE_KeyMESH: \"MESH_NUMTVFACES != MESH_NUMFACES\"",
+          "sha256": "07aeef7f098df0d923869acae02b2d1f6773e4f773de7490bfe98034344a949d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "goes on (the conversion uses the coordinates only when they agree). Unreachable: equal"
+    },
+    {
+      "id": "M-MODEL-FATAL-25",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            695,
+            695
+          ],
+          "anchor": "ASE_KeyMESH: \"MESH_NUMCVFACES != MESH_NUMFACES\" (it compares numTVFaces)",
+          "sha256": "2a89a0203e1ffacf61799da13335369c23ab7ce44d683d492b3f5aa405d51d0f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "goes on. Unreachable: *MESH_NUMCVFACES only while *MESH_NUMTVFACES equals *MESH_NUMFACES"
+    },
+    {
+      "id": "M-MODEL-FATAL-26",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            730,
+            730
+          ],
+          "anchor": "ASE_KeyMESH: \"*MESH_TFACELIST before *MESH_FACE_LIST\"",
+          "sha256": "8339affe71d5ad7605fe2761670d4ea7a7248314208373d1ebbd7170cdf81607"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "then the tface list writes into NULL faces (UNSAFE). Unreachable: after the face list"
+    },
+    {
+      "id": "M-MODEL-FATAL-27",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            740,
+            740
+          ],
+          "anchor": "ASE_KeyMESH: \"*MESH_CFACELIST before *MESH_FACE_LIST\"",
+          "sha256": "5d8432bf09d98e533a367b026cd55ed7a4460f9248302716f2bc00d30bd4c448"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "then NULL faces (UNSAFE). Unreachable likewise"
+    },
+    {
+      "id": "M-MODEL-FATAL-28",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            750,
+            750
+          ],
+          "anchor": "ASE_KeyMESH: \"*MESH_NORMALS before *MESH_FACE_LIST\"",
+          "sha256": "3040a896002c1c1de31db3919fe22b194eb10ab536dc1d0c4efd21af144e5a49"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Warning"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Warning",
+      "reachable": false,
+      "afterReturn": "then the normals write into NULL faces (UNSAFE). Unreachable: after the face list"
+    },
+    {
+      "id": "M-MODEL-FATAL-29",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model_ase.cpp",
+          "lines": [
+            777,
+            777
+          ],
+          "anchor": "ASE_KeyMESH_ANIMATION: unknown token",
+          "sha256": "dc69a581458adddf7f94728bbee3ad2d550f8ac0cea3a450f9772aca961131af"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "skipped. Unreachable: only *MESH there"
+    },
+    {
+      "id": "M-MODEL-FATAL-30",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1961,
+            1961
+          ],
+          "anchor": "ConvertASEToModelSurfaces: \"bad vertex index\"",
+          "sha256": "cd634ad737dc06db0ac5f5dbb23b0fd2338e2ff79ecc643ae6c517f440948755"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "vRemap[v] read out of range (UNSAFE). Unreachable: every face's vertex index within the vertices"
+    },
+    {
+      "id": "M-MODEL-FATAL-31",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            1973,
+            1973
+          ],
+          "anchor": "ConvertASEToModelSurfaces: \"bad tex coord index\"",
+          "sha256": "4841f04ba557a884ae7d102eac591815665cd5713e9df34d757404dbc1ba65a2"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Error"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "Error",
+      "reachable": false,
+      "afterReturn": "tvRemap[tv] read out of range (UNSAFE). Unreachable: the coordinates' indexes within the tvertices"
+    },
+    {
+      "id": "M-MODEL-FATAL-32",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            2041,
+            2041
+          ],
+          "anchor": "ConvertASEToModelSurfaces: \"index miscount\"",
+          "sha256": "0370bf1f78cb43fd87644532c3bc81feddabeab8d10b3dd0a6c32edb949b481e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "the surface is built with the counts. Unreachable: numIndexes is 3 numFaces exactly"
+    },
+    {
+      "id": "M-MODEL-FATAL-33",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            2045,
+            2045
+          ],
+          "anchor": "ConvertASEToModelSurfaces: \"vertex miscount\"",
+          "sha256": "a46d5a4e6b67acff770a706614aa2e7a47dac3004c9f49e9524f5629115bd34d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "likewise. Unreachable: numVerts is at most the indexes"
+    },
+    {
+      "id": "M-MODEL-FATAL-34",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            2214,
+            2214
+          ],
+          "anchor": "ConvertLWOToModelSurfaces: \"bad or missing vertex data\"",
+          "sha256": "c752dafb667c56bb8be5e259646136dc955c680e7fc78db943755afcc9fa2e61"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::Warning"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "lwoFileProblem"
+        }
+      ],
+      "call": "Warning",
+      "reachable": false,
+      "afterReturn": "returns false after adding the surfaces: FinishSurfaces finds them without geometry (M-MODEL-FATAL-03, UNSAFE). Unreachable: points in the first layer when there are surfaces (lwoFileProblem)"
+    },
+    {
+      "id": "M-MODEL-FATAL-35",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            2485,
+            2485
+          ],
+          "anchor": "ConvertLWOToModelSurfaces: \"index miscount\"",
+          "sha256": "efe7faed8d53e96d8f1bd0aac9337545d3260d3d95c9bfb266ec6b47ca1cd8dd"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "lwoFileProblem"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "the surface is built with the counts. Unreachable: at most three indexes a polygon"
+    },
+    {
+      "id": "M-MODEL-FATAL-36",
+      "kind": "fatal-site",
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            2489,
+            2489
+          ],
+          "anchor": "ConvertLWOToModelSurfaces: \"vertex miscount\"",
+          "sha256": "bd77e2746ace84dc78608571ccebb85ba2f7503fd91724e9ccd9e357103eddf6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
+          "symbol": "idCommon::FatalError"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "lwoFileProblem"
+        }
+      ],
+      "call": "FatalError",
+      "reachable": false,
+      "afterReturn": "likewise. Unreachable"
+    },
+    {
+      "id": "M-TEST-MODEL-03",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            386,
+            625
+          ],
+          "anchor": "LoadBinaryModel (the goldens' reader)",
+          "sha256": "6b3f2180a3126a0c0920e92d1f0a0a16a5fcb492e9496a09a0422c57419e5212"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/tst_ModelLoading.cpp",
+          "symbol": "ModelLoading, the source path against the engine's binaries (N04, N05, the mutant)"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/models/test",
+          "symbol": "n04.ase, n04.base, n05.lwo, n05.blwo"
+        }
+      ],
+      "note": "LP7.1b (C56, LP7.1b's exit): N04's ASE (no *MESH_CFACE, no *MESH_NORMALS: generated normals over the dupVerts) and N05's LWO2 (the surface colour x 255 with alpha 255, (x, z, y), t inverted) through the preview's source path, the stamps of stamps.json handed in, equal the engine's binaries n04.base and n05.blwo byte for byte, every field. The mutant: N04 through FinishSurfaces' cleanup without its generated normals differs in all 20 normals and 18 of the 20 tangents; with them, the golden's normals and its 12 dupVerts pairs (the harness is the engine's)"
+    },
+    {
+      "id": "M-TEST-MODEL-04",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/Model.cpp",
+          "lines": [
+            400,
+            406
+          ],
+          "anchor": "LoadBinaryModel: the stored time and the time test",
+          "sha256": "b6c1ce885ef6e7a5ff96e680f3cc02695527bcd5756c0ab925e2bb6708e59309"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/tst_RetailModels.cpp",
+          "symbol": "Retail models: the loose sources through the source path"
+        }
+      ],
+      "note": "LP7.1b (C51), test only, [.][retail]: every loose models/** source of a model extension the C8 listing finds, an .obj, .ase or .lwo through readModelSource and finishModel, then against the engine's binary of it when the binary-first path accepts one; counted by extension with bytes, time, loads, refusals with their reasons (a refused retail file is a finding) and the binaries equal, different, stale or absent. The retail game at LP7.1b: .obj 5 (3 loaded, 1 equal to its binary, 2 without one; refused: material-orb.obj for more than 32,767 corners, sponza_original.obj for a 'vt' of 3 numbers), .glb 10 (binary only until LP7.5), .fbx 1 (the cube); no loose .ase or .lwo"
     }
   ],
   "retired": [

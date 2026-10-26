@@ -235,7 +235,7 @@ struct EngineAseParse
 };
 
 /**
- * InitFromFile for an ASE (Model.cpp:314-379) from LoadASE on (:3133-3150): InitEmpty,
+ * InitFromFile for an ASE (Model.cpp:314-379) from LoadASE on (:3134-3152): InitEmpty,
  * ConvertASEToModelSurfaces (its result ignored, as LoadASE ignores it; it takes the
  * model's timeStamp from the ASE), purged false, then FinishSurfaces( useMikktspace ).
  * Pool-safe (D137): materials are the parse thread's captures; one call at a time.

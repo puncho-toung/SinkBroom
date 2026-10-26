@@ -30,7 +30,13 @@ belong to and, at its class scope, the stand-ins that keep them off the registry
 `R_FreeStaticTriSurf`, the masked occlusion copies, `R_DeriveMikktspaceTangents` and the
 MikkTSpace callbacks); `idlib/containers/VectorSet.h` whole (the conversion's slop
 merge); and `idSIMD_Generic`'s two `MinMax` ranges (`idlib/math/Simd_Generic.cpp`, with
-`Simd.h`'s `VPCALL`), compiled inside `../shim/src/ShimLib.cpp`.
+`Simd.h`'s `VPCALL`), compiled inside `../shim/src/ShimLib.cpp`. LP7.1b (C51, P7.13) adds
+the ASE and LWO loaders: `renderer/Model_ase.cpp` and `Model_ase.h`, `renderer/Model_lwo.cpp`
+and `Model_lwo.h` whole; `renderer/Model.cpp`'s two include lines and
+`ConvertASEToModelSurfaces` and `ConvertLWOToModelSurfaces`, inside
+`../shim/src/ShimModels.cpp` as before; `framework/File.h`'s `fsOrigin_t` (the shim's
+`idFile` stand-in's `Seek`); and `idlib/Lib.cpp`'s `RevBytesSwap` and `RevBytesNoSwap`,
+compiled inside `../shim/src/ShimLib.cpp`, whose `BigRevBytes` picks between them.
 
 `renderer/DXT/` (`DXTCodec.h`, `DXTCodec_local.h`, `DXTEncoder_SSE2.cpp`) is **test only**
 (LP1c fix S3.2): the engine's fast DXT encoders, compiled into `TbLitIdDxtTestLib`, which

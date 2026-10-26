@@ -514,7 +514,7 @@ EngineModel engineFinishAseModel(
   model.declManager = &decls;
   model.tr.defaultMaterial = decls.defaultMaterial();
 
-  // Model.cpp:314-379 InitFromFile with LoadASE (:3133-3150) for a model ASE_Load read
+  // Model.cpp:314-379 InitFromFile with LoadASE (:3134-3152) for a model ASE_Load read
   const auto fileName = std::string{name};
   model.InitEmpty(fileName.c_str());
   model.reloadable = true;
