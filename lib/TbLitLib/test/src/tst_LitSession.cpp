@@ -14390,7 +14390,7 @@ std::string lp72MapText(const std::string& entities, const bool westLight = fals
     "200\"\n\"_color\" \"1 1 1\"\n\"texture\" \"lights/lp51/held\"\n"};
   if (westLight)
   {
-    lights.push_back(
+    lights.emplace_back(
       "\"name\" \"lp72_west\"\n\"origin\" \"-120 80 64\"\n\"light_radius\" \"150 150 "
       "150\"\n\"_color\" \"1 1 1\"\n\"texture\" \"lights/lp51/held\"\n");
   }

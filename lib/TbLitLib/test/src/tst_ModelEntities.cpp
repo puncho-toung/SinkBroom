@@ -855,7 +855,7 @@ public:
     return snapshot;
   }
 
-  void settle()
+  void settle() const
   {
     const auto settled = waitUntil(
       [&] {
