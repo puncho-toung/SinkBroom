@@ -374,7 +374,7 @@ TEST_CASE("EngineGeometry: triangle cleanup and tangents")
       CHECK(mikk->verts[i].st == plain->verts[i].st);
       CHECK(mikk->verts[i].normal == plain->verts[i].normal);
     }
-    CHECK(std::none_of(messages.begin(), messages.end(), [](const DeclMessage& m) {
+    CHECK(std::ranges::none_of(messages, [](const DeclMessage& m) {
       return m.text.find("Mikkelsen tangent space calculation failed")
              != std::string::npos;
     }));

@@ -353,10 +353,8 @@ ObjSourceRead readObjSource(
   input.useMikktspace = engineUseMikktspace(sourceTime);
   for (const auto& name : parsed.model->materialNames())
   {
-    if (std::any_of(
-          input.materials.names.begin(),
-          input.materials.names.end(),
-          [&](const auto& known) { return known.first == name; }))
+    if (std::ranges::any_of(
+          input.materials.names, [&](const auto& known) { return known.first == name; }))
     {
       continue;
     }
@@ -367,9 +365,8 @@ ObjSourceRead readObjSource(
         fmt::format("{}: its material '{}': {}", canonical, name, material.error));
     }
     // one entry per decl, as FindMaterial returns one pointer per decl
-    const auto same = std::find_if(
-      input.materials.materials.begin(),
-      input.materials.materials.end(),
+    const auto same = std::ranges::find_if(
+      input.materials.materials,
       [&](const auto& known) { return known.index == material.value->index; });
     const auto index = std::size_t(same - input.materials.materials.begin());
     if (same == input.materials.materials.end())

@@ -61,7 +61,7 @@ std::optional<std::filesystem::path> retailGamePath()
 
 std::string lowered(std::string text)
 {
-  std::transform(text.begin(), text.end(), text.begin(), [](const char c) {
+  std::ranges::transform(text, text.begin(), [](const char c) {
     return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
   });
   return text;
@@ -111,7 +111,7 @@ TEST_CASE("Retail models: the engine's binaries read (LP7.1a, C51)", "[.][retail
     if (name.rfind(prefix, 0) == 0 && extension.size() > 2 && extension[1] == 'b')
     {
       names.try_emplace(name, entry);
-      if (std::find(extensions.begin(), extensions.end(), extension) == extensions.end())
+      if (std::ranges::find(extensions, extension) == extensions.end())
       {
         extensions.push_back(extension);
       }

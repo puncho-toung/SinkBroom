@@ -321,7 +321,7 @@ TEST_CASE("ModelLoading, the binary lookup and the engine's time test (LP7.1a, D
       engineGeneratedModelPath("models\\a.b\\c.lwo")
       == "generated/rendermodels/models/a.b/c.blwo");
     CHECK(engineFileExtension("models/test/n01.obj") == "obj");
-    CHECK(engineFileExtension("models/test/n01") == "");
+    CHECK(engineFileExtension("models/test/n01").empty());
   }
 
   // a loose game folder: the sources stamped through the file source, never the
@@ -798,7 +798,7 @@ TEST_CASE(
     const auto messages = drainEngineMessagesForThread(std::this_thread::get_id());
     REQUIRE(mikk);
     CHECK(mikk->tangentsCalculated);
-    CHECK(std::none_of(messages.begin(), messages.end(), [](const DeclMessage& m) {
+    CHECK(std::ranges::none_of(messages, [](const DeclMessage& m) {
       return m.text.find("Mikkelsen") != std::string::npos;
     }));
     const auto expected = normalized({32, -16, 0});
@@ -1444,9 +1444,8 @@ TEST_CASE(
       {});
     const auto differences = recordDifferences(preview, engine);
     CHECK_FALSE(differences.empty());
-    CHECK(std::all_of(differences.begin(), differences.end(), [](const auto& d) {
-      return d.find("tangent") != std::string::npos;
-    }));
+    CHECK(std::ranges::all_of(
+      differences, [](const auto& d) { return d.find("tangent") != std::string::npos; }));
   }
 
   SECTION("N01 and N02 hold the same geometry; their names make their bytes differ")

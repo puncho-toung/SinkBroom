@@ -2877,12 +2877,8 @@ private:
     m_working.changedModels = m_working.changedModels.set(name, m_working.modelChanges);
     m_modelFiles.erase(name);
     ++m_modelGenerations[name];
-    m_modelFinishes.erase(
-      std::remove_if(
-        m_modelFinishes.begin(),
-        m_modelFinishes.end(),
-        [&](const auto& finish) { return finish.input.name == name; }),
-      m_modelFinishes.end());
+    std::erase_if(
+      m_modelFinishes, [&](const auto& finish) { return finish.input.name == name; });
   }
 
   // a name read again by a later Model item
