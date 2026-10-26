@@ -882,6 +882,18 @@ public:
     const std::string& name, const std::string& bytes, std::int64_t time);
 
   /**
+   * LP7.1b (C51, D137, P7.3): the copied ASE_Load (Model_ase.cpp:939-957) of a model
+   * file's bytes, its ReadFile served the bytes and the time handed in, its allocations
+   * cleared (shim::ClearedAllocations: the *MESH_CFACE alpha is 0, E-LIT-4); its
+   * *BITMAP paths through the shim's OSPathToRelativePath. The model is null where
+   * ASE_Load returns NULL; the error is the engine error the parse reached (the validator
+   * keeps every one unreachable, aseFileProblem in TbLitLib). Parse thread (C20: the
+   * copied reader's static ase_t).
+   */
+  EngineAseParse parseAseModel(
+    const std::string& name, const std::string& bytes, std::int64_t time);
+
+  /**
    * LP7.1b (P7.13): inside a model read of name over bytes and time, what the copied
    * code's fileSystem->OpenFileRead( opened ) opens: its length and timestamp, or nullopt
    * when nothing opens (another name). For the shim's tests. Parse thread.

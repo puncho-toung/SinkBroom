@@ -37,6 +37,8 @@
 #include "shim/EngineMessages.h"
 // clang-format on
 
+#include <atomic>
+
 using tb::lit::shim::reportV;
 
 idSys* idLib::sys = nullptr;
@@ -99,16 +101,46 @@ void idLib::WarningIf(const bool test, const char* fmt, ...)
   }
 }
 
+namespace
+{
+
+// LP7.1b: the ClearedAllocations scopes alive (any thread)
+TB_LIT_CONSTINIT std::atomic<int> s_clearedAllocations{0};
+
+} // namespace
+
 // Heap.cpp's Mem_Alloc16 returns NULL for a zero size and pads to 16 bytes; malloc
-// already aligns to 16 on the 64-bit targets (S25)
+// already aligns to 16 on the 64-bit targets (S25). LP7.1b (E-LIT-4): while a
+// ClearedAllocations scope lives, the block is cleared
 void* Mem_Alloc16(const size_t size, const memTag_t)
 {
   if (!size)
   {
     return nullptr;
   }
-  return malloc((size + 15) & ~size_t{15});
+  const auto padded = (size + 15) & ~size_t{15};
+  void* mem = malloc(padded);
+  if (mem && s_clearedAllocations.load(std::memory_order_relaxed) > 0)
+  {
+    memset(mem, 0, padded);
+  }
+  return mem;
 }
+
+namespace tb::lit::shim
+{
+
+ClearedAllocations::ClearedAllocations()
+{
+  ++s_clearedAllocations;
+}
+
+ClearedAllocations::~ClearedAllocations()
+{
+  --s_clearedAllocations;
+}
+
+} // namespace tb::lit::shim
 
 void Mem_Free16(void* ptr)
 {

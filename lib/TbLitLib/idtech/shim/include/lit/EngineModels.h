@@ -47,6 +47,7 @@
 #include <vector>
 
 struct objModel_t;
+struct aseModel_s;
 class idFile;
 
 namespace tb::lit
@@ -187,6 +188,69 @@ EngineModel engineFinishObjModel(
   const EngineModelMaterials& materials,
   std::string_view name,
   bool useMikktspace);
+
+/**
+ * LP7.1b (C51 (3), D137): a parsed ASE, the copied ASE_Load's aseModel_t
+ * (Model_ase.cpp:939-957), owned and never changed after the parse, so any thread may
+ * read it (engineFinishAseModel); ASE_Free (:964-1032) frees it.
+ */
+class EngineAseModel
+{
+private:
+  aseModel_s* m_model = nullptr;
+
+public:
+  explicit EngineAseModel(aseModel_s* model);
+  ~EngineAseModel();
+
+  EngineAseModel(const EngineAseModel&) = delete;
+  EngineAseModel& operator=(const EngineAseModel&) = delete;
+
+  const aseModel_s* model() const { return m_model; }
+  // the names ConvertASEToModelSurfaces asks the decl manager for, one per object in
+  // order (Model.cpp:1803, :1815, :1860): its material's name as the parse kept it (the
+  // *BITMAP through OSPathToRelativePath, else the *MATERIAL_NAME); "" for an object of a
+  // model without materials (FindMaterial( NULL ), the engine's "_emptyName",
+  // DeclManager.cpp:712-715)
+  std::vector<std::string> materialNames() const;
+  std::size_t objectCount() const;
+  std::size_t materialCount() const;
+  // the face corners of the objects' meshes (3 per *MESH_FACE)
+  std::size_t cornerCount() const;
+  // ase->timeStamp: the time ASE_Load's ReadFile reported
+  std::int64_t timeStamp() const;
+  // an object's mesh with vertex colours (colorsParsed, Model_ase.cpp:522): its corners
+  // take the *MESH_CFACE colours x 255 in bytes 0-2, the alpha left as the faces'
+  // allocation has it (E-LIT-4: uninitialised in the engine, 0 in the preview)
+  bool hasVertexColours() const;
+};
+
+// what MaterialDecls::parseAseModel read: the model (null when ASE_Load returned NULL),
+// or the engine error it reached
+struct EngineAseParse
+{
+  std::shared_ptr<const EngineAseModel> model;
+  std::string error;
+};
+
+/**
+ * InitFromFile for an ASE (Model.cpp:314-379) from LoadASE on (:3133-3150): InitEmpty,
+ * ConvertASEToModelSurfaces (its result ignored, as LoadASE ignores it; it takes the
+ * model's timeStamp from the ASE), purged false, then FinishSurfaces( useMikktspace ).
+ * Pool-safe (D137): materials are the parse thread's captures; one call at a time.
+ */
+EngineModel engineFinishAseModel(
+  const EngineAseModel& ase,
+  const EngineModelMaterials& materials,
+  std::string_view name,
+  bool useMikktspace);
+
+// the conversion alone, without FinishSurfaces: the surfaces as
+// ConvertASEToModelSurfaces leaves them, for the goldens' mutants. Pool-safe
+EngineModel engineConvertAseModelForTesting(
+  const EngineAseModel& ase,
+  const EngineModelMaterials& materials,
+  std::string_view name);
 
 /**
  * GetModel's default model (ModelManager.cpp:520-523, Model.cpp:356-361): InitEmpty, then

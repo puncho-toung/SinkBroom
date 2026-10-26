@@ -203,6 +203,8 @@ public:
 
   void MakeDefaultModel();
   bool ConvertOBJToModelSurfaces(const objModel_t* obj);
+  // LP7.1b: Model_local.h:127
+  bool ConvertASEToModelSurfaces(const struct aseModel_s* ase);
 
   idRenderModelStatic(const idRenderModelStatic&) = delete;
   idRenderModelStatic& operator=(const idRenderModelStatic&) = delete;
@@ -430,6 +432,114 @@ EngineModel engineFinishObjModel(
   return modelOf(model, decls);
 }
 
+EngineAseModel::EngineAseModel(aseModel_s* model)
+  : m_model{model}
+{
+}
+
+EngineAseModel::~EngineAseModel()
+{
+  // Model_ase.cpp:964-1032
+  ASE_Free(m_model);
+}
+
+std::vector<std::string> EngineAseModel::materialNames() const
+{
+  auto names = std::vector<std::string>{};
+  if (m_model)
+  {
+    for (auto i = 0; i < m_model->objects.Num(); ++i)
+    {
+      // Model.cpp:1859-1860: the object's material when the model has it, else NULL
+      const auto ref = m_model->objects[i]->materialRef;
+      names.emplace_back(
+        ref >= 0 && m_model->materials.Num() > ref ? m_model->materials[ref]->name : "");
+    }
+  }
+  return names;
+}
+
+std::size_t EngineAseModel::objectCount() const
+{
+  return m_model ? std::size_t(m_model->objects.Num()) : 0;
+}
+
+std::size_t EngineAseModel::materialCount() const
+{
+  return m_model ? std::size_t(m_model->materials.Num()) : 0;
+}
+
+std::size_t EngineAseModel::cornerCount() const
+{
+  auto corners = std::size_t{0};
+  if (m_model)
+  {
+    for (auto i = 0; i < m_model->objects.Num(); ++i)
+    {
+      corners += std::size_t(m_model->objects[i]->mesh.numFaces) * 3;
+    }
+  }
+  return corners;
+}
+
+std::int64_t EngineAseModel::timeStamp() const
+{
+  return m_model ? std::int64_t(m_model->timeStamp) : 0;
+}
+
+bool EngineAseModel::hasVertexColours() const
+{
+  if (m_model)
+  {
+    for (auto i = 0; i < m_model->objects.Num(); ++i)
+    {
+      if (m_model->objects[i]->mesh.colorsParsed)
+      {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+EngineModel engineFinishAseModel(
+  const EngineAseModel& ase,
+  const EngineModelMaterials& materials,
+  const std::string_view name,
+  const bool useMikktspace)
+{
+  const auto decls = idRenderModelStatic::ModelDecls{materials};
+  auto model = idRenderModelStatic{};
+  model.declManager = &decls;
+  model.tr.defaultMaterial = decls.defaultMaterial();
+
+  // Model.cpp:314-379 InitFromFile with LoadASE (:3133-3150) for a model ASE_Load read
+  const auto fileName = std::string{name};
+  model.InitEmpty(fileName.c_str());
+  model.reloadable = true;
+  // LoadASE: *sourceTimeStamp = ase->timeStamp; ConvertASEToModelSurfaces( ase ), whose
+  // result it ignores (the conversion takes the model's timeStamp from the ASE)
+  static_cast<void>(model.ConvertASEToModelSurfaces(ase.model()));
+  model.purged = false;
+  model.FinishSurfaces(useMikktspace);
+  return modelOf(model, decls);
+}
+
+EngineModel engineConvertAseModelForTesting(
+  const EngineAseModel& ase,
+  const EngineModelMaterials& materials,
+  const std::string_view name)
+{
+  const auto decls = idRenderModelStatic::ModelDecls{materials};
+  auto model = idRenderModelStatic{};
+  model.declManager = &decls;
+  model.tr.defaultMaterial = decls.defaultMaterial();
+  const auto fileName = std::string{name};
+  model.InitEmpty(fileName.c_str());
+  static_cast<void>(model.ConvertASEToModelSurfaces(ase.model()));
+  return modelOf(model, decls);
+}
+
 EngineModel engineDefaultModel(
   const std::string_view name, const EngineModelMaterial& defaultMaterial)
 {
@@ -502,6 +612,34 @@ EngineObjParse MaterialDecls::parseObjModel(
   if (obj)
   {
     model = std::make_shared<const EngineObjModel>(obj);
+  }
+  if (m_registry->errorCount() != errorsBefore)
+  {
+    return {nullptr, lastErrorOf(m_registry->messages())};
+  }
+  return {std::move(model), {}};
+}
+
+EngineAseParse MaterialDecls::parseAseModel(
+  const std::string& name, const std::string& bytes, const std::int64_t time)
+{
+  if (!m_registry)
+  {
+    return {nullptr, m_constructionError};
+  }
+  const auto errorsBefore = m_registry->errorCount();
+  auto* ase = static_cast<aseModel_t*>(nullptr);
+  {
+    // Model_ase.cpp:939-957: ASE_Load's ReadFile gets the bytes and the time handed in;
+    // its Mem_Alloc'ed lists are cleared (E-LIT-4: the *MESH_CFACE alpha byte)
+    const auto read = shim::ModelRead{m_registry->files(), name, bytes, time};
+    const auto cleared = shim::ClearedAllocations{};
+    ase = ASE_Load(name.c_str());
+  }
+  auto model = std::shared_ptr<const EngineAseModel>{};
+  if (ase)
+  {
+    model = std::make_shared<const EngineAseModel>(ase);
   }
   if (m_registry->errorCount() != errorsBefore)
   {

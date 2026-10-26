@@ -69,6 +69,9 @@ target_sources(TbLitIdLib
     # idSIMD_Generic's two MinMax ranges, compiled inside shim/src/ShimLib.cpp
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Model_obj.cpp
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Model_obj.h
+    # LP7.1b (C51, P7.13): the ASE loader, copied whole; renderer/Model.cpp's ASE range
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/Model_ase.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/Model_ase.h
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Model.cpp
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Model.h
     ${TB_LIT_ID_ENGINE_DIR}/idlib/containers/VectorSet.h

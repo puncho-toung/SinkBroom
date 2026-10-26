@@ -46,9 +46,10 @@ enum class ModelPath
 {
   // an empty name: no model (GetModel returns NULL, :313-316)
   None,
-  // obj: the binary, then the source through the validator and the copied loader
+  // obj, ase (LP7.1b): the binary, then the source through the validator and the copied
+  // loader
   Source,
-  // ase, lwo: the binary, then the default cube with a notice until LP7.1b's loaders
+  // lwo: the binary, then the default cube with a notice until LP7.1b's step 4
   PendingLoader,
   // ma: the binary, then the default cube with a notice (K46)
   MayaBinaryOnly,
@@ -158,23 +159,29 @@ ModelRecord modelRecordFromEngine(
 
 /**
  * LP7.1a (C51 (3), D137): what a model's finish job takes, plain data only: the canonical
- * name, the parsed OBJ (null: the default cube), the materials the parse thread resolved
- * for it (each name's ten accessor values, and tr.defaultMaterial's), the 2016 rule's
- * answer for the source's time, and that time.
+ * name, the parsed source (an OBJ, LP7.1b an ASE; none: the default cube), the materials
+ * the parse thread resolved for it (each name's ten accessor values, and
+ * tr.defaultMaterial's), the 2016 rule's answer for the source's time, and that time;
+ * LP7.1b: the engine defect its record notes (note).
  */
 struct ModelFinishInput
 {
   std::string name;
   std::shared_ptr<const EngineObjModel> obj;
+  std::shared_ptr<const EngineAseModel> ase;
   EngineModelMaterials materials;
   bool useMikktspace = false;
   std::int64_t sourceTime = -1;
+  std::string note;
+
+  // a source to convert (else the finish is the default cube)
+  bool hasSource() const { return obj || ase; }
 };
 
 /**
- * The finish (D137): engineFinishObjModel for an OBJ, else engineDefaultModel. It reads
- * nothing but its input, so it runs on the service's one-worker pool; one at a time
- * (FinishSurfaces' static, M-ID-STATIC-*).
+ * The finish (D137): engineFinishObjModel for an OBJ, engineFinishAseModel for an ASE,
+ * else engineDefaultModel. It reads nothing but its input, so it runs on the service's
+ * one-worker pool; one at a time (FinishSurfaces' static, M-ID-STATIC-*).
  */
 EngineModel finishModel(const ModelFinishInput& input);
 
@@ -188,7 +195,7 @@ EngineModel finishModel(const ModelFinishInput& input);
  * reason for a Default record; an empty parse (OBJ_Load's NULL) gives the default cube's
  * input with its reason. Parse thread (the copied lexer and the registry, C20).
  */
-struct ObjSourceRead
+struct ModelSourceRead
 {
   std::optional<ModelFinishInput> input;
   // a refusal: the record is Default with this reason (the cube's input is in input
@@ -196,7 +203,30 @@ struct ObjSourceRead
   std::string reason;
 };
 
-ObjSourceRead readObjSource(
+ModelSourceRead readObjSource(
+  MaterialDecls& decls,
+  std::string_view canonical,
+  const std::string& bytes,
+  std::int64_t sourceTime);
+
+/**
+ * LP7.1b (C51 (3), D136, D137, P7.3): the parse thread's half of an ASE source, as
+ * readObjSource's: the validator (aseFileProblem), the copied ASE_Load of the bytes with
+ * the source's time and its allocations cleared (MaterialDecls::parseAseModel), each
+ * object's material name resolved (EngineAseModel::materialNames: the *BITMAP through
+ * OSPathToRelativePath, "" without materials) and its values captured, tr.defaultMaterial
+ * captured, the 2016 rule on the source's time. A model whose meshes have vertex colours
+ * gets the note of E-LIT-4 (their alpha 0, the engine's uninitialised). Parse thread.
+ */
+ModelSourceRead readAseSource(
+  MaterialDecls& decls,
+  std::string_view canonical,
+  const std::string& bytes,
+  std::int64_t sourceTime);
+
+// LP7.1b: the reader of a Source path's extension (obj, ase); another gives the
+// default cube's input with its reason. Parse thread
+ModelSourceRead readModelSource(
   MaterialDecls& decls,
   std::string_view canonical,
   const std::string& bytes,

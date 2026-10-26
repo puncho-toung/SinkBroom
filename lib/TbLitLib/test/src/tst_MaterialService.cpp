@@ -1802,11 +1802,23 @@ const auto ServiceTriangleObj = std::string{
   "usemtl lp7/test\nf 1/1/1 2/2/1 3/3/1\n"};
 constexpr auto Stamp2015 = std::int64_t{1451520000};
 
+// LP7.1b: one face on lp7/test with *MESH_CFACE colours
+const auto ServiceAse = std::string{
+  "*MATERIAL_LIST {\n*MATERIAL 0 {\n*MAP_DIFFUSE {\n*BITMAP "
+  "\"C:/game/base/lp7/test.tga\"\n"
+  "}\n}\n}\n"
+  "*GEOMOBJECT {\n*MESH {\n*MESH_NUMVERTEX 3\n*MESH_NUMFACES 1\n*MESH_VERTEX_LIST {\n"
+  "*MESH_VERTEX 0 0 0 0\n*MESH_VERTEX 1 32 0 0\n*MESH_VERTEX 2 32 32 0\n}\n"
+  "*MESH_FACE_LIST {\n*MESH_FACE 0: A: 0 B: 1 C: 2 AB: 1 BC: 1 CA: 1\n}\n"
+  "*MESH_NUMCVERTEX 1\n*MESH_CVERTLIST {\n*MESH_VERTCOL 0 1 1 1\n}\n"
+  "*MESH_CFACELIST {\n*MESH_CFACE 0 0 0 0\n}\n}\n*MATERIAL_REF 0\n}\n"};
+
 std::vector<DeclFile> modelServiceFiles()
 {
   return {
     DeclFile{"materials/lp7.mtr", materialText("lp7/test", "textures/lp7/test"), 0},
     DeclFile{"models/test/quad.obj", ServiceQuadObj, Stamp2015},
+    DeclFile{"models/test/face.ase", ServiceAse, Stamp2015},
   };
 }
 
@@ -1916,7 +1928,7 @@ TEST_CASE("MaterialService loads models (LP7.1a, C51, D125, D126, D137)")
     CHECK(record->surfaces[0].verts.size() == 24u);
   }
 
-  SECTION("the dispatch: an .md5mesh Skinned, an .fbx and an .ase the cube")
+  SECTION("the dispatch: an .md5mesh Skinned, an .fbx and a missing .lwo the cube")
   {
     auto service = start(options(modelSource));
     const auto skinned = waitForModel(*service, "models/test/a.md5mesh");
@@ -1927,10 +1939,36 @@ TEST_CASE("MaterialService loads models (LP7.1a, C51, D125, D126, D137)")
     REQUIRE(fbx);
     CHECK(fbx->state == ModelRecord::State::Default);
     CHECK(fbx->surfaces.size() == 1u);
+    const auto lwo = waitForModel(*service, "models/test/a.lwo");
+    REQUIRE(lwo);
+    CHECK(lwo->state == ModelRecord::State::Missing);
+    CHECK(lwo->pendingLoader);
+    // LP7.1b: a missing .ase is Missing, its loader there
     const auto ase = waitForModel(*service, "models/test/a.ase");
     REQUIRE(ase);
     CHECK(ase->state == ModelRecord::State::Missing);
-    CHECK(ase->pendingLoader);
+    CHECK_FALSE(ase->pendingLoader);
+  }
+
+  SECTION("LP7.1b: an ASE source, Ready through the copies, its CFACE colours noted")
+  {
+    auto service = start(options(modelSource));
+    const auto record = waitForModel(*service, "models/test/face.ase");
+    REQUIRE(record);
+    CHECK(record->state == ModelRecord::State::Ready);
+    CHECK(record->source == ModelRecord::SourceKind::Source);
+    CHECK(record->sourceTime == Stamp2015);
+    REQUIRE(record->surfaces.size() == 1u);
+    CHECK(record->surfaces[0].material == "lp7/test");
+    CHECK(record->surfaces[0].indexes.size() == 3u);
+    CHECK(record->sourceMaterialNames == std::vector<std::string>{"lp7/test.tga"});
+    CHECK_THAT(record->note, Catch::Matchers::ContainsSubstring("E-LIT-4"));
+    CHECK(record->reason.empty());
+    // the *MESH_VERTCOL colour x 255, the alpha 0 (E-LIT-4)
+    for (const auto& v : record->surfaces[0].verts)
+    {
+      CHECK(v.color == std::array<std::uint8_t, 4>{255, 255, 255, 0});
+    }
   }
 
   SECTION("the engine's binary first, when it is there and its time test passes")

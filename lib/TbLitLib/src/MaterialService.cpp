@@ -2947,9 +2947,10 @@ private:
   /**
    * One model name, in C51's order (parse thread): the dispatch (modelDispatch); for a
    * file kind the source's probe (A4's time) and the engine's binary through the C8
-   * search with the time test (accepted: Ready at once, D125, SC602); else for an .obj
-   * its bytes through readObjSource (the validator, the copied OBJ_Load, the materials'
-   * capture), finished on the pool; a missing source the cube, Missing; every other kind
+   * search with the time test (accepted: Ready at once, D125, SC602); else for an .obj or
+   * (LP7.1b) an .ase its bytes through readModelSource (the validator, the copied
+   * loader, the materials' capture), finished on the pool; a missing source the cube,
+   * Missing; every other kind
    * the cube, Default, with modelDispatch's reason; an .md5mesh Skinned. The source's and
    * the binary's finds are kept for the poll.
    */
@@ -3040,7 +3041,7 @@ private:
         buildFailure()));
       return;
     }
-    auto read = readObjSource(*m_decls, name, *bytes, found.time);
+    auto read = readModelSource(*m_decls, name, *bytes, found.time);
     if (!read.input)
     {
       publishModel(bareRecord(
@@ -3205,7 +3206,7 @@ private:
     }
     if (!error.empty() || !model)
     {
-      if (finish.input.obj)
+      if (finish.input.hasSource())
       {
         queueCube(
           name,
@@ -3237,6 +3238,7 @@ private:
     auto record = modelRecordFromEngine(
       name, *model, finish.state, finish.kind, finish.input.sourceTime, finish.reason);
     record.pendingLoader = finish.pendingLoader;
+    record.note = finish.input.note;
     if (finish.kind == ModelRecord::SourceKind::Source)
     {
       // P7.22: the materials it was finished with, one per name

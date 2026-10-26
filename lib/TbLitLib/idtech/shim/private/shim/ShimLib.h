@@ -192,3 +192,29 @@ public:
 private:
   int m_index = -1;
 };
+
+namespace tb::lit::shim
+{
+
+/**
+ * LP7.1b (P7.3, E-LIT-4, the director's decision of 2026-10-26): while one lives,
+ * Mem_Alloc16 (and so Heap.h's Mem_Alloc, which the copied loaders call) clears every
+ * block it allocates, on any thread (a global count, never a thread_local: the Release
+ * app's TLS stays 0x273C). The model loaders' parse runs inside one
+ * (MaterialDecls::parseAseModel, parseLwoModel), so what the copied ASE reader leaves
+ * unwritten is 0 where the engine's is heap: the *MESH_CFACE alpha byte
+ * (Model_ase.cpp:465-467 writes bytes 0-2 into faces from Mem_Alloc, :721). Another
+ * thread's allocations meanwhile are cleared too: only a cost. Not nested in a way that
+ * matters: a count.
+ */
+class ClearedAllocations
+{
+public:
+  ClearedAllocations();
+  ~ClearedAllocations();
+
+  ClearedAllocations(const ClearedAllocations&) = delete;
+  ClearedAllocations& operator=(const ClearedAllocations&) = delete;
+};
+
+} // namespace tb::lit::shim

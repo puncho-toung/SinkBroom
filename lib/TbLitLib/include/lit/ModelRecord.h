@@ -137,6 +137,10 @@ struct ModelRecord
   int glbAnimations = 0;
   // Missing and Default: why, for the entity's once-notice (C52)
   std::string reason;
+  // LP7.1b: a Ready source record's engine defect, for the same notice (an ASE's
+  // *MESH_CFACE colours: alpha 0 where the engine's is uninitialised, E-LIT-4); "" for
+  // none
+  std::string note;
   // LP7.1a: a Default record whose source has a loader still to come (ASE and LWO until
   // LP7.1b): the cube stands in, and the notice names the gap
   bool pendingLoader = false;

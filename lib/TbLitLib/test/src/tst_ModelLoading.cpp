@@ -481,7 +481,7 @@ TEST_CASE(
   const auto pathOf = [](const std::string& name) { return modelDispatch(name).path; };
   CHECK(pathOf("") == ModelPath::None);
   CHECK(pathOf("models/test/n01.obj") == ModelPath::Source);
-  CHECK(pathOf("models/test/n04.ase") == ModelPath::PendingLoader);
+  CHECK(pathOf("models/test/n04.ase") == ModelPath::Source);
   CHECK(pathOf("models/test/n05.lwo") == ModelPath::PendingLoader);
   CHECK(pathOf("models/test/a.ma") == ModelPath::MayaBinaryOnly);
   CHECK(pathOf("models/test/a.glb") == ModelPath::GltfBinaryOnly);
@@ -504,7 +504,7 @@ TEST_CASE(
     CHECK_FALSE(dispatch.reason.empty());
   }
   CHECK_THAT(
-    modelDispatch("models/test/n04.ase").reason,
+    modelDispatch("models/test/n05.lwo").reason,
     Catch::Matchers::ContainsSubstring("LP7.1b"));
   CHECK(modelDispatch("models/a.fbx").extension == "fbx");
 }
@@ -1196,7 +1196,7 @@ EngineModel sourceLoad(
   const bool* mikktspace = nullptr)
 {
   const auto bytes = readTextFile(litFixtureFolder() / name);
-  auto read = readObjSource(decls, name, bytes, time);
+  auto read = readModelSource(decls, name, bytes, time);
   static_cast<void>(decls.takeMessages());
   INFO(read.reason);
   REQUIRE(read.reason.empty());
@@ -1395,11 +1395,13 @@ TEST_CASE(
   auto decls = MaterialDecls{source};
 
   // N01 (2015, WithoutNormals), N02 (the same OBJ under a second name), N03 (2017,
-  // MikkTSpace on smooth normals with sheared, mirrored coordinates)
+  // MikkTSpace on smooth normals with sheared, mirrored coordinates); LP7.1b: N04 (an ASE
+  // without *MESH_CFACE and *MESH_NORMALS: generated normals over the dupVerts)
   for (const auto& [name, golden] : std::vector<std::pair<std::string, std::string>>{
          {"models/test/n01.obj", "models/test/n01.bobj"},
          {"models/test/n02.obj", "models/test/n02.bobj"},
-         {"models/test/n03.obj", "models/test/n03.bobj"}})
+         {"models/test/n03.obj", "models/test/n03.bobj"},
+         {"models/test/n04.ase", "models/test/n04.base"}})
   {
     DYNAMIC_SECTION(name)
     {
@@ -1446,6 +1448,57 @@ TEST_CASE(
     CHECK_FALSE(differences.empty());
     CHECK(std::ranges::all_of(
       differences, [](const auto& d) { return d.find("tangent") != std::string::npos; }));
+  }
+
+  SECTION("the mutant: N04 without generated normals fails its golden (LP7.1b)")
+  {
+    const auto stamp = fixtureStamp("models/test/n04.ase");
+    const auto engine = goldenRecord("models/test/n04.base", stamp);
+    REQUIRE(engine.surfaces.size() == 1u);
+    const auto& golden = engine.surfaces[0];
+    const auto bytes = readTextFile(litFixtureFolder() / "models/test/n04.ase");
+    auto read = readAseSource(decls, "models/test/n04.ase", bytes, stamp);
+    static_cast<void>(decls.takeMessages());
+    REQUIRE(read.input);
+    REQUIRE(read.input->ase);
+    // the surface as the conversion leaves it, then FinishSurfaces' cleanup
+    // (R_CleanupTriangles, Model.cpp:1283) with and without its generated normals
+    const auto converted = engineConvertAseModelForTesting(
+      *read.input->ase, read.input->materials, "models/test/n04.ase");
+    REQUIRE(converted.surfaces.size() == 1u);
+    const auto& surface = converted.surfaces[0];
+    CHECK(surface.generateNormals);
+    const auto with =
+      engineCleanupModelTriangles(surface.verts, surface.indexes, true, false, false);
+    const auto without =
+      engineCleanupModelTriangles(surface.verts, surface.indexes, false, false, false);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    REQUIRE(with);
+    REQUIRE(without);
+    REQUIRE(with->triangles.verts.size() == golden.verts.size());
+    REQUIRE(without->triangles.verts.size() == golden.verts.size());
+    auto withNormals = std::size_t{0};
+    auto withoutNormals = std::size_t{0};
+    auto withoutTangents = std::size_t{0};
+    for (std::size_t i = 0; i < golden.verts.size(); ++i)
+    {
+      withNormals += with->triangles.verts[i].normal != golden.verts[i].normal ? 1 : 0;
+      withoutNormals +=
+        without->triangles.verts[i].normal != golden.verts[i].normal ? 1 : 0;
+      withoutTangents +=
+        without->triangles.verts[i].tangent != golden.verts[i].tangent ? 1 : 0;
+    }
+    std::cout << fmt::format(
+      "N04: {} vertices, {} dupVerts pairs; without generated normals {} normals and {} "
+      "tangents differ from the golden\n",
+      golden.verts.size(),
+      golden.dupVerts.size() / 2,
+      withoutNormals,
+      withoutTangents);
+    // the harness is the engine's: with them, the golden's normals and dupVerts
+    CHECK(withNormals == 0u);
+    CHECK(with->dupVerts == golden.dupVerts);
+    CHECK(withoutNormals > 0u);
   }
 
   SECTION("N01 and N02 hold the same geometry; their names make their bytes differ")
@@ -1582,6 +1635,361 @@ TEST_CASE(
       engineOSPathToRelativePath("D:/sandbox/tb_parity/textures/a.tga")
       == "D:/sandbox/tb_parity/textures/a.tga");
     CHECK(warned());
+  }
+}
+
+namespace
+{
+
+// LP7.1b: a quad of two faces on lp7/test (its *BITMAP through OSPathToRelativePath),
+// texture coordinates through a UVW offset, tiling and angle
+const auto HandAse = std::string{
+  "*3DSMAX_ASCIIEXPORT\t200\n"
+  "*COMMENT \"a hand ASE\"\n"
+  "*MATERIAL_LIST {\n"
+  "\t*MATERIAL_COUNT 1\n"
+  "\t*MATERIAL 0 {\n"
+  "\t\t*MATERIAL_NAME \"hand\"\n"
+  "\t\t*MAP_DIFFUSE {\n"
+  "\t\t\t*BITMAP \"//lp7/base/lp7/test.tga\"\n"
+  "\t\t\t*UVW_U_OFFSET 0.25\n"
+  "\t\t\t*UVW_V_OFFSET 0.5\n"
+  "\t\t\t*UVW_U_TILING 2.0\n"
+  "\t\t\t*UVW_V_TILING 1.0\n"
+  "\t\t\t*UVW_ANGLE 0.5\n"
+  "\t\t}\n"
+  "\t}\n"
+  "}\n"
+  "*GEOMOBJECT {\n"
+  "\t*NODE_NAME \"hand\"\n"
+  "\t*NODE_TM {\n"
+  "\t\t*TM_ROW0 1.0\t0.0\t0.0\n"
+  "\t\t*TM_ROW1 0.0\t1.0\t0.0\n"
+  "\t\t*TM_ROW2 0.0\t0.0\t1.0\n"
+  "\t\t*TM_ROW3 0.0\t0.0\t0.0\n"
+  "\t}\n"
+  "\t*MESH {\n"
+  "\t\t*TIMEVALUE 0\n"
+  "\t\t*MESH_NUMVERTEX 4\n"
+  "\t\t*MESH_NUMFACES 2\n"
+  "\t\t*MESH_VERTEX_LIST {\n"
+  "\t\t\t*MESH_VERTEX 0\t0.0\t0.0\t0.0\n"
+  "\t\t\t*MESH_VERTEX 1\t32.0\t0.0\t0.0\n"
+  "\t\t\t*MESH_VERTEX 2\t32.0\t32.0\t0.0\n"
+  "\t\t\t*MESH_VERTEX 3\t0.0\t32.0\t0.0\n"
+  "\t\t}\n"
+  "\t\t*MESH_FACE_LIST {\n"
+  "\t\t\t*MESH_FACE 0:  A: 0 B: 1 C: 2 AB: 1 BC: 1 CA: 0\t*MESH_SMOOTHING 1\n"
+  "\t\t\t*MESH_FACE 1:  A: 0 B: 2 C: 3 AB: 1 BC: 1 CA: 0\t*MESH_SMOOTHING 1\n"
+  "\t\t}\n"
+  "\t\t*MESH_NUMTVERTEX 4\n"
+  "\t\t*MESH_TVERTLIST {\n"
+  "\t\t\t*MESH_TVERT 0\t0.0\t0.0\t0.0\n"
+  "\t\t\t*MESH_TVERT 1\t1.0\t0.0\t0.0\n"
+  "\t\t\t*MESH_TVERT 2\t1.0\t1.0\t0.0\n"
+  "\t\t\t*MESH_TVERT 3\t0.0\t1.0\t0.0\n"
+  "\t\t}\n"
+  "\t\t*MESH_NUMTVFACES 2\n"
+  "\t\t*MESH_TFACELIST {\n"
+  "\t\t\t*MESH_TFACE 0\t0\t1\t2\n"
+  "\t\t\t*MESH_TFACE 1\t0\t2\t3\n"
+  "\t\t}\n"
+  "\t}\n"
+  "\t*MATERIAL_REF 0\n"
+  "}\n"};
+
+// HandAse with this text after its *MESH_TFACELIST
+std::string handAseWith(const std::string& meshTail)
+{
+  auto text = HandAse;
+  const auto at = text.find("\t}\n\t*MATERIAL_REF");
+  REQUIRE(at != std::string::npos);
+  text.insert(at, meshTail);
+  return text;
+}
+
+const auto HandCfaces = std::string{
+  "\t\t*MESH_NUMCVERTEX 2\n"
+  "\t\t*MESH_CVERTLIST {\n"
+  "\t\t\t*MESH_VERTCOL 0\t1.0\t0.5\t0.25\n"
+  "\t\t\t*MESH_VERTCOL 1\t0.0\t1.0\t0.0\n"
+  "\t\t}\n"
+  "\t\t*MESH_NUMCVFACES 2\n"
+  "\t\t*MESH_CFACELIST {\n"
+  "\t\t\t*MESH_CFACE 0\t0\t1\t0\n"
+  "\t\t\t*MESH_CFACE 1\t1\t0\t1\n"
+  "\t\t}\n"};
+
+std::string replaced(std::string text, const std::string& from, const std::string& to)
+{
+  const auto at = text.find(from);
+  REQUIRE(at != std::string::npos);
+  text.replace(at, from.size(), to);
+  return text;
+}
+
+} // namespace
+
+TEST_CASE("ModelLoading: the ASE validator (LP7.1b, D136, P7.2)")
+{
+  SECTION("what the copies read without a fatal site passes: N04, the hand files")
+  {
+    CHECK_FALSE(aseFileProblem(readTextFile(modelsFixture() / "test" / "n04.ase")));
+    CHECK_FALSE(aseFileProblem(HandAse));
+    CHECK_FALSE(aseFileProblem(handAseWith(HandCfaces)));
+    // no geometry object: the engine loads a model without surfaces, and so does the
+    // preview (the director's decision of 2026-10-26)
+    CHECK_FALSE(aseFileProblem(""));
+    CHECK_FALSE(aseFileProblem("*3DSMAX_ASCIIEXPORT\t200\n*COMMENT \"nothing\"\n"));
+  }
+
+  SECTION("each refusal names its line and the site it keeps away")
+  {
+    const auto refused = [](const std::string& text, const std::string& part) {
+      const auto problem = aseFileProblem(text);
+      INFO(text);
+      REQUIRE(problem);
+      INFO(*problem);
+      CHECK_THAT(*problem, Catch::Matchers::ContainsSubstring(part));
+    };
+    // a list shorter than its count
+    refused(
+      replaced(HandAse, "\t\t\t*MESH_VERTEX 3\t0.0\t32.0\t0.0\n", ""),
+      "*MESH_VERTEX_LIST holds 3 entries for its count of 4");
+    // longer: Model_ase.cpp:355-368 writes before its check
+    refused(
+      replaced(
+        HandAse,
+        "*MESH_VERTEX 3\t0.0\t32.0\t0.0\n",
+        "*MESH_VERTEX 3 0 32 0\n*MESH_VERTEX 4 1 1 1\n"),
+      "more than its 4 entries");
+    // an index past the vertex count
+    refused(replaced(HandAse, "C: 3", "C: 9"), "names vertex 9 of 4");
+    // a texture index past the coordinates
+    refused(
+      replaced(HandAse, "*MESH_TFACE 1\t0\t2\t3", "*MESH_TFACE 1\t0\t2\t7"),
+      "texture vertex 7");
+    // a truncated file
+    refused(HandAse.substr(0, HandAse.size() / 2), "the file ends");
+    // an unbalanced brace
+    refused(HandAse + "}\n", "a '}' outside any block");
+    refused(
+      replaced(HandAse, "*MATERIAL_LIST {", "*MATERIAL_LIST }"), "an unexpected '}'");
+    // the counts and lists
+    refused(replaced(HandAse, "*MESH_NUMTVFACES 2", "*MESH_NUMTVFACES 3"), "681-684");
+    refused(
+      replaced(
+        HandAse,
+        "\t\t*MESH_NUMFACES 2\n",
+        "\t\t*MESH_NUMFACES 2\n\t\t*MESH_NUMFACES 2\n"),
+      "given twice");
+    refused(handAseWith("\t\t*MESH_TFACELIST {\n\t\t}\n"), "*MESH_TFACELIST given twice");
+    refused(
+      replaced(HandAse, "\t*MATERIAL_REF 0\n", "\t*MESH {\n\t}\n\t*MATERIAL_REF 0\n"),
+      "a second *MESH");
+    refused(
+      replaced(HandAse, "*MESH_VERTEX 2\t", "*MESH_VERTEXX 2\t"), "an unknown token");
+    refused(
+      handAseWith(
+        "\t\t*MESH_NUMCVERTEX 1\n\t\t*MESH_CFACELIST {\n\t\t}\n\t\t*MESH_CVERTLIST {\n"
+        "\t\t\t*MESH_VERTCOL 0 1 1 1\n\t\t}\n"),
+      "before *MESH_CVERTLIST");
+    refused(
+      replaced(
+        handAseWith(HandCfaces), "*MESH_CFACE 1\t1\t0\t1", "*MESH_CFACE 1\t1\t0\t2"),
+      "colour index 2");
+    refused(
+      handAseWith("\t\t*MESH_NUMCVERTEX 1\n\t\t*MESH_CVERTLIST {\n\t\t\t*MESH_VERTCOL 0 "
+                  "1 1 1\n\t\t}\n"),
+      "without a *MESH_CFACELIST");
+    // the normals: each corner of each face
+    refused(
+      handAseWith("\t\t*MESH_NORMALS {\n"
+                  "\t\t\t*MESH_FACENORMAL 0 0 0 1\n\t\t\t*MESH_VERTEXNORMAL 0 0 0 1\n"
+                  "\t\t}\n"),
+      "has a corner without");
+    refused(
+      handAseWith("\t\t*MESH_NORMALS {\n\t\t\t*MESH_VERTEXNORMAL 0 0 0 1\n\t\t}\n"),
+      "faces[-1]");
+    // the mesh's transform is zero without a *NODE_TM: a normal of zero length
+    refused(
+      replaced(
+        handAseWith("\t\t*MESH_NORMALS {\n"
+                    "\t\t\t*MESH_FACENORMAL 0 0 0 1\n\t\t\t*MESH_VERTEXNORMAL 0 0 0 1\n"
+                    "\t\t\t*MESH_VERTEXNORMAL 1 0 0 1\n\t\t\t*MESH_VERTEXNORMAL 2 0 0 1\n"
+                    "\t\t\t*MESH_FACENORMAL 1 0 0 1\n\t\t\t*MESH_VERTEXNORMAL 0 0 0 1\n"
+                    "\t\t\t*MESH_VERTEXNORMAL 2 0 0 1\n\t\t\t*MESH_VERTEXNORMAL 3 0 0 1\n"
+                    "\t\t}\n"),
+        "*TM_ROW2 0.0\t0.0\t1.0",
+        "*TM_ROW2 0.0\t0.0\t0.0"),
+      "zero length");
+    // with the transform, the complete normals pass and are parsed
+    CHECK_FALSE(aseFileProblem(
+      handAseWith("\t\t*MESH_NORMALS {\n"
+                  "\t\t\t*MESH_FACENORMAL 0 0 0 1\n\t\t\t*MESH_VERTEXNORMAL 0 0 0 1\n"
+                  "\t\t\t*MESH_VERTEXNORMAL 1 0 0 1\n\t\t\t*MESH_VERTEXNORMAL 2 0 0 1\n"
+                  "\t\t\t*MESH_FACENORMAL 1 0 0 1\n\t\t\t*MESH_VERTEXNORMAL 0 0 0 1\n"
+                  "\t\t\t*MESH_VERTEXNORMAL 2 0 0 1\n\t\t\t*MESH_VERTEXNORMAL 3 0 0 1\n"
+                  "\t\t}\n")));
+    // the materials and the numbers
+    refused(replaced(HandAse, "*MATERIAL_REF 0", "*MATERIAL_REF 3"), "*MATERIAL_REF 3");
+    refused(replaced(HandAse, "*MATERIAL_REF 0", "*MATERIAL_REF -1"), "*MATERIAL_REF -1");
+    refused(replaced(HandAse, "32.0\t32.0", "nan\t32.0"), "not a finite decimal");
+    refused(replaced(HandAse, "32.0\t32.0", "1e40\t32.0"), "not a finite decimal");
+    refused(replaced(HandAse, "C: 2", "C: 2x"), "not a decimal integer");
+    refused(
+      replaced(HandAse, "//lp7/base/lp7/test.tga", std::string(300, 'a')),
+      "256 or more characters");
+    refused(HandAse + std::string(1100, 'x') + "\n", "longer than 1,000 characters");
+    refused(HandAse + std::string(1, '\0'), "NUL byte");
+  }
+}
+
+TEST_CASE(
+  "ModelLoading, the ASE source path through the validator and the copies (LP7.1b)")
+{
+  auto source = MemoryDeclSource{modelDeclFiles()};
+  auto decls = MaterialDecls{source};
+  const auto finished = [&](const std::string& text, const std::int64_t time) {
+    auto read = readAseSource(decls, "models/test/x.ase", text, time);
+    static_cast<void>(decls.takeMessages());
+    INFO(read.reason);
+    REQUIRE(read.reason.empty());
+    REQUIRE(read.input);
+    REQUIRE(read.input->ase);
+    auto model = finishModel(*read.input);
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    return std::pair{std::move(*read.input), std::move(model)};
+  };
+
+  SECTION("a refused file: Default with the reason; the copies never read it")
+  {
+    const auto messagesBefore = decls.messages().size();
+    const auto read = readAseSource(
+      decls, "models/test/x.ase", replaced(HandAse, "C: 3", "C: 9"), 1451520000);
+    CHECK_THAT(read.reason, Catch::Matchers::ContainsSubstring("models/test/x.ase"));
+    REQUIRE(read.input);
+    CHECK_FALSE(read.input->hasSource());
+    const auto& messages = decls.messages();
+    for (auto i = messagesBefore; i < messages.size(); ++i)
+    {
+      CHECK(messages[i].kind != DeclMessageKind::Error);
+      CHECK(messages[i].kind != DeclMessageKind::FatalError);
+    }
+    CHECK(finishModel(*read.input).defaulted);
+  }
+
+  SECTION("the material by its *BITMAP through OSPathToRelativePath, merged; the time")
+  {
+    const auto [input, model] = finished(HandAse, 1451520000);
+    CHECK(input.ase->materialNames() == std::vector<std::string>{"lp7/test.tga"});
+    REQUIRE(input.materials.materials.size() == 1u);
+    CHECK(input.materials.materials[0].name == "lp7/test");
+    CHECK_FALSE(input.useMikktspace);
+    CHECK(input.note.empty());
+    CHECK(model.timeStamp == 1451520000);
+    REQUIRE(model.surfaces.size() == 1u);
+    CHECK(model.surfaces[0].material == "lp7/test");
+    CHECK(model.surfaces[0].indexes.size() == 6u);
+    // no *MESH_NORMALS: generated normals (Model.cpp:1944)
+    CHECK(model.surfaces[0].generateNormals);
+    CHECK(model.materialMisses == 0);
+    CHECK(finished(HandAse, 1483228800).first.useMikktspace);
+  }
+
+  SECTION(
+    "the UVW offset, tiling and angle, against a transcription (Model.cpp:2050-2083)")
+  {
+    const auto [input, model] = finished(HandAse, 1451520000);
+    REQUIRE(model.surfaces.size() == 1u);
+    const auto uOffset = -0.25f;
+    const auto vOffset = 0.5f;
+    const auto uTiling = 2.0f;
+    const auto vTiling = 1.0f;
+    const auto sine = std::sin(0.5f);
+    const auto cosine = std::cos(0.5f);
+    // each corner's ASE coordinate: the TVERT's (x, 1 - y) by position
+    const auto tvertOf = [](const EngineVec3& xyz) {
+      return std::array<float, 2>{
+        xyz[0] > 16.0f ? 1.0f : 0.0f, xyz[1] > 16.0f ? 0.0f : 1.0f};
+    };
+    for (const auto& v : model.surfaces[0].verts)
+    {
+      const auto tv = tvertOf(v.xyz);
+      const auto u = tv[0] * uTiling + uOffset;
+      const auto w = tv[1] * vTiling + vOffset;
+      auto expected = engineClearedVert();
+      engineSetTexCoord(expected, u * cosine + w * sine, u * -sine + w * cosine);
+      CHECK(v.st == expected.st);
+    }
+  }
+
+  SECTION("*MESH_CFACE: each corner's colour x 255, alpha 0 on every vertex (E-LIT-4)")
+  {
+    const auto [input, model] = finished(handAseWith(HandCfaces), 1451520000);
+    CHECK(input.ase->hasVertexColours());
+    CHECK_THAT(input.note, Catch::Matchers::ContainsSubstring("E-LIT-4"));
+    REQUIRE(model.surfaces.size() == 1u);
+    // :465-467 into bytes 0-2 (1.0, 0.5, 0.25 and 0, 1, 0 x 255, truncated); vertex 0
+    // takes both colours, so it is two vertices (the weld on all four bytes, :1998)
+    const auto first = std::array<std::uint8_t, 4>{255, 127, 63, 0};
+    const auto second = std::array<std::uint8_t, 4>{0, 255, 0, 0};
+    auto firsts = 0;
+    auto seconds = 0;
+    for (const auto& v : model.surfaces[0].verts)
+    {
+      CHECK(v.color[3] == 0);
+      CHECK((v.color == first || v.color == second));
+      firsts += v.color == first ? 1 : 0;
+      seconds += v.color == second ? 1 : 0;
+    }
+    CHECK(model.surfaces[0].verts.size() == 5u);
+    CHECK(firsts == 2);
+    CHECK(seconds == 3);
+    // without colours: white (identityColor, Model.cpp:1762)
+    const auto [plainInput, plain] = finished(HandAse, 1451520000);
+    for (const auto& v : plain.surfaces[0].verts)
+    {
+      CHECK(v.color == std::array<std::uint8_t, 4>{255, 255, 255, 255});
+    }
+  }
+
+  SECTION("no geometry object: a model without surfaces, not the cube")
+  {
+    for (const auto* text : {"", "*3DSMAX_ASCIIEXPORT\t200\n"})
+    {
+      const auto [input, model] = finished(text, 1451520000);
+      CHECK(input.ase->objectCount() == 0u);
+      CHECK(model.surfaces.empty());
+      CHECK_FALSE(model.defaulted);
+      CHECK_FALSE(model.hasDrawingSurfaces);
+    }
+  }
+
+  SECTION("no materials: _default for the surface, FindMaterial( NULL ) for the bump")
+  {
+    auto text = HandAse;
+    text.erase(
+      text.find("*MATERIAL_LIST"),
+      text.find("*GEOMOBJECT") - text.find("*MATERIAL_LIST"));
+    const auto [input, model] = finished(text, 1451520000);
+    CHECK(input.ase->materialNames() == std::vector<std::string>{""});
+    REQUIRE(model.surfaces.size() == 1u);
+    CHECK(model.surfaces[0].material == "_default");
+    // no material: no UVW, so the coordinates are the TVERTs'
+    CHECK(model.materialMisses == 0);
+  }
+
+  SECTION("an object without a mesh beside one with: the mesh's surface")
+  {
+    const auto text = replaced(
+      HandAse,
+      "*GEOMOBJECT {",
+      "*GEOMOBJECT {\n\t*NODE_NAME \"empty\"\n}\n*GEOMOBJECT {");
+    const auto [input, model] = finished(text, 1451520000);
+    CHECK(input.ase->objectCount() == 2u);
+    REQUIRE(model.surfaces.size() == 1u);
+    CHECK(model.surfaces[0].indexes.size() == 6u);
   }
 }
 

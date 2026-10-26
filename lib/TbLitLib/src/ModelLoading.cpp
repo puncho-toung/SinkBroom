@@ -86,11 +86,11 @@ ModelDispatch modelDispatch(const std::string_view canonical)
 
   dispatch.extension = engineFileExtension(canonical);
   const auto& ext = dispatch.extension;
-  if (ext == "obj")
+  if (ext == "obj" || ext == "ase")
   {
     dispatch.path = ModelPath::Source;
   }
-  else if (ext == "ase" || ext == "lwo")
+  else if (ext == "lwo")
   {
     dispatch.path = ModelPath::PendingLoader;
     dispatch.reason = fmt::format(
@@ -297,6 +297,11 @@ EngineModel finishModel(const ModelFinishInput& input)
     return engineFinishObjModel(
       *input.obj, input.materials, input.name, input.useMikktspace);
   }
+  if (input.ase)
+  {
+    return engineFinishAseModel(
+      *input.ase, input.materials, input.name, input.useMikktspace);
+  }
   return engineDefaultModel(input.name, input.materials.defaultMaterial);
 }
 
@@ -315,13 +320,61 @@ std::optional<ModelFinishInput> defaultModelInput(
   return input;
 }
 
-ObjSourceRead readObjSource(
+namespace
+{
+
+/**
+ * The materials a parsed source's conversion asks for (names, in the conversion's order,
+ * repeats allowed): each resolved by the registry's FindMaterial and captured, one entry
+ * per decl as FindMaterial returns one pointer per decl, then tr.defaultMaterial; the
+ * reason of a refusal, or nullopt. Parse thread.
+ */
+std::optional<std::string> captureMaterials(
+  MaterialDecls& decls,
+  const std::string_view canonical,
+  const std::vector<std::string>& names,
+  EngineModelMaterials& materials)
+{
+  for (const auto& name : names)
+  {
+    if (std::ranges::any_of(
+          materials.names, [&](const auto& known) { return known.first == name; }))
+    {
+      continue;
+    }
+    auto material = decls.modelMaterial(name);
+    if (!material)
+    {
+      return fmt::format("{}: its material '{}': {}", canonical, name, material.error);
+    }
+    const auto same = std::ranges::find_if(materials.materials, [&](const auto& known) {
+      return known.index == material.value->index;
+    });
+    const auto index = std::size_t(same - materials.materials.begin());
+    if (same == materials.materials.end())
+    {
+      materials.materials.push_back(std::move(*material.value));
+    }
+    materials.names.emplace_back(name, index);
+  }
+  auto fallback = decls.defaultModelMaterial();
+  if (!fallback)
+  {
+    return fmt::format("{}: no default material: {}", canonical, fallback.error);
+  }
+  materials.defaultMaterial = std::move(*fallback.value);
+  return std::nullopt;
+}
+
+} // namespace
+
+ModelSourceRead readObjSource(
   MaterialDecls& decls,
   const std::string_view canonical,
   const std::string& bytes,
   const std::int64_t sourceTime)
 {
-  auto read = ObjSourceRead{};
+  auto read = ModelSourceRead{};
   const auto refuse = [&](std::string reason) {
     read.reason = std::move(reason);
     read.input = defaultModelInput(decls, canonical, sourceTime);
@@ -351,37 +404,87 @@ ObjSourceRead readObjSource(
   input.sourceTime = sourceTime;
   // Model.cpp:366-375 on the time the caller hands in (A4)
   input.useMikktspace = engineUseMikktspace(sourceTime);
-  for (const auto& name : parsed.model->materialNames())
+  if (
+    auto problem =
+      captureMaterials(decls, canonical, parsed.model->materialNames(), input.materials))
   {
-    if (std::ranges::any_of(
-          input.materials.names, [&](const auto& known) { return known.first == name; }))
-    {
-      continue;
-    }
-    auto material = decls.modelMaterial(name);
-    if (!material)
-    {
-      return refuse(
-        fmt::format("{}: its material '{}': {}", canonical, name, material.error));
-    }
-    // one entry per decl, as FindMaterial returns one pointer per decl
-    const auto same = std::ranges::find_if(
-      input.materials.materials,
-      [&](const auto& known) { return known.index == material.value->index; });
-    const auto index = std::size_t(same - input.materials.materials.begin());
-    if (same == input.materials.materials.end())
-    {
-      input.materials.materials.push_back(std::move(*material.value));
-    }
-    input.materials.names.emplace_back(name, index);
+    return refuse(std::move(*problem));
   }
-  auto fallback = decls.defaultModelMaterial();
-  if (!fallback)
-  {
-    return refuse(fmt::format("{}: no default material: {}", canonical, fallback.error));
-  }
-  input.materials.defaultMaterial = std::move(*fallback.value);
   read.input = std::move(input);
+  return read;
+}
+
+ModelSourceRead readAseSource(
+  MaterialDecls& decls,
+  const std::string_view canonical,
+  const std::string& bytes,
+  const std::int64_t sourceTime)
+{
+  auto read = ModelSourceRead{};
+  const auto refuse = [&](std::string reason) {
+    read.reason = std::move(reason);
+    read.input = defaultModelInput(decls, canonical, sourceTime);
+    return std::move(read);
+  };
+
+  // D136: the copies never see a file the validator refuses
+  if (const auto problem = aseFileProblem(bytes))
+  {
+    return refuse(fmt::format("{} cannot be read: {}", canonical, *problem));
+  }
+
+  auto parsed = decls.parseAseModel(std::string{canonical}, bytes, sourceTime);
+  if (!parsed.error.empty())
+  {
+    return refuse(fmt::format("{}: {}", canonical, parsed.error));
+  }
+  if (!parsed.model)
+  {
+    // Model.cpp:356-361 (LoadASE: ASE_Load's NULL): "Couldn't load model"
+    return refuse(fmt::format("{} could not be loaded", canonical));
+  }
+
+  auto input = ModelFinishInput{};
+  input.name = std::string{canonical};
+  input.ase = parsed.model;
+  input.sourceTime = sourceTime;
+  // Model.cpp:366-375 on the time the caller hands in (A4): LoadASE's ase->timeStamp
+  input.useMikktspace = engineUseMikktspace(sourceTime);
+  if (parsed.model->hasVertexColours())
+  {
+    input.note = fmt::format(
+      "{}: its *MESH_CFACE vertex colours have alpha 0: the engine leaves the alpha "
+      "byte uninitialised (E-LIT-4, Model_ase.cpp:465-467)",
+      canonical);
+  }
+  if (
+    auto problem =
+      captureMaterials(decls, canonical, parsed.model->materialNames(), input.materials))
+  {
+    return refuse(std::move(*problem));
+  }
+  read.input = std::move(input);
+  return read;
+}
+
+ModelSourceRead readModelSource(
+  MaterialDecls& decls,
+  const std::string_view canonical,
+  const std::string& bytes,
+  const std::int64_t sourceTime)
+{
+  const auto extension = engineFileExtension(canonical);
+  if (extension == "obj")
+  {
+    return readObjSource(decls, canonical, bytes, sourceTime);
+  }
+  if (extension == "ase")
+  {
+    return readAseSource(decls, canonical, bytes, sourceTime);
+  }
+  auto read = ModelSourceRead{};
+  read.reason = fmt::format("{}: no source loader for .{}", canonical, extension);
+  read.input = defaultModelInput(decls, canonical, sourceTime);
   return read;
 }
 
