@@ -24,6 +24,7 @@
 #include "lit/EngineLight.h"
 #include "lit/EntityState.h"
 #include "lit/MaterialDecls.h"
+#include "lit/ModelRecord.h"
 #include "lit/ProcIslands.h"
 #include "lit/Snapshot.h"
 
@@ -127,7 +128,9 @@ struct ChunkKey
   // grid area read the entity's references (ChunkEntityState::areas, C31), never this
   int area = 0;
   PreviewId entity = NoPreviewId;
-  // the engine's material name ("textures/...")
+  // the engine's material name ("textures/..."): LP7.2 (C53, D131) the draw material, the
+  // face's own remapped by its entity's shader or skin (Chunk::sourceMaterial is the
+  // face's own)
   std::string material;
   CellCoord cell = {0, 0, 0};
   int part = 0;
@@ -166,7 +169,18 @@ struct Chunk
   bool adopted = false;
   std::uint64_t casterVersion = 0;
   std::uint64_t appearanceVersion = 0;
+  /**
+   * LP7.2 (C53, D131, P7.6): the faces' own material, before the entity's shader or skin
+   * (the key's material is the draw material): the editor-image size (C21), the back
+   * sides, the tangent path, dmap's skip rule, the deform growth of the bounds and the
+   * adoption groups read it (Model.cpp:1260, 1281-1283); empty in a chunk made otherwise
+   * (tests), where the key's material stands for it
+   */
+  std::string sourceMaterial;
 };
+
+// LP7.2 (C53): a chunk's own material (Chunk::sourceMaterial, else its key's)
+const std::string& chunkSourceMaterial(const Chunk& chunk);
 
 /**
  * What the renderer needs of an entity whose chunks exist (S34, A7): the engine's model
@@ -275,6 +289,13 @@ struct ChunkJobInput
   std::shared_ptr<const SceneEntity> worldspawn;
   // the entityDefs of the entities' classnames, by classname as the entities spell it
   std::unordered_map<std::string, std::shared_ptr<const EntityDefEntry>> entityDefs;
+  /**
+   * LP7.2 (C53, D131): the skins the entities' merged skin keys name, by the name as the
+   * key spells it; a name absent here is Pending: the entity's faces are built without
+   * its remap, provisionally, and the scene builds them again once a table has it. A slot
+   * without an entry (an engine error) remaps nothing
+   */
+  std::unordered_map<std::string, std::shared_ptr<const SkinSlot>> skins;
   std::shared_ptr<const ProcTree> proc;
   std::shared_ptr<const MaterialTable> materials;
   // LP7.4 (C55): the job returns its face pieces (ChunkJobOutput::pieces) for the
@@ -321,7 +342,13 @@ struct ChunkJobOutput
 /**
  * Builds the chunks of the input's cells (D59, §3.4): per face, the engine's material
  * name (or worldspawn's overrideMaterial), dmap's visibility rule (neither drawn nor
- * casting shadows: skipped), the polygon in the engine's winding order, split into areas
+ * casting shadows: skipped), LP7.2 (C53, D131, P7.6) a brush entity's shader or skin
+ * remap of the face's draw material (tr_frontend_addmodels.cpp:579-607, the frontend's
+ * per-surface order: shader replaces every surface's and skips one whose own material
+ * deforms; else RemapShaderBySkin, which never remaps a surface whose own material is
+ * not drawn, and skips a remapped one neither drawn nor casting shadows), the face's own
+ * material keeping its other roles (Chunk::sourceMaterial), the polygon in the engine's
+ * winding order, split into areas
  * (world primitives, AreaTree; a brush entity's chunks take the area of its pivot), st by
  * dmap's arithmetic from the origin-relative position and the editor image's size through
  * SetTexCoord, the side plane's normal through SetNormal, TriListForSide's fan; patches

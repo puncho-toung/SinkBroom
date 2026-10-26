@@ -166,6 +166,11 @@ struct EntityContext
   PreviewId chunkEntity = NoPreviewId;
   bool world = false;
   int area = 0;
+  // LP7.2 (C53): a brush entity's customShader name, else its customSkin (null: none, or
+  // its slot is pending: skinPending)
+  std::string shader;
+  const SkinRecord* skin = nullptr;
+  bool skinPending = false;
 };
 
 // a triangle of a chunk under construction
@@ -174,11 +179,13 @@ struct Triangle
   std::array<EngineDrawVert, 3> verts;
 };
 
-// the triangles of one (area, entity, material, cell)
+// the triangles of one (area, entity, draw material, cell) and one own material (LP7.2,
+// C53: material is the faces' own, drawMaterial the key's)
 struct Bucket
 {
   ChunkKey key;
   const FaceMaterial* material = nullptr;
+  const FaceMaterial* drawMaterial = nullptr;
   const EntityContext* entity = nullptr;
   std::vector<Triangle> triangles;
 };
@@ -188,6 +195,7 @@ struct AdoptedBucket
 {
   ChunkKey key;
   const FaceMaterial* material = nullptr;
+  const FaceMaterial* drawMaterial = nullptr;
   const EntityContext* entity = nullptr;
   const EntityAdoption* adoption = nullptr;
   std::vector<const AdoptedIsland*> islands;
@@ -211,7 +219,9 @@ private:
   bool m_override = false;
   std::vector<std::string> m_removedClasses;
   std::unordered_map<PreviewId, EntityContext> m_contexts;
-  std::map<ChunkKey, Bucket> m_buckets;
+  // LP7.2 (C53): by the key (its draw material) and the faces' own material, so that two
+  // own materials a skin maps to one are separate chunks (the engine's separate surfaces)
+  std::map<std::pair<ChunkKey, std::string>, Bucket> m_buckets;
   std::set<CellRef> m_cells;
   // LP7.4 (C55): the adopted islands of the job's cells per (area, entity, material,
   // cell), and the first part after the editor triangulation's of each key
@@ -389,6 +399,24 @@ private:
       m_input.proc ? pointInArea(*m_input.proc, context.state.modelOrigin) : 0;
     context.state.hash = renderEntityHash(context.state.parms)
                          ^ fnv(FnvBasis, context.originOffset.data(), sizeof(EngineVec3));
+    // LP7.2 (C53): ParseSpawnArgsToRenderEntity's customShader, else its customSkin
+    // (Entity.cpp:299-315; the frontend takes the shader first, :585-607)
+    if (!context.state.parms.shader.empty())
+    {
+      context.shader = context.state.parms.shader;
+    }
+    else if (!context.state.parms.skin.empty())
+    {
+      const auto slot = m_input.skins.find(context.state.parms.skin);
+      if (slot == m_input.skins.end() || !slot->second)
+      {
+        context.skinPending = true;
+      }
+      else
+      {
+        context.skin = slot->second->entry.get();
+      }
+    }
     return context;
   }
 
@@ -471,18 +499,66 @@ private:
     return m_materials.get(m_override ? m_overrideMaterial : engineName);
   }
 
+  /**
+   * LP7.2 (C53, D131, P7.6): the material a face of its own material is drawn with under
+   * its entity's shader or skin, in R_AddSingleModel's order (tr_frontend_addmodels.cpp:
+   * 579-607; the caller skipped a face neither drawn nor casting shadows, :579): a
+   * customShader replaces it and a deforming surface maps to nothing (:588-594); else a
+   * customSkin's RemapShaderBySkin (DeclSkin.cpp: a surface whose own material is not
+   * drawn is never remapped, the first mapping of the material or the "*" wildcard
+   * wins), and a remapped material neither drawn nor casting shadows is skipped
+   * (:601-605). Null: skipped. A material the table does not have yet is not remapped by
+   * a skin (its IsDrawn is not known): the chunk is provisional and built again when it
+   * arrives
+   */
+  const FaceMaterial* drawMaterialOf(
+    const FaceMaterial& original, const EntityContext& context)
+  {
+    if (context.world)
+    {
+      return &original;
+    }
+    if (!context.shader.empty())
+    {
+      if (original.entry && original.entry->deform != 0)
+      {
+        return nullptr;
+      }
+      return &m_materials.get(context.shader);
+    }
+    if (!context.skin || !original.entry || !original.drawn)
+    {
+      return &original;
+    }
+    for (const auto& mapping : context.skin->mappings)
+    {
+      if (mapping.from.empty() || mapping.from == original.entry->name)
+      {
+        const auto& remapped = m_materials.get(mapping.to);
+        if (remapped.entry && !remapped.drawn && !remapped.castsShadow)
+        {
+          return nullptr;
+        }
+        return &remapped;
+      }
+    }
+    return &original;
+  }
+
   Bucket& bucket(
     const int area,
     const EntityContext& context,
     const FaceMaterial& material,
+    const FaceMaterial& drawMaterial,
     const CellCoord& cell)
   {
-    auto key = ChunkKey{area, context.chunkEntity, material.name, cell, 0};
-    auto [it, inserted] = m_buckets.try_emplace(key);
+    auto key = ChunkKey{area, context.chunkEntity, drawMaterial.name, cell, 0};
+    auto [it, inserted] = m_buckets.try_emplace(std::pair{key, material.name});
     if (inserted)
     {
       it->second.key = key;
       it->second.material = &material;
+      it->second.drawMaterial = &drawMaterial;
       it->second.entity = &context;
     }
     return it->second;
@@ -559,6 +635,8 @@ private:
       {
         continue;
       }
+      // LP7.2 (C53): the entity's shader or skin, at chunk build
+      const auto* drawMaterial = drawMaterialOf(material, context);
       // ParseValve220: the plane from the three points relative to the origin;
       // FindFloatPlane fixes it
       const auto plane = engineSidePlane(
@@ -607,7 +685,13 @@ private:
         {
           continue;
         }
-        auto& target = bucket(piece.area, context, material, cell);
+        // LP7.2 (C53): a surface the shader or skin skips draws nothing; its piece is
+        // still the adoption's (the own material's group)
+        if (!drawMaterial)
+        {
+          continue;
+        }
+        auto& target = bucket(piece.area, context, material, *drawMaterial, cell);
         // TriListForSide's fan: w[0], w[i - 1], w[i]
         const auto& w = piece.points;
         for (auto i = std::size_t{2}; i < w.size(); ++i)
@@ -627,6 +711,12 @@ private:
   {
     const auto& material = materialOf(enginePatchMaterial(patch.material));
     if (!material.drawn && !material.castsShadow)
+    {
+      return;
+    }
+    // LP7.2 (C53): the entity's shader or skin
+    const auto* drawMaterial = drawMaterialOf(material, context);
+    if (!drawMaterial)
     {
       return;
     }
@@ -686,7 +776,7 @@ private:
         {
           ++m_output.solidPieces;
         }
-        auto& target = bucket(piece.area, context, material, cell);
+        auto& target = bucket(piece.area, context, material, *drawMaterial, cell);
         const auto& w = piece.points;
         for (auto k = std::size_t{2}; k < w.size(); ++k)
         {
@@ -741,8 +831,9 @@ private:
 
   void finishBucket(Bucket& bucket)
   {
-    // the bucket's triangles in parts of at most MaxChunkWeldedVerts welded vertices
-    auto part = 0;
+    // the bucket's triangles in parts of at most MaxChunkWeldedVerts welded vertices;
+    // LP7.2 (C53): the parts of a key go on across its own materials
+    auto part = m_nextPart[bucket.key];
     auto verts = std::vector<EngineDrawVert>{};
     auto indexes = std::vector<std::uint16_t>{};
     auto weld = std::unordered_map<WeldKey, std::uint16_t, WeldHash>{};
@@ -754,6 +845,7 @@ private:
         finishChunk(
           key,
           *bucket.material,
+          *bucket.drawMaterial,
           *bucket.entity,
           std::move(verts),
           std::move(indexes),
@@ -827,16 +919,23 @@ private:
           continue;
         }
         const auto& material = m_materials.get(island.material);
+        // LP7.2 (C53): drawn with its entity's shader or skin, as the faces it replaces
+        const auto* drawMaterial = drawMaterialOf(material, *context);
+        if (!drawMaterial)
+        {
+          continue;
+        }
         // a world island's chunk is of its model's area; a brush entity's of its pivot's
         // area, as every chunk of the entity (P4.9)
         const auto area = context->world ? island.area : context->area;
         auto key =
-          ChunkKey{area, context->chunkEntity, material.name, island.cell.cell, 0};
+          ChunkKey{area, context->chunkEntity, drawMaterial->name, island.cell.cell, 0};
         auto [it, inserted] = m_adopted.try_emplace(key);
         if (inserted)
         {
           it->second.key = key;
           it->second.material = &material;
+          it->second.drawMaterial = drawMaterial;
           it->second.entity = context;
           it->second.adoption = adoption.get();
         }
@@ -864,6 +963,7 @@ private:
         finishChunk(
           key,
           *adopted.material,
+          *adopted.drawMaterial,
           *adopted.entity,
           std::move(verts),
           std::move(indexes),
@@ -908,9 +1008,12 @@ private:
     flush();
   }
 
+  // LP7.2 (C53, D131): material is the faces' own (the back sides, the tangent path;
+  // the st were made with its editor-image size), drawMaterial the key's (the cast class)
   void finishChunk(
     ChunkKey key,
     const FaceMaterial& material,
+    const FaceMaterial& drawMaterial,
     const EntityContext& context,
     std::vector<EngineDrawVert> verts,
     std::vector<std::uint16_t> indexes,
@@ -975,26 +1078,28 @@ private:
     }
     chunk.bounds = engineBoundsOfPoints(positions);
 
-    // S36, R5.28: the cast class and the two versions
+    // S36, R5.28: the cast class (LP7.2: the draw material's) and the two versions
     const auto& parms = context.state.parms;
     const auto noShadows = !context.world && parms.noShadows;
-    if (!material.castsShadow || noShadows)
+    if (!drawMaterial.castsShadow || noShadows)
     {
       chunk.castClass = CastClass::None;
     }
-    else if (!material.entry)
+    else if (!drawMaterial.entry)
     {
       chunk.castClass = CastClass::Opaque;
     }
     else
     {
-      chunk.castClass = material.entry->coverage == CoverageOpaque ? CastClass::Opaque
-                        : material.entry->coverage == CoveragePerforated
+      chunk.castClass = drawMaterial.entry->coverage == CoverageOpaque ? CastClass::Opaque
+                        : drawMaterial.entry->coverage == CoveragePerforated
                           ? CastClass::Perforated
                           : CastClass::None;
     }
-    chunk.provisional = material.provisional;
+    // C21: the faces' own editor-image size; LP7.2 (A41): a skin not in the table yet
+    chunk.provisional = material.provisional || (!context.world && context.skinPending);
     chunk.adopted = !editorTriangles;
+    chunk.sourceMaterial = material.name;
 
     auto caster = fnv(FnvBasis, &chunk.castClass, sizeof(chunk.castClass));
     const auto flags = std::array<bool, 2>{parms.noShadows, parms.noSelfShadows};
@@ -1009,11 +1114,12 @@ private:
     }
     if (chunk.castClass == CastClass::Perforated)
     {
-      caster = fnv(caster, material.name.data(), material.name.size());
+      caster = fnv(caster, drawMaterial.name.data(), drawMaterial.name.size());
     }
     chunk.casterVersion = caster;
 
-    auto appearance = fnv(FnvBasis, material.name.data(), material.name.size());
+    auto appearance = fnv(FnvBasis, drawMaterial.name.data(), drawMaterial.name.size());
+    appearance = fnv(appearance, material.name.data(), material.name.size());
     appearance =
       fnv(appearance, chunk.verts.data(), chunk.verts.size() * sizeof(EngineDrawVert));
     appearance =
@@ -1095,6 +1201,11 @@ private:
 };
 
 } // namespace
+
+const std::string& chunkSourceMaterial(const Chunk& chunk)
+{
+  return chunk.sourceMaterial.empty() ? chunk.key.material : chunk.sourceMaterial;
+}
 
 bool ChunkKey::operator==(const ChunkKey& other) const
 {

@@ -47,6 +47,7 @@ target_sources(TbLitLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MapBake.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialDecls.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_MaterialService.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ModelEntities.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ModelLoading.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_NumberText.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_NvrhiSupport.cpp

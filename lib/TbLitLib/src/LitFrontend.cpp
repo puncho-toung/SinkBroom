@@ -483,7 +483,8 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       {
         return std::nullopt;
       }
-      const auto it = state->materialBounds.find(key.material);
+      // LP7.2 (C53): the model surface of the faces' own material
+      const auto it = state->materialBounds.find(chunkSourceMaterial(*surface.chunk));
       if (it == state->materialBounds.end() || state->areas.empty())
       {
         return std::nullopt;

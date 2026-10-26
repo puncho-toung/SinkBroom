@@ -45,6 +45,16 @@ struct PrivateMember
 
 template struct PrivateMember<EditorImageNameTag, &idMaterial::editorImageName>;
 
+// LP7.2 (C53): idDeclSkin's private mappings the same way (RemapShaderBySkin is the
+// class's only lookup of them, DeclSkin.h)
+struct SkinMappingsTag
+{
+  using type = idList<skinMapping_t, TAG_IDLIB_LIST_DECL> idDeclSkin::*;
+  friend type get(SkinMappingsTag);
+};
+
+template struct PrivateMember<SkinMappingsTag, &idDeclSkin::mappings>;
+
 bool endsWithNoCase(const std::string& text, const std::string& suffix)
 {
   return text.size() >= suffix.size()
@@ -1113,6 +1123,44 @@ DeclResult<std::shared_ptr<const EntityDefEntry>> MaterialDecls::entityDef(
   // the copied rule, which finds the def parsed above
   entry->dmapOnly = idDeclEntityDef::IsMapOnlyClass(nameText.c_str());
   return {std::move(entry), {}};
+}
+
+DeclResult<EngineSkin> MaterialDecls::skin(const std::string_view name)
+{
+  if (!m_registry)
+  {
+    return {std::nullopt, m_constructionError};
+  }
+  // the guard of lookup (M-ID-GUARD-01)
+  if (name.size() >= size_t(MAX_STRING_CHARS))
+  {
+    return {std::nullopt, "skin name too long"};
+  }
+
+  const auto nameText = std::string{name};
+  const auto errorsBefore = m_registry->errorCount();
+  // Entity.cpp:302: FindSkin( temp ), makeDefault true (DeclManager.cpp:944-947)
+  const auto* decl = declManager->FindSkin(nameText.c_str());
+  if (m_registry->errorCount() != errorsBefore)
+  {
+    return {std::nullopt, lastError(m_registry->messages())};
+  }
+  if (!decl)
+  {
+    return {std::nullopt, "no skin '" + nameText + "'"};
+  }
+
+  auto skin = EngineSkin{};
+  skin.name = decl->GetName();
+  const auto& mappings = decl->*get(SkinMappingsTag{});
+  for (int i = 0; i < mappings.Num(); ++i)
+  {
+    const auto& mapping = mappings[i];
+    skin.mappings.emplace_back(
+      mapping.from ? mapping.from->GetName() : "",
+      mapping.to ? mapping.to->GetName() : "");
+  }
+  return {std::move(skin), {}};
 }
 
 DeclResult<bool> MaterialDecls::touch(

@@ -170,6 +170,9 @@ private:
   // LP5.F: a sized cell's measured is false (updated with m_sizedCells)
   bool m_waitsForMeasure = false;
   std::map<std::string, std::set<PreviewId>> m_pendingEntityDefs;
+  // LP7.2 (C53, A41): the brush entities built while their skin was not in the table
+  // (their chunks provisional), by the skin's name
+  std::map<std::string, std::set<PreviewId>> m_pendingSkins;
   std::map<CellRef, std::size_t> m_solidPieces;
   /**
    * LPF.0b (C43, D106, P5.9): the cells of each material their chunk jobs read (drawn or
@@ -346,7 +349,9 @@ public:
    * One built from a measured Default slot is the engine's own answer for an image it
    * cannot load (C21's 8 × 8), rebuilt only when a file changes (S2.5). LP5.F (D111): a
    * slot published again unmeasured (remeasured) makes its cells wait so too, whatever
-   * their size; a kept Ready size (D52) does not.
+   * their size; a kept Ready size (D52) does not. LP7.2 (C53, A41): or a brush entity was
+   * built while its skin was not in the table (its chunks provisional, built again when
+   * a table has it).
    */
   bool waitsForMaterials() const;
   // DX.4: entities were built with default parms while their classname's entityDef was

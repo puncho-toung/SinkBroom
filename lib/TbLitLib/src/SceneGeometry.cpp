@@ -535,6 +535,7 @@ void SceneGeometry::refreshTable()
     m_pendingMaterials.clear();
     m_sizedCells.clear();
     m_pendingEntityDefs.clear();
+    m_pendingSkins.clear();
     // LPF.0b: every cell is built again with the new registry's entries
     m_materialCells.clear();
     m_cellMaterials.clear();
@@ -549,7 +550,7 @@ void SceneGeometry::refreshTable()
 
 bool SceneGeometry::waitsForMaterials() const
 {
-  return !m_pendingMaterials.empty() || m_waitsForMeasure;
+  return !m_pendingMaterials.empty() || m_waitsForMeasure || !m_pendingSkins.empty();
 }
 
 bool SceneGeometry::waitsForEntityDefs() const
@@ -730,6 +731,22 @@ void SceneGeometry::scanTable()
       ++it;
     }
   }
+  // LP7.2 (C53, A41): a skin that arrives rebuilds the entities built without it
+  for (auto it = m_pendingSkins.begin(); it != m_pendingSkins.end();)
+  {
+    if (m_table->findSkin(it->first))
+    {
+      for (const auto entity : it->second)
+      {
+        markEntity(entity);
+      }
+      it = m_pendingSkins.erase(it);
+    }
+    else
+    {
+      ++it;
+    }
+  }
   if (!rescanned.empty() || !repivoted.empty())
   {
     dropAdoption([&](const PreviewId entity, const AdoptedIsland& island) {
@@ -832,11 +849,12 @@ void SceneGeometry::startBatch()
       {
         return;
       }
-      if (const auto slot = m_table ? m_table->findEntityDef(classname) : nullptr)
+      const auto defSlot = m_table ? m_table->findEntityDef(classname) : nullptr;
+      if (defSlot)
       {
-        if (slot->entry)
+        if (defSlot->entry)
         {
-          input->entityDefs[classname] = slot->entry;
+          input->entityDefs[classname] = defSlot->entry;
         }
       }
       else if (m_materials)
@@ -844,6 +862,30 @@ void SceneGeometry::startBatch()
         // C22: asked now; R3.2: the entity is built again once a table has the answer
         static_cast<void>(m_materials->entityDef(classname));
         m_pendingEntityDefs[classname].insert(id);
+      }
+      // LP7.2 (C53, D131): a brush entity's skin from its merged keys (a shader key
+      // takes the surfaces first, so its skin is not needed); asked now when the table
+      // lacks it, the entity built again once a table has it (A41)
+      if (equalsNoCase(classname, "worldspawn") || equalsNoCase(classname, "func_group"))
+      {
+        return;
+      }
+      const auto merged = mergeSpawnArgs(
+        it->second->keys, defSlot && defSlot->entry ? &defSlot->entry->keys : nullptr);
+      const auto* shader = findKey(merged, "shader");
+      const auto* skin = findKey(merged, "skin");
+      if ((shader && !shader->empty()) || !skin || skin->empty())
+      {
+        return;
+      }
+      if (const auto slot = m_table ? m_table->findSkin(*skin) : nullptr)
+      {
+        input->skins[*skin] = slot;
+      }
+      else if (m_materials)
+      {
+        static_cast<void>(m_materials->skin(*skin));
+        m_pendingSkins[*skin].insert(id);
       }
     };
     if (worldspawn != m_entities.end())
@@ -931,18 +973,20 @@ void SceneGeometry::apply(ChunkJobOutput output)
   for (auto& chunk : output.chunks)
   {
     const auto ref = CellRef{chunk.key.entity, chunk.key.cell};
-    // the table the batch was built with is still the scene's (a batch adopts no other)
-    auto& sized = m_sizedCells[chunk.key.material];
+    // the table the batch was built with is still the scene's (a batch adopts no other);
+    // LP7.2 (C21, C53): the size is the faces' own material's, whatever draws them
+    const auto& own = chunkSourceMaterial(chunk);
+    auto& sized = m_sizedCells[own];
     if (sized.cells.empty())
     {
-      sized.size = tableSizeOf(chunk.key.material);
+      sized.size = tableSizeOf(own);
       // LP5.F (D77, A41): a chunk built at a Default size while its slot is unmeasured
       // waits for the measure (waitsForMaterials); a measured Default is final
-      sized.measured = sizeFinalIn(m_table.get(), chunk.key.material, chunk.provisional);
+      sized.measured = sizeFinalIn(m_table.get(), own, chunk.provisional);
       if (!sized.measured && m_materials)
       {
         // a slot the bulk parse published is measured once looked up (S2.2)
-        static_cast<void>(m_materials->lookup(chunk.key.material));
+        static_cast<void>(m_materials->lookup(own));
       }
     }
     sized.cells.insert(ref);
@@ -989,7 +1033,9 @@ void SceneGeometry::updateEntityReferences()
     return;
   }
 
-  // the union of every chunk of each touched entity, per material (model space)
+  // the union of every chunk of each touched entity, per material (model space); LP7.2
+  // (C53, D131): per the faces' own material, the engine's model surface (dmap makes one
+  // per material, the remap is the frontend's), whose deform grows its bounds
   auto unions = std::unordered_map<PreviewId, std::map<std::string, EngineBounds>>{};
   for (const auto& [key, chunk] : m_chunks)
   {
@@ -997,7 +1043,7 @@ void SceneGeometry::updateEntityReferences()
     {
       auto& perMaterial = unions[key.entity];
       const auto [it, added] =
-        perMaterial.try_emplace(key.material, engineClearedBounds());
+        perMaterial.try_emplace(chunkSourceMaterial(chunk), engineClearedBounds());
       it->second = engineAddBounds(it->second, chunk.bounds);
     }
   }

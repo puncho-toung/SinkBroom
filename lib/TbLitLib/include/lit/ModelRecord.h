@@ -149,10 +149,10 @@ struct ModelRecord
 
 /**
  * LP7.0 (C53): a skin decl as the registry's idDeclSkin holds it (framework/DeclSkin.h:
- * its mappings, each a from and a to material; from empty is "*", any unmatched shader),
- * published by name in MaterialTable::skins as the entityDefs are. LP7.0 publishes none:
- * the facade has no skin accessor yet (lit/MaterialDecls.h; idDeclSkin's mappings are
- * private, RemapShaderBySkin its only lookup), LP7.2's to add.
+ * its mappings, each a from and a to material by canonical name; from empty is "*", any
+ * unmatched shader), published by name in MaterialTable::skins as the entityDefs are.
+ * LP7.2: MaterialService::skin publishes them from MaterialDecls::skin (the shim reads
+ * idDeclSkin's private mappings; RemapShaderBySkin is the class's only lookup of them).
  */
 struct SkinRecord
 {

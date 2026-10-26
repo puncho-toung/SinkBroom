@@ -138,8 +138,8 @@ struct MaterialImageKeyHash
  * - models (LP7.0, C51, D126): the model records by canonical name, kept across reloads
  *   as the images are, with modelChanges and changedModels for the poll; LP7.1a's
  *   MaterialService::requestModel fills it;
- * - skins (LP7.0, C53): the skin decls by name, per registry as the entityDefs are;
- *   empty in LP7.0 (lit/ModelRecord.h, SkinRecord).
+ * - skins (LP7.0, C53): the skin decls by name, per registry as the entityDefs are
+ *   (LP7.2: MaterialService::skin fills it, lit/ModelRecord.h SkinRecord).
  *
  * A new version shares every material, entityDef and delta that did not change.
  */
@@ -221,7 +221,8 @@ struct MaterialTable
   std::uint64_t modelChanges = 0;
   ModelChanges changedModels;
   // LP7.0 (C53): the skins by name, published per registry as the entityDefs are (a
-  // reload drops them); empty in LP7.0
+  // reload drops them and asks again for every name asked before); LP7.2's skin() fills
+  // it
   Skins skins;
   /**
    * LPF.0a (D100, C40): the image override hand-overs (setImageOverride,
@@ -285,7 +286,7 @@ struct MaterialTable
   // LP7.0 (C51): the record of a canonical model name (canonicalModelName), null when it
   // was never requested or was dropped (a changed file, LP7.1a); it does not allocate
   std::shared_ptr<const ModelRecord> findModel(std::string_view canonicalName) const;
-  // LP7.0 (C53): a skin's slot, null when it is not published (in LP7.0 always)
+  // LP7.0 (C53): a skin's slot, null when it is not published yet (LP7.2: skin() asks)
   std::shared_ptr<const SkinSlot> findSkin(std::string_view name) const;
   // the registers of a key; an EvaluatedRegisters with an error when the evaluation was
   // refused, null when it is not done yet
@@ -321,6 +322,17 @@ struct EntityDefLookup
 
   State state = State::Pending;
   std::shared_ptr<const EntityDefEntry> entry;
+  std::string error;
+};
+
+// LP7.2 (C53): what skin returns: Pending (queued: a later table has it), Ready, or
+// Failed with the slot's error
+struct SkinLookup
+{
+  using State = MaterialLookup::State;
+
+  State state = State::Pending;
+  std::shared_ptr<const SkinRecord> entry;
   std::string error;
 };
 
@@ -596,6 +608,17 @@ public:
    * reload, so a later table has it from the new registry.
    */
   EntityDefLookup entityDef(std::string_view classname);
+
+  /**
+   * LP7.2 (C53, D131, P7.6): the skin of a name (an entity's skin key) as the latest
+   * table has it, or Pending, and the name is queued with the lookups after the
+   * entityDefs; any thread. On the parse thread MaterialDecls::skin (FindSkin with
+   * makeDefault, as ParseSpawnArgsToRenderEntity calls it: a name without a decl is the
+   * engine's default skin) publishes a SkinSlot under the asked name and the decl's
+   * canonical name. Every name asked for is asked again after a reload, as the entityDefs
+   * are.
+   */
+  SkinLookup skin(std::string_view name);
 
   /**
    * C10 (LP1c.1, D64): reads the bake of the map whose document is at mapPath on the

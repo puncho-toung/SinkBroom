@@ -1,0 +1,22 @@
+// LP7.2 (C53, D131) hand fixture: the skins of the CPU tests (tst_ModelEntities.cpp).
+// Names under skins/lp7s/ are reserved for fixtures (K20's rule).
+
+// one mapping: the one-sided unsmoothed crate to the two-sided perforated grate
+skin skins/lp7s/to_grate
+{
+	model	models/test/n01.obj
+	textures/lp1b/crate	textures/lp1b/grate
+}
+
+// the crate to a material of another editor-image size (32 x 32 to 32 x 64)
+skin skins/lp7s/to_wall
+{
+	"textures/lp1b/crate"	"textures/lp1b/wall"
+}
+
+// a named mapping first, then the wildcard for every other drawn surface
+skin skins/lp7s/wild
+{
+	textures/lp1b/floor	textures/lp1b/patch
+	*	textures/lp1b/glass
+}

@@ -756,6 +756,18 @@ struct EntityDefEntry
 };
 
 /**
+ * LP7.2 (C53, D131, P7.6): a skin decl as the registry's idDeclSkin holds it once parsed
+ * (framework/DeclSkin.cpp Parse): its canonical name and its mappings in order, each the
+ * from material's canonical name ("" for the "*" wildcard, the engine's map.from NULL:
+ * any shader no earlier mapping matched) and the to material's. Plain data.
+ */
+struct EngineSkin
+{
+  std::string name;
+  std::vector<std::pair<std::string, std::string>> mappings;
+};
+
+/**
  * The engine's lookup rule of A10: the value of the last key equal to name when ASCII
  * letters are compared without case (idDict::FindKey's idStr::Icmp; Set replaces a value
  * in place), or null; an empty name finds nothing, as FindKey's does. A pure function;
@@ -1024,6 +1036,17 @@ public:
   // its merged keys and dmapOnly; an error when there is none or its parse reached an
   // engine error
   DeclResult<std::shared_ptr<const EntityDefEntry>> entityDef(std::string_view name);
+
+  /**
+   * LP7.2 (C53, D131, P7.6): declManager->FindSkin( name ), as
+   * ParseSpawnArgsToRenderEntity calls it (Entity.cpp:302, makeDefault): the decl parsed
+   * (each mapping's FindMaterial, which makes a material the registry lacks), or the
+   * engine's default for a name without a decl (idDeclSkin::SetDefaultText: a material of
+   * the name maps _default to it, else DefaultDefinition's "*" to _default), its mappings
+   * read from the decl's private list through the shim's accessor (no copied line
+   * changes, C7); an error when the parse reached an engine error. Parse thread (C20).
+   */
+  DeclResult<EngineSkin> skin(std::string_view name);
 
   // The console's "touch <type> <name>" (TouchDecl_f): FindType without making a default,
   // which parses the decl and marks it referenced. False when there is no such decl; an

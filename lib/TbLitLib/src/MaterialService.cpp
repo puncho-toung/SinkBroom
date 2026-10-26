@@ -283,6 +283,9 @@ struct MaterialService::Shared
   std::unordered_set<std::string> queuedLookups;
   std::deque<std::string> entityDefLookups;
   std::unordered_set<std::string> queuedEntityDefLookups;
+  // LP7.2 (C53): skin names, after the entityDefs
+  std::deque<std::string> skinLookups;
+  std::unordered_set<std::string> queuedSkinLookups;
   std::deque<RegisterKey> evaluations;
   std::unordered_set<RegisterKey, RegisterKeyHash> queuedEvaluations;
   // maps whose bakes to read (C10), one per work item, each with its latest ticket
@@ -537,6 +540,8 @@ private:
   // the names lookups and entityDef queries were asked for, asked again after a reload
   std::unordered_set<std::string> m_requestedNames;
   std::unordered_set<std::string> m_requestedEntityDefs;
+  // LP7.2 (C53): and the skins
+  std::unordered_set<std::string> m_requestedSkins;
   // S2.2: every name a material's slot is published under, by the material's canonical
   // name, so that a measured entry replaces each without a walk of the table
   std::unordered_map<std::string, std::vector<std::string>> m_spellings;
@@ -727,6 +732,8 @@ private:
         m_shared.queuedLookups.clear();
         m_shared.entityDefLookups.clear();
         m_shared.queuedEntityDefLookups.clear();
+        m_shared.skinLookups.clear();
+        m_shared.queuedSkinLookups.clear();
         m_shared.evaluations.clear();
         m_shared.queuedEvaluations.clear();
         m_shared.measures.clear();
@@ -985,7 +992,9 @@ private:
       return work;
     }
     // S2.3: the lookup step takes its names from the queues itself, a step at a time
-    if (!m_shared.lookups.empty() || !m_shared.entityDefLookups.empty())
+    if (
+      !m_shared.lookups.empty() || !m_shared.entityDefLookups.empty()
+      || !m_shared.skinLookups.empty())
     {
       return workOf(WorkKind::Lookup);
     }
@@ -1622,6 +1631,70 @@ private:
     return changed;
   }
 
+  // LP7.2 (C53): a skin's slot into the working table, under one name
+  bool setSkinSlot(const std::string& name, std::shared_ptr<const SkinSlot> slot)
+  {
+    if (m_working.skins.find(name))
+    {
+      return false;
+    }
+    m_working.skins = m_working.skins.set(name, std::move(slot));
+    return true;
+  }
+
+  // LP7.2 (C53): one skin query into the working table, under the asked name and the
+  // decl's canonical one (FindSkin makes the engine's default skin for a name without a
+  // decl, so a slot without an entry is an engine error or a refused name)
+  bool lookUpSkin(const std::string& name)
+  {
+    if (m_working.skins.find(name))
+    {
+      return false;
+    }
+    auto result = m_decls->skin(name);
+    auto slot = std::shared_ptr<const SkinSlot>{};
+    if (result)
+    {
+      const auto* published = m_working.skins.find(result.value->name);
+      if (published && (*published)->entry)
+      {
+        slot = *published;
+      }
+      else
+      {
+        auto record = std::make_shared<SkinRecord>();
+        record->name = result.value->name;
+        for (auto& [from, to] : result.value->mappings)
+        {
+          record->mappings.push_back(SkinRecord::Mapping{std::move(from), std::move(to)});
+        }
+        auto made = std::make_shared<SkinSlot>();
+        made->entry = std::move(record);
+        slot = std::move(made);
+      }
+    }
+    else
+    {
+      auto made = std::make_shared<SkinSlot>();
+      made->error = result.error;
+      slot = std::move(made);
+    }
+    const auto canonical = slot->entry ? slot->entry->name : std::string{};
+    auto changed = setSkinSlot(name, slot);
+    if (!canonical.empty() && canonical != name)
+    {
+      changed = setSkinSlot(canonical, slot) || changed;
+    }
+    return changed;
+  }
+
+  std::shared_ptr<const SkinSlot> failedSkinSlot() const
+  {
+    auto slot = std::make_shared<SkinSlot>();
+    slot->error = buildFailure();
+    return slot;
+  }
+
   void resetWorkingTable(const std::uint64_t registry)
   {
     // every entry is measured again when it is asked for
@@ -1790,8 +1863,8 @@ private:
 
     // a new table for the new registry
     resetWorkingTable(m_decls->id());
-    // LP7.0 (C53): the skins would be published here from the registry, which reaches
-    // them only through the copied idDeclSkin (no facade call yet: LP7.2)
+    // LP7.0 (C53): a test may publish skins and model records here; LP7.2's skins come
+    // through the lookups below (asked again, as the entityDefs)
     if (m_shared.options.registryBuiltForTesting)
     {
       m_shared.options.registryBuiltForTesting(m_working);
@@ -1825,6 +1898,15 @@ private:
         break;
       }
       lookUpEntityDef(name);
+    }
+    // LP7.2 (C53): the skins asked for before
+    for (const auto& name : m_requestedSkins)
+    {
+      if (stopping())
+      {
+        break;
+      }
+      lookUpSkin(name);
     }
     drainMessages();
     publish();
@@ -2305,8 +2387,8 @@ private:
           m_shared.images.empty() || m_shared.reloadRequested
           || !m_shared.evaluations.empty() || !m_shared.feeds.empty()
           || !m_shared.reparses.empty() || !m_shared.lookups.empty()
-          || !m_shared.entityDefLookups.empty() || !m_shared.mapBakes.empty()
-          || !m_shared.measures.empty())
+          || !m_shared.entityDefLookups.empty() || !m_shared.skinLookups.empty()
+          || !m_shared.mapBakes.empty() || !m_shared.measures.empty())
         {
           break;
         }
@@ -2721,6 +2803,14 @@ private:
         changed = (m_decls ? lookUpEntityDef(*name)
                            : setEntityDefSlot(*name, failedEntityDefSlot()))
                   || changed;
+        continue;
+      }
+      // LP7.2 (C53)
+      if (auto name = takeName(m_shared.skinLookups, m_shared.queuedSkinLookups))
+      {
+        m_requestedSkins.insert(*name);
+        changed =
+          (m_decls ? lookUpSkin(*name) : setSkinSlot(*name, failedSkinSlot())) || changed;
         continue;
       }
       break;
@@ -3650,6 +3740,40 @@ EntityDefLookup MaterialService::entityDef(const std::string_view classname)
     m_shared->requested.notify_one();
   }
   return EntityDefLookup{};
+}
+
+SkinLookup MaterialService::skin(const std::string_view name)
+{
+  if (const auto slot = table()->findSkin(name))
+  {
+    return slot->entry ? SkinLookup{SkinLookup::State::Ready, slot->entry, {}}
+                       : SkinLookup{SkinLookup::State::Failed, nullptr, slot->error};
+  }
+
+  auto queued = false;
+  {
+    auto lock = std::scoped_lock{m_shared->mutex};
+    // X.2, Y.1: no thread will take the query
+    if (m_shared->stats.threadEnded)
+    {
+      return SkinLookup{
+        SkinLookup::State::Failed,
+        nullptr,
+        m_shared->stats.threadError.empty() ? std::string{ThreadEndedText}
+                                            : m_shared->stats.threadError};
+    }
+    auto text = std::string{name};
+    if (!m_shared->stop && m_shared->queuedSkinLookups.insert(text).second)
+    {
+      m_shared->skinLookups.push_back(std::move(text));
+      queued = true;
+    }
+  }
+  if (queued)
+  {
+    m_shared->requested.notify_one();
+  }
+  return SkinLookup{};
 }
 
 std::uint64_t MaterialService::loadMapBake(const std::string_view mapPath)
