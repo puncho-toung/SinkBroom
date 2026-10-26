@@ -34,6 +34,48 @@ namespace tb::lit
 {
 
 /**
+ * LP7.1a (C51, D127, K40, K41, K46, K47): what the lookup does with a canonical name
+ * (canonicalModelName), in GetModel's order (ModelManager.cpp:311-589): the built-in
+ * names first (:270-291, found by the name hash), then the extension's dispatch
+ * (:409-441; InitFromFile's loaders, Model.cpp:314-361). A name that is a .proc model's
+ * (_areaN, a brush entity's name) is the scene's to tell apart before it asks (C51 (1),
+ * LP7.2): it is never a file here.
+ */
+enum class ModelPath
+{
+  // an empty name: no model (GetModel returns NULL, :313-316)
+  None,
+  // obj: the binary, then the source through the validator and the copied loader
+  Source,
+  // ase, lwo: the binary, then the default cube with a notice until LP7.1b's loaders
+  PendingLoader,
+  // ma: the binary, then the default cube with a notice (K46)
+  MayaBinaryOnly,
+  // glb, gltf: the binary (.bglb) only, else the default cube with a notice (K40)
+  GltfBinaryOnly,
+  // md5mesh: nothing drawn (K41: an idEntity's md5 model has no joints, SC614)
+  Skinned,
+  // _default: the engine's own default model (:270-276), the cube
+  DefaultModel,
+  // _beam, _sprite, md3, prt, liquid (the engine's own classes, K47), flt (dispatched,
+  // but InitFromFile has no flt loader: "unknown type", Model.cpp:350-361), an unknown
+  // extension or none (:512-523): the default cube
+  Default,
+};
+
+struct ModelDispatch
+{
+  ModelPath path = ModelPath::None;
+  // the canonical name's extension (engineFileExtension)
+  std::string extension;
+  // the notice of a path that draws the cube or nothing (C52's once-notice, LP7.2)
+  std::string reason;
+};
+
+// the dispatch of a canonical name; pure
+ModelDispatch modelDispatch(std::string_view canonical);
+
+/**
  * LP7.1a (C51, D125): the engine's binary time test (Model.cpp:400-406, LoadBinaryModel):
  * a binary whose stored time is not the source's is rejected, unless the source's time is
  * FILE_NOT_FOUND_TIMESTAMP (-1: no source) or 0 (a container entry, A4), or the file
@@ -98,6 +140,20 @@ ModelRecord modelRecordFromBinary(
   const BprocModel& model,
   const std::optional<GlmbTail>& glmb,
   std::int64_t sourceTime);
+
+/**
+ * The record of what the copied conversion and FinishSurfaces made (engineFinishObjModel)
+ * or of the default cube (engineDefaultModel): its surfaces, bounds and flags, with the
+ * state, source kind, source time and reason given; the materials of a Source record are
+ * the caller's to add (P7.22). Pure.
+ */
+ModelRecord modelRecordFromEngine(
+  std::string canonical,
+  const EngineModel& model,
+  ModelRecord::State state,
+  ModelRecord::SourceKind source,
+  std::int64_t sourceTime,
+  std::string reason);
 
 // the bytes a record holds (the stats' model bytes): its vertices, indexes and derived
 // arrays

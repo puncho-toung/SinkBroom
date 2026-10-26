@@ -57,6 +57,92 @@ std::size_t bytesOfVector(const std::vector<T>& v)
 
 } // namespace
 
+ModelDispatch modelDispatch(const std::string_view canonical)
+{
+  auto dispatch = ModelDispatch{};
+  if (canonical.empty())
+  {
+    dispatch.path = ModelPath::None;
+    return dispatch;
+  }
+  // ModelManager.cpp:270-291: the built-ins, found by the name hash before the dispatch
+  if (canonical == "_default")
+  {
+    dispatch.path = ModelPath::DefaultModel;
+    dispatch.reason = "the engine's default model";
+    return dispatch;
+  }
+  if (canonical == "_beam" || canonical == "_sprite")
+  {
+    dispatch.path = ModelPath::Default;
+    dispatch.reason = fmt::format(
+      "{} is the engine's own model class: the preview draws the default cube (K47)",
+      canonical);
+    return dispatch;
+  }
+
+  dispatch.extension = engineFileExtension(canonical);
+  const auto& ext = dispatch.extension;
+  if (ext == "obj")
+  {
+    dispatch.path = ModelPath::Source;
+  }
+  else if (ext == "ase" || ext == "lwo")
+  {
+    dispatch.path = ModelPath::PendingLoader;
+    dispatch.reason = fmt::format(
+      "the .{} loader is not in the preview yet (LP7.1b): the default cube stands in",
+      ext);
+  }
+  else if (ext == "ma")
+  {
+    dispatch.path = ModelPath::MayaBinaryOnly;
+    dispatch.reason =
+      "a Maya .ma model is drawn from the engine's .bma only: the default cube (K46)";
+  }
+  else if (ext == "glb" || ext == "gltf")
+  {
+    dispatch.path = ModelPath::GltfBinaryOnly;
+    dispatch.reason =
+      "a glTF model is drawn from the engine's .bglb only: the default cube (K40)";
+  }
+  else if (ext == "md5mesh")
+  {
+    dispatch.path = ModelPath::Skinned;
+    dispatch.reason =
+      "an animated .md5mesh model draws nothing on a static entity, as in the engine "
+      "(K41)";
+  }
+  else if (ext == "md3" || ext == "prt" || ext == "liquid")
+  {
+    dispatch.path = ModelPath::Default;
+    dispatch.reason = fmt::format(
+      "a .{} model is the engine's own model class: the preview draws the default cube "
+      "(K47)",
+      ext);
+  }
+  else if (ext == "flt")
+  {
+    // dispatched to idRenderModelStatic (:417-422), but InitFromFile has no flt loader
+    dispatch.path = ModelPath::Default;
+    dispatch.reason =
+      "the engine has no .flt loader (Model.cpp:350-361): the default cube, as in the "
+      "engine";
+  }
+  else
+  {
+    dispatch.path = ModelPath::Default;
+    dispatch.reason = ext.empty()
+                        ? std::string{"a model name without an extension: the default "
+                                      "cube, as in the engine"}
+                        : fmt::format(
+                            "unknown model type '.{}' (ModelManager.cpp:512): the "
+                            "default cube, as in the engine",
+                            ext);
+  }
+  return dispatch;
+}
+
 bool binaryModelTimeAccepted(const std::int64_t sourceTime, const std::int64_t storedTime)
 {
   // Model.cpp:403: !InProductionMode() && source != FILE_NOT_FOUND_TIMESTAMP && source !=
@@ -162,6 +248,42 @@ ModelRecord modelRecordFromBinary(
     record.glbModelState = glmb->modelState;
     record.glbAnimations = glmb->animationCount;
   }
+  return record;
+}
+
+ModelRecord modelRecordFromEngine(
+  std::string canonical,
+  const EngineModel& model,
+  const ModelRecord::State state,
+  const ModelRecord::SourceKind source,
+  const std::int64_t sourceTime,
+  std::string reason)
+{
+  auto record = ModelRecord{};
+  record.name = std::move(canonical);
+  record.state = state;
+  record.source = source;
+  record.surfaces.reserve(model.surfaces.size());
+  for (const auto& finished : model.surfaces)
+  {
+    auto surface = ModelSurface{};
+    surface.id = finished.id;
+    surface.material = finished.material;
+    surface.verts = finished.verts;
+    surface.indexes = finished.indexes;
+    surface.generateNormals = finished.generateNormals;
+    surface.tangentsCalculated = finished.tangentsCalculated;
+    surface.bounds = finished.bounds;
+    surface.mirroredVerts = finished.mirroredVerts;
+    surface.dupVerts = finished.dupVerts;
+    record.surfaces.push_back(std::move(surface));
+  }
+  record.bounds = model.bounds;
+  record.hasDrawingSurfaces = model.hasDrawingSurfaces;
+  record.hasInteractingSurfaces = model.hasInteractingSurfaces;
+  record.hasShadowCastingSurfaces = model.hasShadowCastingSurfaces;
+  record.sourceTime = sourceTime;
+  record.reason = std::move(reason);
   return record;
 }
 

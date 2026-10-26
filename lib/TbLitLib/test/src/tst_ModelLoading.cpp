@@ -422,4 +422,164 @@ TEST_CASE("ModelLoading, the binary lookup and the engine's time test (LP7.1a, D
   }
 }
 
+namespace
+{
+
+// the stand-in values of a plain drawn, lit, shadowing material without back sides
+EngineModelMaterial plainMaterial(const std::string& name, const int index)
+{
+  auto material = EngineModelMaterial{};
+  material.index = index;
+  material.name = name;
+  material.castsShadow = true;
+  material.drawn = true;
+  material.receivesLighting = true;
+  return material;
+}
+
+// Model.cpp:226-254 AddCubeFace's corners, in MakeDefaultModel's face order (:283-290)
+std::vector<std::array<float, 5>> cubeTranscription()
+{
+  using V = std::array<float, 3>;
+  const auto faces = std::vector<std::array<V, 4>>{
+    {V{-1, 1, 1}, V{1, 1, 1}, V{1, -1, 1}, V{-1, -1, 1}},
+    {V{-1, 1, -1}, V{-1, -1, -1}, V{1, -1, -1}, V{1, 1, -1}},
+    {V{1, -1, 1}, V{1, 1, 1}, V{1, 1, -1}, V{1, -1, -1}},
+    {V{-1, -1, 1}, V{-1, -1, -1}, V{-1, 1, -1}, V{-1, 1, 1}},
+    {V{-1, -1, 1}, V{1, -1, 1}, V{1, -1, -1}, V{-1, -1, -1}},
+    {V{-1, 1, 1}, V{-1, 1, -1}, V{1, 1, -1}, V{1, 1, 1}},
+  };
+  const auto st = std::array<std::array<float, 2>, 4>{{{0, 0}, {1, 0}, {1, 1}, {0, 1}}};
+  auto verts = std::vector<std::array<float, 5>>{};
+  for (const auto& face : faces)
+  {
+    for (auto i = 0; i < 4; ++i)
+    {
+      verts.push_back(
+        {face[i][0] * 8, face[i][1] * 8, face[i][2] * 8, st[i][0], st[i][1]});
+    }
+  }
+  return verts;
+}
+
+} // namespace
+
+TEST_CASE(
+  "ModelLoading: the dispatch of a canonical name (LP7.1a, D127, K40, K41, K46, K47)")
+{
+  const auto pathOf = [](const std::string& name) { return modelDispatch(name).path; };
+  CHECK(pathOf("") == ModelPath::None);
+  CHECK(pathOf("models/test/n01.obj") == ModelPath::Source);
+  CHECK(pathOf("models/test/n04.ase") == ModelPath::PendingLoader);
+  CHECK(pathOf("models/test/n05.lwo") == ModelPath::PendingLoader);
+  CHECK(pathOf("models/test/a.ma") == ModelPath::MayaBinaryOnly);
+  CHECK(pathOf("models/test/a.glb") == ModelPath::GltfBinaryOnly);
+  CHECK(pathOf("models/test/a.gltf") == ModelPath::GltfBinaryOnly);
+  CHECK(pathOf("models/test/a.md5mesh") == ModelPath::Skinned);
+  CHECK(pathOf("_default") == ModelPath::DefaultModel);
+  for (const auto* name :
+       {"_beam",
+        "_sprite",
+        "models/a.md3",
+        "models/a.prt",
+        "models/a.liquid",
+        "models/a.flt",
+        "models/a.fbx",
+        "models/noextension"})
+  {
+    INFO(name);
+    const auto dispatch = modelDispatch(name);
+    CHECK(dispatch.path == ModelPath::Default);
+    CHECK_FALSE(dispatch.reason.empty());
+  }
+  CHECK_THAT(
+    modelDispatch("models/test/n04.ase").reason,
+    Catch::Matchers::ContainsSubstring("LP7.1b"));
+  CHECK(modelDispatch("models/a.fbx").extension == "fbx");
+}
+
+TEST_CASE("ModelLoading: the default cube (LP7.1a, C51, Model.cpp:226-296)")
+{
+  // against a transcription only: the engine never writes its default model as a
+  // binary ("default models shouldn't be cached", ModelManager.cpp:489-499), so no capture
+  // holds a golden of it
+  const auto cube =
+    engineDefaultModel("models/test/missing.obj", plainMaterial("_default", 7));
+  CHECK(cube.defaulted);
+  CHECK_FALSE(cube.isStaticWorldModel);
+  REQUIRE(cube.surfaces.size() == 1u);
+  const auto& surface = cube.surfaces[0];
+  CHECK(surface.material == "_default");
+  CHECK(surface.materialIndex == -1);
+  CHECK(surface.generateNormals);
+  CHECK(surface.tangentsCalculated);
+
+  // 24 vertices of AddCubeFace (no mirrored duplicates: no face shares a vertex)
+  const auto expected = cubeTranscription();
+  REQUIRE(surface.verts.size() == 24u);
+  CHECK(surface.numMirroredVerts == 0);
+  for (std::size_t i = 0; i < expected.size(); ++i)
+  {
+    INFO(i);
+    CHECK(
+      surface.verts[i].xyz == EngineVec3{expected[i][0], expected[i][1], expected[i][2]});
+    const auto st = engineTexCoord(surface.verts[i]);
+    CHECK(st == EngineVec2{expected[i][3], expected[i][4]});
+    // the generated normal points out of the cube
+    const auto n = engineNormal(surface.verts[i]);
+    CHECK(n[0] * expected[i][0] + n[1] * expected[i][1] + n[2] * expected[i][2] > 0.0f);
+    CHECK(int(surface.verts[i].color[0]) == 0);
+  }
+  // 36 indexes, (0, 1, 2), (0, 2, 3) per face
+  REQUIRE(surface.indexes.size() == 36u);
+  for (std::uint16_t f = 0; f < 6; ++f)
+  {
+    const auto b = std::uint16_t(f * 4);
+    const auto at = std::size_t(f) * 6;
+    CHECK(
+      std::vector<std::uint16_t>(
+        surface.indexes.begin() + std::ptrdiff_t(at),
+        surface.indexes.begin() + std::ptrdiff_t(at) + 6)
+      == std::vector<std::uint16_t>{
+        b,
+        std::uint16_t(b + 1),
+        std::uint16_t(b + 2),
+        b,
+        std::uint16_t(b + 2),
+        std::uint16_t(b + 3)});
+  }
+  // R_CreateDupVerts: each corner's later two vertices point at its first: 16 pairs
+  CHECK(surface.dupVerts.size() == 32u);
+  CHECK(
+    surface.bounds
+    == std::array<EngineVec3, 2>{EngineVec3{-8, -8, -8}, EngineVec3{8, 8, 8}});
+  CHECK(cube.bounds == surface.bounds);
+  CHECK(cube.hasDrawingSurfaces);
+  CHECK(cube.hasInteractingSurfaces);
+  CHECK(cube.hasShadowCastingSurfaces);
+
+  SECTION("a record of it: Missing or Default, flagged")
+  {
+    const auto record = modelRecordFromEngine(
+      "models/test/missing.obj",
+      cube,
+      ModelRecord::State::Missing,
+      ModelRecord::SourceKind::Default,
+      -1,
+      "no file");
+    CHECK(record.state == ModelRecord::State::Missing);
+    CHECK(record.source == ModelRecord::SourceKind::Default);
+    CHECK(record.reason == "no file");
+    REQUIRE(record.surfaces.size() == 1u);
+    CHECK(record.surfaces[0].verts == surface.verts);
+    CHECK(record.surfaces[0].dupVerts == surface.dupVerts);
+    CHECK(modelRecordBytes(record) > 24 * sizeof(EngineDrawVert));
+  }
+
+  SECTION("an _area name is a static world model (InitEmpty, Model.cpp:915-934)")
+  {
+    CHECK(engineDefaultModel("_area3", plainMaterial("_default", 7)).isStaticWorldModel);
+  }
+}
+
 } // namespace tb::lit
