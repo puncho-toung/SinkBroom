@@ -203,6 +203,44 @@ std::string_view frameLogHeader()
          "islands,inlined_surfaces\n";
 }
 
+std::string_view casterLogHeader()
+{
+  return "session,frame,settled,lists_rebuilt,lights_in_view,caster_lights,caster_pairs,"
+         "caster_pairs_resident,caster_pairs_pending,casters,caster_ms,light_triangle_"
+         "entries,light_triangles_pending\n";
+}
+
+std::string formatCasterLogRow(const CasterLogRow& row)
+{
+  return fmt::format(
+    "{},{},{},{},{},{},{},{},{},{},{:.3f},{},{}\n",
+    row.session,
+    row.frameIndex,
+    row.settled ? 1 : 0,
+    row.listsRebuilt ? 1 : 0,
+    row.lightsInView,
+    row.casterLights,
+    row.casterPairs,
+    row.casterPairsResident,
+    row.casterPairsPending,
+    row.casters,
+    row.casterMs,
+    row.lightTriangleEntries,
+    row.lightTrianglesPending ? 1 : 0);
+}
+
+std::filesystem::path casterLogPath(const std::filesystem::path& frameLogPath)
+{
+  if (frameLogPath.empty())
+  {
+    return {};
+  }
+  auto name = frameLogPath.stem();
+  name += "-casters";
+  name += frameLogPath.extension();
+  return frameLogPath.parent_path() / name;
+}
+
 std::string formatFrameLogRow(const FrameLogRow& row)
 {
   const auto vram = fmt::format(

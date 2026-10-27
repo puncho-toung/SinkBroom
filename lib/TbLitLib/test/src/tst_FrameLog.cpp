@@ -347,4 +347,28 @@ TEST_CASE("FrameLogWriter")
   }
 }
 
+TEST_CASE("FrameLog: the casters' companion log (LP3.0, P3.14)")
+{
+  // beside the frame log, its stem with -casters; none without a frame log
+  CHECK(
+    casterLogPath(std::filesystem::path{"out"} / "frame-log.csv")
+    == std::filesystem::path{"out"} / "frame-log-casters.csv");
+  CHECK(casterLogPath({}).empty());
+  // a row has the header's fields
+  const auto header = std::string{casterLogHeader()};
+  auto row = CasterLogRow{};
+  row.session = 2;
+  row.frameIndex = 47;
+  row.settled = true;
+  row.casterLights = 11;
+  row.casterPairs = 927;
+  row.casterPairsResident = 927;
+  row.casters = 698;
+  row.casterMs = 1.5;
+  const auto text = formatCasterLogRow(row);
+  CHECK(std::ranges::count(header, ',') == std::ranges::count(text, ','));
+  CHECK(header.back() == '\n');
+  CHECK(text == "2,47,1,0,0,11,927,927,0,698,1.500,0,0\n");
+}
+
 } // namespace tb::lit

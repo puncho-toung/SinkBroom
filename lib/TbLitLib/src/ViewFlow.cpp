@@ -578,8 +578,19 @@ std::optional<bool> lightCastsShadows(const LightRecord& light)
     return std::nullopt;
   }
   // parms.forceShadows || ( ... ): a map light's forceShadows is false
-  // (ParseSpawnArgsToRenderLight's memset), so the shader and noShadows decide
-  return !light.light.parms.noShadows && engineLightCastsShadows(*shader.material);
+  // (ParseSpawnArgsToRenderLight's memset), so the shader and noShadows decide; LP3.0:
+  // the noShadows UpdateLightDef leaves (a spectrum light's forced)
+  return !engineLightNoShadows(light) && engineLightCastsShadows(*shader.material);
+}
+
+bool engineLightNoShadows(const LightRecord& light)
+{
+  // new for BFG edition: force noShadows on spectrum lights so teleport spawns don't
+  // cause such a slowdown (RenderWorld.cpp:524-529)
+  const auto& shader = light.derived.shader;
+  const auto spectrum =
+    !shader.pending && shader.material && shader.material->spectrum != 0;
+  return light.light.parms.noShadows || spectrum;
 }
 
 bool lightReachesSurface(
@@ -619,6 +630,42 @@ bool lightReachesSurface(
     return surface.area >= 0 && reaches(surface.area);
   }
   // the entity's references, in its chain order
+  return std::ranges::any_of(surface.refs, reaches);
+}
+
+bool lightReachesCaster(
+  const AreaLight& light, const AreaSurface& surface, const AreaData& areas)
+{
+  // D81: the outside set by volume, for every light
+  const auto outside =
+    surface.kind == AreaSurfaceKind::WorldOutside
+    || (surface.kind == AreaSurfaceKind::Entity && surface.refs.empty());
+  if (outside)
+  {
+    return true;
+  }
+  // a light without references casts only on the outside set
+  if (light.areas.empty())
+  {
+    return false;
+  }
+  // tr_frontend_addlights.cpp:488-501: the areas the light references, those not
+  // connected to the light's own area skipped unless its area is -1
+  const auto reaches = [&](const int area) {
+    if (std::ranges::find(light.areas, area) == light.areas.end())
+    {
+      return false;
+    }
+    if (light.areaNum != -1)
+    {
+      return areasConnected(areas.components, light.areaNum, area);
+    }
+    return true;
+  };
+  if (surface.kind == AreaSurfaceKind::WorldArea)
+  {
+    return surface.area >= 0 && reaches(surface.area);
+  }
   return std::ranges::any_of(surface.refs, reaches);
 }
 

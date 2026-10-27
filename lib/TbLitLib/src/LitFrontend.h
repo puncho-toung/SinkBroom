@@ -151,6 +151,19 @@ struct ViewLight
   EngineBounds projected = {};
   int shadowLod = -1;
   float shadowFadeOut = 0.0f;
+  /**
+   * LP3.0 (C57, P3.14): the light's casters, for a light that will take tiles (it casts,
+   * shadowLod > -1, it has surfaces): every chunk and model instance of a cast class
+   * (engineCastClass) whose areas reach the light by lightReachesCaster, whose entity is
+   * visible, whose bounds the light volume does not cull (R_CullModelBoundsToLight),
+   * whose material's spectrum is the light shader's (FAM:935-938) and whose light
+   * triangles for this light are not None (INT:658, FAM:1089), on screen or off, in
+   * chunk order then instance order; each with its space (a shadow-only entity's too:
+   * R_SetEntityDefViewEntity, FAL:694-698), its material and its light triangles (null:
+   * all; Pending: not known yet). A TranslucentCaster counts and is never drawn (P3.17).
+   * Nothing draws them before LP3.1.
+   */
+  std::vector<LitSurface> casters;
 };
 
 // LP5.3 (C45, C49): the kind of a light of this shader (ViewLightKind's rule). Pure.
@@ -217,6 +230,20 @@ struct FrontendLists
 
   // LP4.3 (C36): the drawn surfaces (drawSurfs) that have a grid area
   std::size_t gridSurfaces = 0;
+
+  // ----- LP3.0 (C57, P3.14, P3.24f): the caster light-triangle requests -----
+
+  // the lights whose casters were gathered (ViewLight::casters)
+  std::size_t casterLights = 0;
+  // the (light, chunk or instance) pairs whose light triangles were asked for as
+  // casters, those the cache answered (All, Runs or None) and those Pending, and the
+  // casters kept (not None)
+  std::size_t casterPairs = 0;
+  std::size_t casterPairsResident = 0;
+  std::size_t casterPairsPending = 0;
+  std::size_t casters = 0;
+  // the gathering's own time in this build (steady clock), in milliseconds
+  double casterMs = 0.0;
 };
 
 // what the frontend reads; the functions answer from the material table and the

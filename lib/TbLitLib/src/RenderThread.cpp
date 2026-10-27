@@ -24,6 +24,7 @@
 #include "StackThread.h"
 #include "Swapchain.h"
 #include "lit/EngineTables.h"
+#include "lit/FrameLog.h"
 #include "lit/MapBake.h"
 #include "lit/SceneGeometry.h"
 #include "lit/Snapshot.h"
@@ -36,6 +37,7 @@
 #include <nvrhi/vulkan.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <stdexcept>
 #include <utility>
 
@@ -1510,6 +1512,18 @@ void RenderThread::main() noexcept
     {
       m_events.post(SessionEvent::Warning, *error);
     }
+    else if (const auto casterLog = casterLogPath(m_options.frameLogPath);
+             !casterLog.empty())
+    {
+      // LP3.0 (P3.14): appended to; the header into an empty file only
+      auto existing = std::error_code{};
+      const auto size = std::filesystem::file_size(casterLog, existing);
+      m_casterLog.open(casterLog, std::ios::binary | std::ios::app);
+      if (m_casterLog && (existing || size == 0))
+      {
+        m_casterLog << casterLogHeader();
+      }
+    }
     appendSessionRow(FrameLogEvent::Start);
     // S31: the inbox is empty
     m_events.post(SessionEvent::ReadyForSnapshot, {});
@@ -2111,6 +2125,25 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.pushConstantBytes = litStats.pushConstantBytes + tonemap.pushConstantBytes;
       row.settled = m_convergence.settled();
       m_timers.frameShown(slot, row);
+      // LP3.0 (P3.14): the caster light-triangle requests behind the frame's lists
+      if (m_casterLog.is_open())
+      {
+        auto casters = CasterLogRow{};
+        casters.session = row.session;
+        casters.frameIndex = frame;
+        casters.settled = row.settled.value_or(false);
+        casters.listsRebuilt = litStats.listsRebuilt;
+        casters.lightsInView = litStats.lightsInView;
+        casters.casterLights = litStats.casterLights;
+        casters.casterPairs = litStats.casterPairs;
+        casters.casterPairsResident = litStats.casterPairsResident;
+        casters.casterPairsPending = litStats.casterPairsPending;
+        casters.casters = litStats.casters;
+        casters.casterMs = litStats.casterMs;
+        casters.lightTriangleEntries = litStats.lightTriangleEntries;
+        casters.lightTrianglesPending = litStats.lightTrianglesPending;
+        m_casterLog << formatCasterLogRow(casters);
+      }
       ++m_framesPresented;
       // LP2.3 (D9): the panel's status line reads the frame's counts
       {
@@ -2677,6 +2710,10 @@ void RenderThread::finish() noexcept
     m_timers.flushUnresolved(m_frameIndex);
     appendSessionRow(FrameLogEvent::Stop);
     m_frameLogError = m_timers.closeLog();
+    if (m_casterLog.is_open())
+    {
+      m_casterLog.close();
+    }
   }
   catch (const std::exception& e)
   {

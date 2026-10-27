@@ -188,6 +188,17 @@ struct LitFrameStats
   bool interactionsTimed = false;
   // LP4.3 (C36): the drawn surfaces with a grid area (FrontendLists::gridSurfaces)
   std::size_t gridSurfaces = 0;
+  // LP3.0 (C57, P3.14, P3.24f): the caster light-triangle requests of the frame's lists
+  // (FrontendLists): the lights that gathered casters, the (light, chunk) pairs asked
+  // for, answered and pending, the casters kept, the gathering's time when the lists were
+  // built this frame (0 when they were kept), and the light-triangle cache's entries
+  std::size_t casterLights = 0;
+  std::size_t casterPairs = 0;
+  std::size_t casterPairsResident = 0;
+  std::size_t casterPairsPending = 0;
+  std::size_t casters = 0;
+  double casterMs = 0.0;
+  std::size_t lightTriangleEntries = 0;
   // LP7.3 (C54): the dress surfaces the frame draws (FrontendLists::dressSurfaces: the
   // frame log's dress_surfaces)
   std::size_t dressSurfaces = 0;

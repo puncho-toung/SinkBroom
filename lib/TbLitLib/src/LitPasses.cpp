@@ -219,6 +219,15 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
     m_lists.lightTrianglesPending || m_lightTriangles.busy();
   m_stats.unconverged = m_stats.unconverged || m_stats.lightTrianglesPending;
   m_stats.culledTriangles = m_lists.culledTriangles;
+  // LP3.0 (C57, P3.14): the casters' requests behind the lists (their time only when the
+  // lists were built this frame)
+  m_stats.casterLights = m_lists.casterLights;
+  m_stats.casterPairs = m_lists.casterPairs;
+  m_stats.casterPairsResident = m_lists.casterPairsResident;
+  m_stats.casterPairsPending = m_lists.casterPairsPending;
+  m_stats.casters = m_lists.casters;
+  m_stats.casterMs = m_stats.listsRebuilt ? m_lists.casterMs : 0.0;
+  m_stats.lightTriangleEntries = m_lightTriangles.size();
 
   // LP4.2a (C37, D79, D88): R_FindClosestEnvironmentProbes, every frame, from the probe
   // table and the slots' states: Ready once a slot binds a written level of its own,

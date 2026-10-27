@@ -132,10 +132,6 @@ std::uint64_t fnvText(const std::uint64_t h, const std::string& text)
 
 constexpr auto FnvBasis = 0xCBF29CE484222325ull;
 
-// renderer/Material.h:392-394
-constexpr auto CoverageOpaque = 1;
-constexpr auto CoveragePerforated = 2;
-
 // R_AxisToModelMatrix's rows (RenderWorld_defs.cpp:49-60): a model-space point v is
 // origin + v.x axis[0] + v.y axis[1] + v.z axis[2] in world space; the bounds of the
 // eight corners
@@ -647,21 +643,8 @@ void SceneGeometry::buildModelEntity(const PreviewId id)
     header.bounds = surface.bounds;
     header.sourceMaterial = surface.material;
     header.provisional = !own || !draw || skinPending;
-    // S36: the draw material's cast class, the noshadows flag
-    if (!draw)
-    {
-      header.castClass = state.parms.noShadows ? CastClass::None : CastClass::Opaque;
-    }
-    else if (!draw->surfaceCastsShadow || state.parms.noShadows)
-    {
-      header.castClass = CastClass::None;
-    }
-    else
-    {
-      header.castClass = draw->coverage == CoverageOpaque       ? CastClass::Opaque
-                         : draw->coverage == CoveragePerforated ? CastClass::Perforated
-                                                                : CastClass::None;
-    }
+    // S36: the draw material's cast class, the noshadows flag (LP3.0: C57's rule)
+    header.castClass = engineCastClass(draw, state.parms.noShadows);
     // the caster version: the geometry (the record's name, version and surface), the cast
     // class and the flags; an entity whose model changes to another record of an equal
     // version moves it too (LightTriangles' stamp reads it)

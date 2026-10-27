@@ -111,12 +111,37 @@ CellCoord cellOfNode(const SceneNode& node);
 
 // ----- chunks (D59, C4, S36, R5.28) -----
 
+/**
+ * LP3.0 (C57, SC706-SC707, SC738, P3.17): how a chunk or a model surface casts:
+ * Opaque (the opaque shadow pass), Perforated (the perforated pass, its stage alpha
+ * test), TranslucentCaster (a translucent surface that makes the engine's shadow surface,
+ * so its light takes tiles and the SM program, but that the tile pass skips at draw time,
+ * RenderBackend.cpp:3506-3509), None.
+ */
 enum class CastClass : std::uint8_t
 {
   None,
   Opaque,
   Perforated,
+  TranslucentCaster,
 };
+
+/**
+ * LP3.0 (C57): the cast class of a surface of this draw material on an entity, by
+ * R_AddSingleModel's shadow surface rule (tr_frontend_addmodels.cpp:1018-1089) and
+ * CreateStaticInteraction's light triangles (Interaction.cpp:658): None for an entity
+ * with noShadows (FAM:1070); None when the material neither SurfaceCastsShadow()
+ * (Material.h:584-587: MF_FORCESHADOWS or not MF_NOSHADOWS) nor is MC_PERFORATED under
+ * r_forceShadowMapsOnAlphaTestedSurfaces 1 (FAM:1018-1024: a perforated noShadows
+ * material casts, perforated decals included); None when it does not ReceivesLighting()
+ * (Material.h:599-602: a static surface without light triangles casts nothing);
+ * otherwise Perforated for MC_PERFORATED, TranslucentCaster for MC_TRANSLUCENT, Opaque
+ * else (MC_OPAQUE, and MC_BAD, which the tile pass draws as opaque). A material not known
+ * yet (null) is Opaque, provisionally (its chunk is rebuilt when it arrives). The
+ * light's side (it casts, the caster's light triangles for it are not empty) is the
+ * frontend's (LitFrontend.h, casters). Pure.
+ */
+CastClass engineCastClass(const MaterialEntry* material, bool entityNoShadows);
 
 // (area, entity, material, cell) and a part number for a key whose triangles do not fit
 // in one chunk; the entity's state is the chunk's, so a changed state rebuilds the

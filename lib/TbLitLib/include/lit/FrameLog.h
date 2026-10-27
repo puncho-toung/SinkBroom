@@ -186,6 +186,38 @@ struct FrameLogRow
 // the CSV header line, ending in a newline
 std::string_view frameLogHeader();
 
+/**
+ * LP3.0 (C57, P3.14, P3.24f): one row of the casters' measurement log, the frame log's
+ * companion (casterLogPath): per presented frame, the caster light-triangle requests of
+ * the frame's lists (LitFrameStats), so that [.][measure] on admin records them without a
+ * frame-log column (LP3.0 adds none; LP3.1's D157 counters fold them into the frame log
+ * with its pre-authorised TbUiLib edits).
+ */
+struct CasterLogRow
+{
+  std::uint64_t session = 0;
+  std::uint64_t frameIndex = 0;
+  bool settled = false;
+  bool listsRebuilt = false;
+  std::uint64_t lightsInView = 0;
+  std::uint64_t casterLights = 0;
+  std::uint64_t casterPairs = 0;
+  std::uint64_t casterPairsResident = 0;
+  std::uint64_t casterPairsPending = 0;
+  std::uint64_t casters = 0;
+  double casterMs = 0.0;
+  std::uint64_t lightTriangleEntries = 0;
+  bool lightTrianglesPending = false;
+};
+
+// the casters' log header line and one row, each ending in a newline
+std::string_view casterLogHeader();
+std::string formatCasterLogRow(const CasterLogRow& row);
+
+// the casters' log beside a frame log: <stem>-casters<extension> in its folder; empty for
+// an empty frame-log path
+std::filesystem::path casterLogPath(const std::filesystem::path& frameLogPath);
+
 // one CSV line, ending in a newline; a field that does not apply or is unknown is empty
 std::string formatFrameLogRow(const FrameLogRow& row);
 

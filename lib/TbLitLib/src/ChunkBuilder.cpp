@@ -33,6 +33,7 @@
 
 #include "lit/AreaTree.h"
 #include "lit/CpuPool.h"
+#include "lit/EngineTables.h"
 #include "lit/MaterialService.h"
 #include "lit/ProcFile.h"
 
@@ -50,8 +51,8 @@ namespace
 
 // renderer/Material.h:349, :392-394, :295-297
 constexpr auto ContentsOrigin = 1 << 22;
-constexpr auto CoverageOpaque = 1;
 constexpr auto CoveragePerforated = 2;
+constexpr auto CoverageTranslucent = 3;
 
 bool equalsNoCase(const std::string_view lhs, const std::string_view rhs)
 {
@@ -1171,24 +1172,11 @@ private:
     }
     chunk.bounds = engineBoundsOfPoints(positions);
 
-    // S36, R5.28: the cast class (LP7.2: the draw material's) and the two versions
+    // S36, R5.28: the cast class (LP7.2: the draw material's; LP3.0: C57's rule) and the
+    // two versions
     const auto& parms = context.state.parms;
     const auto noShadows = !context.world && parms.noShadows;
-    if (!drawMaterial.castsShadow || noShadows)
-    {
-      chunk.castClass = CastClass::None;
-    }
-    else if (!drawMaterial.entry)
-    {
-      chunk.castClass = CastClass::Opaque;
-    }
-    else
-    {
-      chunk.castClass = drawMaterial.entry->coverage == CoverageOpaque ? CastClass::Opaque
-                        : drawMaterial.entry->coverage == CoveragePerforated
-                          ? CastClass::Perforated
-                          : CastClass::None;
-    }
+    chunk.castClass = engineCastClass(drawMaterial.entry, noShadows);
     // C21: the faces' own editor-image size; LP7.2 (A41): a skin not in the table yet
     chunk.provisional = material.provisional || (!context.world && context.skinPending);
     chunk.adopted = !editorTriangles && !dress;
@@ -1295,6 +1283,39 @@ private:
 };
 
 } // namespace
+
+CastClass engineCastClass(const MaterialEntry* material, const bool entityNoShadows)
+{
+  // some entities, like view weapons, don't cast any shadows (FAM:1069-1073)
+  if (entityNoShadows)
+  {
+    return CastClass::None;
+  }
+  if (!material)
+  {
+    return CastClass::Opaque;
+  }
+  const auto perforated = material->coverage == CoveragePerforated;
+  // FAM:1018-1021: SurfaceCastsShadow, or perforated with
+  // r_forceShadowMapsOnAlphaTestedSurfaces
+  if (
+    !material->surfaceCastsShadow
+    && !(EngineFrame.forceShadowMapsOnAlphaTestedSurfaces && perforated))
+  {
+    return CastClass::None;
+  }
+  // INT:658: only a surface that receives lighting has light triangles to cast with
+  if (!material->receivesLighting)
+  {
+    return CastClass::None;
+  }
+  if (perforated)
+  {
+    return CastClass::Perforated;
+  }
+  return material->coverage == CoverageTranslucent ? CastClass::TranslucentCaster
+                                                   : CastClass::Opaque;
+}
 
 const std::string& chunkSourceMaterial(const Chunk& chunk)
 {

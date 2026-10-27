@@ -1810,6 +1810,179 @@ TEST_CASE("LitPasses: the light sort's input and the CRT's qsort (LP3.0, D148)")
   CHECK(engineViewLightsOrder({-199095295, 2147483647}).front() == 0u);
 }
 
+TEST_CASE("LitPasses: the cast class of a surface (LP3.0, C57)")
+{
+  namespace em = engine_material;
+  const auto material =
+    [](const bool castsShadow, const bool receivesLighting, const int coverage) {
+      auto entry = MaterialEntry{};
+      entry.surfaceCastsShadow = castsShadow;
+      entry.receivesLighting = receivesLighting;
+      entry.coverage = coverage;
+      return entry;
+    };
+  // FAM:1018-1024, INT:658: SurfaceCastsShadow (or perforated, forced), ReceivesLighting
+  const auto opaque = material(true, true, em::CoverageOpaque);
+  CHECK(engineCastClass(&opaque, false) == CastClass::Opaque);
+  CHECK(engineCastClass(&opaque, true) == CastClass::None);
+  const auto perforated = material(true, true, em::CoveragePerforated);
+  CHECK(engineCastClass(&perforated, false) == CastClass::Perforated);
+  // r_forceShadowMapsOnAlphaTestedSurfaces 1: a perforated noShadows material casts
+  // (SC738's gap), an opaque or translucent one does not
+  const auto perforatedNoShadows = material(false, true, em::CoveragePerforated);
+  CHECK(EngineFrame.forceShadowMapsOnAlphaTestedSurfaces);
+  CHECK(engineCastClass(&perforatedNoShadows, false) == CastClass::Perforated);
+  CHECK(engineCastClass(&perforatedNoShadows, true) == CastClass::None);
+  const auto opaqueNoShadows = material(false, true, em::CoverageOpaque);
+  CHECK(engineCastClass(&opaqueNoShadows, false) == CastClass::None);
+  // a surface that receives no lighting has no light triangles: it casts nothing
+  // (forceShadows on an unlit or invisible surface, SC707)
+  const auto unlit = material(true, false, em::CoverageOpaque);
+  CHECK(engineCastClass(&unlit, false) == CastClass::None);
+  const auto unlitPerforated = material(false, false, em::CoveragePerforated);
+  CHECK(engineCastClass(&unlitPerforated, false) == CastClass::None);
+  // a translucent surface that passes is a caster that draws nothing (P3.17)
+  const auto translucent = material(true, true, em::CoverageTranslucent);
+  CHECK(engineCastClass(&translucent, false) == CastClass::TranslucentCaster);
+  const auto translucentNoShadows = material(false, true, em::CoverageTranslucent);
+  CHECK(engineCastClass(&translucentNoShadows, false) == CastClass::None);
+  // MC_BAD is drawn by the opaque pass
+  const auto bad = material(true, true, em::CoverageBad);
+  CHECK(engineCastClass(&bad, false) == CastClass::Opaque);
+  // a material not known yet: Opaque, provisionally; an entity's noShadows still wins
+  CHECK(engineCastClass(nullptr, false) == CastClass::Opaque);
+  CHECK(engineCastClass(nullptr, true) == CastClass::None);
+}
+
+TEST_CASE("LitPasses: the casters of a casting light, on screen or off (LP3.0, C57)")
+{
+  auto f = frontendFixture();
+  const auto tree =
+    readProcFile(readTextFile(
+      litFixtureFolder() / "goldens" / "lp1b_geometry" / "lp1b_geometry.proc"))
+    | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  const auto areas = buildAreaData(tree);
+  REQUIRE(areas.areas.size() == 2u);
+  constexpr auto World = PreviewId{1};
+
+  auto scene = FlowScene{};
+  scene.tree = &tree;
+  scene.areas = &areas;
+  // ahead of the eye and lit; behind it (culled by the view, never a lit surface); in
+  // area 0, which the light does not reference
+  addChunk(scene, 1, World, {-185, -10, 40}, {-175, 10, 56});
+  addChunk(scene, 1, World, {-240, -10, 40}, {-230, 10, 56}, "textures/lp1b/floor");
+  addChunk(scene, 0, World, {100, -10, 40}, {110, 10, 56});
+  // a casting point light around the eye (noshadows 0), and the same light that does not
+  // cast
+  addLight(
+    scene, *f, 20, EntityKeys{{"origin", "-200 0 48"}, {"light_radius", "50 50 50"}});
+  addLight(
+    scene,
+    *f,
+    21,
+    EntityKeys{
+      {"origin", "-200 0 48"}, {"light_radius", "50 50 50"}, {"noshadows", "1"}});
+  REQUIRE(lightCastsShadows(*scene.lights.find(20)).value_or(false));
+  REQUIRE_FALSE(lightCastsShadows(*scene.lights.find(21)).value_or(true));
+  REQUIRE(scene.lights.find(20)->derived.areas == std::vector<int>{1});
+
+  const auto lists = flowListsOf(*f, scene, cameraAt({-200, 0, 48}, {1, 0, 0}));
+  REQUIRE(lists.flowed);
+  const auto* casting = viewLightOf(lists, 20);
+  const auto* plain = viewLightOf(lists, 21);
+  REQUIRE(casting);
+  REQUIRE(plain);
+  // the camera inside: LOD 0, so 1 (512) for a point light; a light that does not cast
+  // keeps -1 and gathers no casters
+  CHECK(casting->shadowLod == 1);
+  CHECK(casting->shadowFadeOut == 0.0f);
+  CHECK(plain->shadowLod == -1);
+  CHECK(plain->casters.empty());
+  // lit: the chunk ahead alone; casters: it and the one behind the eye, not area 0's
+  CHECK(litOf(casting) == std::set<std::pair<int, PreviewId>>{{1, World}});
+  CHECK(casting->globalInteractions.size() == 1u);
+  auto casters = std::set<std::string>{};
+  for (const auto& caster : casting->casters)
+  {
+    casters.insert(caster.chunk->key.material);
+    CHECK(caster.chunk->key.area == 1);
+    CHECK(caster.space < lists.spaces.size());
+  }
+  CHECK(casters == std::set<std::string>{"textures/lp1b/wall", "textures/lp1b/floor"});
+  CHECK(lists.casterLights == 1u);
+  CHECK(lists.casterPairs == 2u);
+  CHECK(lists.casterPairsResident == 2u);
+  CHECK(lists.casterPairsPending == 0u);
+  CHECK(lists.casters == 2u);
+
+  // lightReachesCaster, the rule the gathering tabulates per light: an area the light
+  // references (connected to its own), D81's outside set by volume, never directly
+  // visible
+  {
+    const auto refs = std::vector<int>{1};
+    const auto light = AreaLight{1, refs};
+    auto surface = AreaSurface{};
+    surface.kind = AreaSurfaceKind::WorldArea;
+    surface.area = 1;
+    surface.directlyVisible = false;
+    CHECK(lightReachesCaster(light, surface, areas));
+    CHECK_FALSE(lightReachesSurface(light, surface, areas));
+    surface.area = 0;
+    CHECK_FALSE(lightReachesCaster(light, surface, areas));
+    const auto entityRefs = std::vector<int>{0, 1};
+    surface.kind = AreaSurfaceKind::Entity;
+    surface.refs = entityRefs;
+    CHECK(lightReachesCaster(light, surface, areas));
+    surface.refs = {};
+    CHECK(lightReachesCaster(light, surface, areas));
+    surface.kind = AreaSurfaceKind::WorldOutside;
+    CHECK(lightReachesCaster(AreaLight{-1, {}}, surface, areas));
+    surface.kind = AreaSurfaceKind::WorldArea;
+    surface.area = 1;
+    CHECK_FALSE(lightReachesCaster(AreaLight{-1, {}}, surface, areas));
+    // area -1 skips the connection test
+    CHECK(lightReachesCaster(AreaLight{-1, refs}, surface, areas));
+  }
+
+  // the entity's noShadows (a cast class of None) takes a chunk out of the set
+  auto quiet = scene;
+  for (auto& [key, chunk] : quiet.chunks)
+  {
+    if (key.material == "textures/lp1b/floor")
+    {
+      chunk.castClass = CastClass::None;
+    }
+  }
+  const auto quietLists = flowListsOf(*f, quiet, cameraAt({-200, 0, 48}, {1, 0, 0}));
+  REQUIRE(viewLightOf(quietLists, 20));
+  CHECK(viewLightOf(quietLists, 20)->casters.size() == 1u);
+  CHECK(quietLists.casterPairs == 1u);
+}
+
+TEST_CASE("LitPasses: a spectrum light's forced noShadows (LP3.0, C57, P3.16)")
+{
+  // UpdateLightDef forces noShadows on a light whose shader has a spectrum
+  // (RenderWorld.cpp:524-529): it casts nothing, and its noSelfShadow surfaces go to the
+  // global list (FAM:999)
+  auto shader = std::make_shared<MaterialEntry>();
+  shader->name = "lights/lp3_spectrum";
+  auto record = LightRecord{};
+  record.derived.shader.material = shader;
+  CHECK_FALSE(engineLightNoShadows(record));
+  shader->spectrum = 2;
+  CHECK(engineLightNoShadows(record));
+  CHECK_FALSE(lightCastsShadows(record).value_or(true));
+  record.light.parms.noShadows = true;
+  shader->spectrum = 0;
+  CHECK(engineLightNoShadows(record));
+  // a pending shader leaves the map's flag
+  record.light.parms.noShadows = false;
+  record.derived.shader.pending = true;
+  CHECK_FALSE(engineLightNoShadows(record));
+}
+
 TEST_CASE("LitPasses: the grid area of the drawn surfaces (LP4.3, C36, P4.11)")
 {
   auto f = frontendFixture();

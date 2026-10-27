@@ -961,7 +961,7 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
         }
         const auto list =
           surface.material
-            ? engineInteractionList(*surface.material, record->light.parms.noShadows)
+            ? engineInteractionList(*surface.material, engineLightNoShadows(*record))
             : InteractionList::Global;
         switch (list)
         {
@@ -1034,6 +1034,189 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
     }
   }
   lists.lights = std::move(sorted);
+
+  // LP3.0 (C57, P3.14, P3.16, P3.17): the casters of every light that will take tiles
+  // (the atlas pass's loop 1 skips fog and blend lights, lights without an interaction
+  // and LOD -1, RenderBackend.cpp:3653-3674), requested here, per casting light, as the
+  // lists are made: R_AddSingleLight's area walk from the light's own area
+  // (lightReachesCaster's rule), R_AddSingleModel's shadow surface rule (the cast class,
+  // the light volume's cull, the spectrum, the light triangles), on screen or off. The
+  // candidates (every chunk and instance of a cast class) and what does not depend on the
+  // light (their areas, their space, their material) are gathered once per build
+  const auto casterStart = std::chrono::steady_clock::now();
+  const auto anyCaster = std::ranges::any_of(lists.lights, [](const ViewLight& light) {
+    return light.shadowLod >= 0 && light.shader;
+  });
+  struct CasterCandidate
+  {
+    const ChunkKey* key = nullptr;
+    const Chunk* chunk = nullptr;
+    const ModelInstance* instance = nullptr;
+    AreaSurface areaSurface;
+    // made on first use: the space (none: an invisible entity) and the material
+    bool resolved = false;
+    std::optional<std::size_t> space;
+    std::shared_ptr<const MaterialEntry> material;
+  };
+  auto candidates = std::vector<CasterCandidate>{};
+  if (anyCaster)
+  {
+    const auto add =
+      [&](const ChunkKey& key, const Chunk& chunk, const ModelInstance* instance) {
+        if (chunk.castClass == CastClass::None)
+        {
+          return;
+        }
+        auto candidate = CasterCandidate{};
+        candidate.key = &key;
+        candidate.chunk = &chunk;
+        candidate.instance = instance;
+        if (const auto* state = stateOf(key.entity))
+        {
+          candidate.areaSurface.kind = AreaSurfaceKind::Entity;
+          candidate.areaSurface.refs = state->areas;
+        }
+        else if (key.area >= 0 && std::size_t(key.area) < numAreas)
+        {
+          candidate.areaSurface.kind = AreaSurfaceKind::WorldArea;
+          candidate.areaSurface.area = key.area;
+        }
+        else
+        {
+          candidate.areaSurface.kind = AreaSurfaceKind::WorldOutside;
+        }
+        candidates.push_back(std::move(candidate));
+      };
+    for (const auto& [key, chunk] : *inputs.chunks)
+    {
+      if (!chunk.indexes.empty())
+      {
+        add(key, chunk, nullptr);
+      }
+    }
+    if (inputs.instances)
+    {
+      for (const auto& [key, instance] : *inputs.instances)
+      {
+        if (instance.geometry && instance.geometry->indexCount() > 0)
+        {
+          add(key, instance.header, &instance);
+        }
+      }
+    }
+  }
+  for (auto& viewLight : lists.lights)
+  {
+    if (viewLight.shadowLod < 0 || !viewLight.shader)
+    {
+      continue;
+    }
+    const auto& record = *viewLight.record;
+    const auto& projection = record.derived.projection;
+    const auto areaNum = record.derived.areaNum;
+    const auto spectrum = viewLight.shader->spectrum;
+    ++lists.casterLights;
+    // lightReachesCaster's rule per area, once per light: an area the light references,
+    // connected to the light's own area unless that is -1 (FAL:488-501)
+    auto reaches = std::vector<char>(numAreas, 0);
+    for (const auto area : record.derived.areas)
+    {
+      if (
+        area >= 0 && std::size_t(area) < numAreas
+        && (areaNum == -1 || areasConnected(inputs.areas->components, areaNum, area)))
+      {
+        reaches[std::size_t(area)] = 1;
+      }
+    }
+    const auto reachesArea = [&](const int area) {
+      return area >= 0 && std::size_t(area) < numAreas && reaches[std::size_t(area)] != 0;
+    };
+    const auto hasReferences = !record.derived.areas.empty();
+    for (auto& candidate : candidates)
+    {
+      if (flow.flowed)
+      {
+        // D81: the outside set by volume, for every light; a light without references
+        // casts only on it
+        const auto& areaSurface = candidate.areaSurface;
+        const auto outside =
+          areaSurface.kind == AreaSurfaceKind::WorldOutside
+          || (areaSurface.kind == AreaSurfaceKind::Entity && areaSurface.refs.empty());
+        if (!outside)
+        {
+          if (!hasReferences)
+          {
+            continue;
+          }
+          const auto reached = areaSurface.kind == AreaSurfaceKind::WorldArea
+                                 ? reachesArea(areaSurface.area)
+                                 : std::ranges::any_of(areaSurface.refs, reachesArea);
+          if (!reached)
+          {
+            continue;
+          }
+        }
+      }
+      if (!candidate.resolved)
+      {
+        candidate.resolved = true;
+        candidate.space = space(candidate.key->entity);
+        if (candidate.space && inputs.material)
+        {
+          candidate.material = inputs.material(candidate.key->material).entry;
+        }
+      }
+      if (!candidate.space)
+      {
+        continue;
+      }
+      const auto& litSpace = lists.spaces[*candidate.space];
+      if (engineCullModelBoundsToLight(
+            projection.baseLightProject,
+            candidate.chunk->bounds,
+            litSpace.modelRenderMatrix))
+      {
+        continue;
+      }
+      // "invisible ink" lights and shaders (FAM:935-938)
+      if (candidate.material && candidate.material->spectrum != spectrum)
+      {
+        continue;
+      }
+      auto caster = LitSurface{};
+      caster.chunk = candidate.chunk;
+      caster.instance = candidate.instance;
+      caster.space = *candidate.space;
+      caster.material = candidate.material;
+      ++lists.casterPairs;
+      const auto triangles = inputs.lightTriangles
+                               ? inputs.lightTriangles(record, caster, litSpace)
+                               : std::shared_ptr<const LightTriangles>{};
+      if (triangles && triangles->state == LightTriangles::State::None)
+      {
+        // no triangle of the surface reaches the light: no shadow surface (FAM:1089)
+        ++lists.casterPairsResident;
+        continue;
+      }
+      if (triangles && triangles->state == LightTriangles::State::Pending)
+      {
+        ++lists.casterPairsPending;
+      }
+      else
+      {
+        ++lists.casterPairsResident;
+      }
+      if (triangles && triangles->state != LightTriangles::State::All)
+      {
+        caster.lightTriangles = triangles;
+      }
+      viewLight.casters.push_back(std::move(caster));
+      ++lists.casters;
+    }
+  }
+  lists.casterMs = std::chrono::duration<double, std::milli>(
+                     std::chrono::steady_clock::now() - casterStart)
+                     .count();
   return lists;
 }
 

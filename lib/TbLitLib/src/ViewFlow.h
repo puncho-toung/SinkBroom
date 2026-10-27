@@ -268,9 +268,21 @@ bool engineCullCornersByPortals(
  * light: ParseSpawnArgsToRenderLight clears the renderLight_t (d3xp/Light.cpp:90) and
  * only the projectiles' lights set it (d3xp/Projectile.cpp:262, :1186), so here it is a
  * constant false (mirror.json M-LIGHT-DIFF-07). nullopt while the light's shader is
- * pending or has no entry: the caller treats the light as pending, LP2's rule. Pure.
+ * pending or has no entry: the caller treats the light as pending, LP2's rule. LP3.0
+ * (C57, P3.16): noShadows is the engine's after UpdateLightDef, which forces it on a
+ * light whose shader has a spectrum (RenderWorld.cpp:524-529, engineLightNoShadows).
+ * Pure.
  */
 std::optional<bool> lightCastsShadows(const LightRecord& light);
+
+/**
+ * LP3.0 (C57, P3.16): idRenderLightLocal::parms.noShadows as UpdateLightDef leaves it
+ * (RenderWorld.cpp:524-529): the map's noshadows, or true for a light whose shader has a
+ * spectrum ("force noShadows on spectrum lights"), which also moves its noSelfShadow
+ * surfaces to the global list (tr_frontend_addmodels.cpp:999). A pending or missing
+ * shader leaves the map's. Pure.
+ */
+bool engineLightNoShadows(const LightRecord& light);
 
 // ----- the pairing and the grid area (C33, C36, D81; pure, wired in LP4.1) -----
 
@@ -323,6 +335,21 @@ struct AreaSurface
  * Only with a tree (D94: without one LP2's rules stand). Pure.
  */
 bool lightReachesSurface(
+  const AreaLight& light, const AreaSurface& surface, const AreaData& areas);
+
+/**
+ * LP3.0 (C57, P3.14, P3.16): R_AddSingleLight's area walk for shadows
+ * (tr_frontend_addlights.cpp:488-634) as the caster set reads it: a surface may cast for
+ * the light when one of its areas is one the light references and that area is connected
+ * to the light's own area (AreasAreConnected( light->areaNum, area ), FAL:494-501,
+ * r_useAreasConnectedForShadowCulling 2); a light of area -1 (every parallel light: its
+ * origin is pushed 100000 along its direction, RenderWorld_defs.cpp:432-440, :703) skips
+ * the connection test and casts from every area it references. Unlike
+ * lightReachesSurface the surface need not be directly visible (a shadow-only entity,
+ * FAL:585-633; the engine's view cull of R_ShadowBounds, :605-618, is not mirrored: K49).
+ * D81's outside set casts by volume alone, as it is lit. Pure.
+ */
+bool lightReachesCaster(
   const AreaLight& light, const AreaSurface& surface, const AreaData& areas);
 
 /**

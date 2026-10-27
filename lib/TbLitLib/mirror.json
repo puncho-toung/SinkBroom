@@ -17789,9 +17789,13 @@
         {
           "file": "lib/TbLitLib/src/SceneGeometry.cpp",
           "symbol": "SceneGeometry::updateEntityReferences"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (LP3.0: the casters, no cap)"
         }
       ],
-      "note": "LP4.0 (D94, D81, P4.4, P4.8, P4.22): without a tree (no .proc and no .bproc, or one without nodes) the flow is skipped (flowed false, viewArea -1): the engine cannot load such a map (InitFromMap fails), the preview keeps LP2's rules (every chunk frustum-tested, every light with a volume a view light with the projected scissor alone, lights through walls: K1, K15). With a tree, what lies outside the baked hull (world pieces in area -1, D47; brush entities and lights whose volume pushes into no area) has no references: the engine never draws or lights it (dmap drops such pieces; such a light is in no lightRefs), the preview treats it as the outside set, drawn whenever in the frustum and lit by volume by every light, a light of the set lighting only the set (K14 extended). MAX_CONTACTED_LIGHTS (128 lights per entity) is not kept in the pairing; unreachable on admin LP4.1: wired, buildFrontendLists keeps LP2's lists without a tree (a regression test pins the LP1b fixture's lists of three cameras as they were before the flow) and draws and lights the outside set with one."
+      "note": "LP4.0 (D94, D81, P4.4, P4.8, P4.22): without a tree (no .proc and no .bproc, or one without nodes) the flow is skipped (flowed false, viewArea -1): the engine cannot load such a map (InitFromMap fails), the preview keeps LP2's rules (every chunk frustum-tested, every light with a volume a view light with the projected scissor alone, lights through walls: K1, K15). With a tree, what lies outside the baked hull (world pieces in area -1, D47; brush entities and lights whose volume pushes into no area) has no references: the engine never draws or lights it (dmap drops such pieces; such a light is in no lightRefs), the preview treats it as the outside set, drawn whenever in the frustum and lit by volume by every light, a light of the set lighting only the set (K14 extended). MAX_CONTACTED_LIGHTS (128 lights per entity) is not kept in the pairing; unreachable on admin LP4.1: wired, buildFrontendLists keeps LP2's lists without a tree (a regression test pins the LP1b fixture's lists of three cameras as they were before the flow) and draws and lights the outside set with one. LP3.0 (C57): extended to shadows: the cap of 128 contacted lights per entity also bounds the lights an entity casts for (FAM:353-435), and the preview never caps its casters (ViewLight::casters, M-SHADOW-CAST-02)"
     },
     {
       "id": "M-FLOW-PURE-01",
@@ -31228,6 +31232,168 @@
         }
       ],
       "note": "LP3.0 (D148): the reference order the flow walks is the preview-id order, the engine's the order its lights' references were made: the map's spawn order at load (ids minted in load order equal it for a map the editor loaded, whose entities are in the file's order), but a light the editor adds later takes the next id where the engine, loading the saved map, would place it at its position in the file (TrenchBroom appends a new entity to its layer, so the file order follows the layers and groups); and in the game a light whose shape changes (UpdateLightDef with a new origin, radius, shader or noShadows) has its references remade, newest first in each area, which the editor has no counterpart for. Only the order of equal-area lights moves (their additive blends and, from LP3.1, their tiles)"
+    },
+    {
+      "id": "M-SHADOW-CAST-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            1017,
+            1089
+          ],
+          "anchor": "R_AddSingleModel: the shadow surface rule (SurfaceCastsShadow or forced perforated, the light casts, the entity not noShadow, the light triangles not empty)",
+          "sha256": "6d244f29a9522e511dfbd516b0ccd16230d5479031588015a297394d268292c4"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            50,
+            50
+          ],
+          "anchor": "r_forceShadowMapsOnAlphaTestedSurfaces 1",
+          "sha256": "6c6fb312d1cd94d296898c4bc7bfd4821fff7a1913257199be0d4932799db891"
+        },
+        {
+          "file": "neo/renderer/Interaction.cpp",
+          "lines": [
+            600,
+            678
+          ],
+          "anchor": "CreateStaticInteraction: light triangles only for ReceivesLighting surfaces (:658)",
+          "sha256": "831d092891c2d64d5a89f1050d0a652ee328e69da7a3bc2dc9223facd65cf714"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            584,
+            587
+          ],
+          "anchor": "idMaterial::SurfaceCastsShadow",
+          "sha256": "41d1836d22ae7ac39010671f4a7af5358d4963e37512ab88eb0608f23e23c97a"
+        },
+        {
+          "file": "neo/renderer/Material.h",
+          "lines": [
+            599,
+            602
+          ],
+          "anchor": "idMaterial::ReceivesLighting",
+          "sha256": "f86c00fa18c5582dffd0582b2764c64f6b77a39de167d5ae2f4127a18b794f7b"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3506,
+            3509
+          ],
+          "anchor": "ShadowMapPassFast: MC_TRANSLUCENT surfaces skipped at draw time",
+          "sha256": "9893f2159172593236e6923c6ac29c747a8614c572e90f940dd0fb4a79ded492"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ChunkBuilder.cpp",
+          "symbol": "engineCastClass; ChunkBuilder's chunk (castClass)"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/ChunkBuilder.h",
+          "symbol": "CastClass (TranslucentCaster), engineCastClass"
+        },
+        {
+          "file": "lib/TbLitLib/src/SceneModels.cpp",
+          "symbol": "the model instance's header castClass"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitPasses.cpp",
+          "symbol": "the cast class of a surface (LP3.0, C57)"
+        }
+      ],
+      "note": "LP3.0 step 6 (C57, SC706-SC707, SC738, P3.17): the cast class of a chunk (ChunkBuilder.cpp, the draw material's) and of a model surface (SceneModels.cpp) by one rule: None for an entity with noShadows; None when the material neither SurfaceCastsShadow (MF_FORCESHADOWS or not MF_NOSHADOWS) nor is MC_PERFORATED under r_forceShadowMapsOnAlphaTestedSurfaces 1 (a perforated noShadows material casts, perforated DECAL_MACRO decals included: SC738's first gap closed); None when it does not ReceivesLighting (numAmbientStages != numStages and not MF_UNLIT; CreateStaticInteraction makes no light triangles for it, so a static surface casts nothing: SC738's second gap); else Perforated (MC_PERFORATED), TranslucentCaster (MC_TRANSLUCENT: the engine makes its shadow surface, so its light takes tiles and the SM program, and the tile pass skips it at draw time, P3.17), Opaque (MC_OPAQUE and MC_BAD). A material not in the table yet stays Opaque, provisionally, as before. The light's half of the rule (it casts, the caster's light triangles for it are not empty) is the frontend's (M-SHADOW-CAST-02). The caster version hashes the class, so a class change moves it; noSelfShadow changes nothing for shadows (SC709: localShadows is never filled at 285ea4d1), and the flags stay in the version"
+    },
+    {
+      "id": "M-SHADOW-CAST-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            488,
+            634
+          ],
+          "anchor": "R_AddSingleLight: the area walk for shadows from the light's own area, the shadow-only entities",
+          "sha256": "1ab7365b5e1a681800a91c328137983c18a44df00d7a92666385796806217d6a"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            694,
+            698
+          ],
+          "anchor": "R_AddLights: shadow-only entities made viewEntities",
+          "sha256": "1bf3eecb81688df279dd45084c0fc103952af7de95c8b4c6544a68ba86ac9bcb"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            928,
+            938
+          ],
+          "anchor": "R_AddSingleModel: R_CullModelBoundsToLight and the spectrum test",
+          "sha256": "59ad64962f1bf564961bfe738d281c55d3e77c8931b883039c345291b9f6481b"
+        },
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            524,
+            529
+          ],
+          "anchor": "UpdateLightDef: noShadows forced on a spectrum light",
+          "sha256": "5c7c79ffce374e07ea19754ab4895d20a5e4bb7fe357ff1ca869666fcb1f6168"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            694,
+            707
+          ],
+          "anchor": "R_CreateLightRefs: areaNum of globalLightOrigin, else of parms.origin",
+          "sha256": "d398f262a417f9a742653ff7baa4f9cffa84fc7f11dba0d648515dade4061ab0"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3653,
+            3674
+          ],
+          "anchor": "ShadowAtlasPass loop 1: fog, blend, no-interaction and LOD -1 lights skipped",
+          "sha256": "b1fcd026ab42f93e7576734fdeb2689be35892c1bc95bb0564d710e97053ce9c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (ViewLight::casters, the caster requests)"
+        },
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "lightReachesCaster, lightCastsShadows, engineLightNoShadows"
+        },
+        {
+          "file": "lib/TbLitLib/src/LightTriangles.h",
+          "symbol": "LightTriangleCacheSize"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/FrameLog.h",
+          "symbol": "CasterLogRow, casterLogPath"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitPasses.cpp",
+          "symbol": "the casters of a casting light, on screen or off (LP3.0, C57); a spectrum light's forced noShadows (LP3.0, C57, P3.16)"
+        }
+      ],
+      "note": "LP3.0 step 6 (C57, P3.14, P3.16, P3.17): the caster set and its light-triangle requests, made in the frontend as the lists are built, after the light sort, per light that will take tiles (it casts, shadowLod > -1, it has surfaces: ShadowAtlasPass' loop 1 skips the others), on screen or off: every chunk and model instance of a cast class (M-SHADOW-CAST-01) whose areas reach the light by lightReachesCaster (an area the light references, connected to the light's own area unless that is -1: FAL:494-501; D81's outside set by volume; without a tree every chunk), whose entity is visible (its space made as R_AddLights makes a shadow-only viewEntity), whose bounds R_CullModelBoundsToLight keeps, whose material's spectrum is the light shader's, and whose light triangles for the light are not None (the cache of LightTriangles.h, the request queued when Pending), each kept with its space and light triangles in ViewLight::casters; nothing draws them before LP3.1. The engine's R_ShadowBounds view cull (FAL:605-618) is not mirrored (K49: casters are not view-culled) and MAX_CONTACTED_LIGHTS is not kept (M-FLOW-DIFF-03, extended to shadows). lightCastsShadows gains UpdateLightDef's spectrum rule (engineLightNoShadows), which also moves a spectrum light's noSelfShadow surfaces to the global list (FAM:999). P3.16's 'every parallel light has area -1' is not the engine's: R_CreateLightRefs falls back to PointInArea( parms.origin ) when the offset origin is outside (RenderWorld_defs.cpp:703-707, mirrored in LightData.cpp since LP4.0), so a parallel light inside the map has its origin's area and the connection test applies; only a light whose both origins are outside has area -1 and skips it. The counts (FrontendLists casterLights, casterPairs, casterPairsResident, casterPairsPending, casters, casterMs) reach LitFrameStats and the frame log's companion, <frame log>-casters.csv (casterLogPath), written while the frame log is open: LP3.0's measurement channel ([.][measure] on admin), no frame-log column (LP3.1's D157 folds them in). The admin measurement (Release [.][measure], two runs after the per-build candidate table): at the start view's settled frame 30 lights in view, 11 lights gather casters, 927 (light, chunk) pairs asked, all 927 answered, 698 casters, 1.5 ms of gathering when the lists are built; over the orbit at most 20-35 lights, 1,307 pairs, cache entries 7,757 (with the lit surfaces' pairs), gathering median 0.57 ms, p95 1.8 ms, max 2.6 ms; budget (P3.24f) 4 ms and 250,000 pairs per frame, a miss any presented frame above either: none. LightTriangleCacheSize stays 65,536: the rule is a power of two at least four times the largest per-build demand on admin (4 x 7,757 -> 32,768), never below LP2's bound"
     }
   ],
   "retired": [
