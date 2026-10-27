@@ -20912,7 +20912,7 @@
           "symbol": "the [.][feed] tag comment (in none of the [.][litgpu*] suites)"
         }
       ],
-      "note": "LP5.0 step 6 (RUN.md, the director's decisions after LPF.1 (5); P6.24), test only, no engine counterpart: the hidden GPU cases run in two suites, each under the 180 s wall clock in Debug: [.][litgpu] LP0-LP2's (on a GPU, pipelines, GPU resources, lit passes, tonemap and blit; 5 cases, 95.5 / 97.8 / 99.1 s at LP5.0) and [.][litgpu2] LP4's and later ones (ambient pass, light-grid path, live feed, LP5's programs; 4 cases, 59.7 / 59.8 / 60.4 s); LPF.2's host cases stay [.][feed]. Each case makes its own instance, device and session, bounds its waits (H.1) and resets the dispatcher, so either suite runs alone and in any order. The gate measures both and a third tag comes once one passes 150 s. TbUiLib's [.][litgpu] cases are not split LP7.0 step 1 (D134, C56): a third tag, [.][litgpu3], takes LP5's seven cases (LP5.0 programs, LP5.1 math, LP5.2a pass 8, LP5.2b texgens, LP5.F sizes, LP5.3 fog, LP5.G reload); [.][litgpu2] keeps LP4.2a, LP4.3 and LPF.1; [.][litgpu] is unchanged. Debug wall clocks at the split: [litgpu] 92.3 / 95.5 / 92.7 s (5 cases), [litgpu2] 59.1 / 59.4 / 59.0 s (3), [litgpu3] 77.9 / 78.5 / 77.7 s (7). LP7's cases join [litgpu3] until it passes 150 s, then a fourth. The GPU cases' frame-log field count is one constant, FrameLogFields (69 since LP7.0). LP7.4: the first of LP7's, LitSession the .proc's triangles adopted on a GPU, joins [litgpu3] (8 cases, 78.8 s at its first run); LPF.1's frame-log check reads the four adoption counts as numbers, the model and dress counts still 0. LP3.1 step 6 (D160, D161): LitSession shadows on a GPU (LP3.1) joins [litgpu2] (4 cases; the suite's Debug wall clock with it 66.9 / 66.6 / 67.2 s, the case 7.1 / 7.0 / 7.4 s over its seven sections), no fourth tag; FrameLogFields is 91 since LP3.1. LP3.2 (C63): the shadows map's 26 shots join [.][parity] (36,468 assertions; Debug 87 s at LP3.2's run and again at LP3.2-FIX's; 88 and 90 s with 28,685 at the efb290089 and d0d8d8f11 gates), under its 180 s bound; FrameLogFields is 94 since LP3.2 (the per-list shadow-atlas draws, M-SHADOW-STAT-01)"
+      "note": "LP5.0 step 6 (RUN.md, the director's decisions after LPF.1 (5); P6.24), test only, no engine counterpart: the hidden GPU cases run in two suites, each under the 180 s wall clock in Debug: [.][litgpu] LP0-LP2's (on a GPU, pipelines, GPU resources, lit passes, tonemap and blit; 5 cases, 95.5 / 97.8 / 99.1 s at LP5.0) and [.][litgpu2] LP4's and later ones (ambient pass, light-grid path, live feed, LP5's programs; 4 cases, 59.7 / 59.8 / 60.4 s); LPF.2's host cases stay [.][feed]. Each case makes its own instance, device and session, bounds its waits (H.1) and resets the dispatcher, so either suite runs alone and in any order. The gate measures both and a third tag comes once one passes 150 s. TbUiLib's [.][litgpu] cases are not split LP7.0 step 1 (D134, C56): a third tag, [.][litgpu3], takes LP5's seven cases (LP5.0 programs, LP5.1 math, LP5.2a pass 8, LP5.2b texgens, LP5.F sizes, LP5.3 fog, LP5.G reload); [.][litgpu2] keeps LP4.2a, LP4.3 and LPF.1; [.][litgpu] is unchanged. Debug wall clocks at the split: [litgpu] 92.3 / 95.5 / 92.7 s (5 cases), [litgpu2] 59.1 / 59.4 / 59.0 s (3), [litgpu3] 77.9 / 78.5 / 77.7 s (7). LP7's cases join [litgpu3] until it passes 150 s, then a fourth. The GPU cases' frame-log field count is one constant, FrameLogFields (69 since LP7.0). LP7.4: the first of LP7's, LitSession the .proc's triangles adopted on a GPU, joins [litgpu3] (8 cases, 78.8 s at its first run); LPF.1's frame-log check reads the four adoption counts as numbers, the model and dress counts still 0. LP3.1 step 6 (D160, D161): LitSession shadows on a GPU (LP3.1) joins [litgpu2] (4 cases; the suite's Debug wall clock with it 66.9 / 66.6 / 67.2 s, the case 7.1 / 7.0 / 7.4 s over its seven sections), no fourth tag; FrameLogFields is 91 since LP3.1. LP3.2 (C63): the shadows map's 26 shots join [.][parity] (36,468 assertions; Debug 87 s at LP3.2's run and again at LP3.2-FIX's; 88 and 90 s with 28,685 at the efb290089 and d0d8d8f11 gates), under its 180 s bound; FrameLogFields is 94 since LP3.2 (the per-list shadow-atlas draws, M-SHADOW-STAT-01); LP3.3 (D161): LitSession shadow records on a GPU (LP3.3) joins [litgpu2] (5 cases, 81-82 s at LP3.3's runs), no fourth tag; [.][parity] 87 s (36,468 assertions); FrameLogFields stays 94 (tiles_relocated and tiles_cached are counted now)"
     },
     {
       "id": "M-INTER-02",
@@ -31422,33 +31422,6 @@
       "note": "LP3.0 step 6 (C57, P3.14, P3.16, P3.17): the caster set and its light-triangle requests, made in the frontend as the lists are built, after the light sort, per light that will take tiles (it casts, shadowLod > -1, it has surfaces: ShadowAtlasPass' loop 1 skips the others), on screen or off: every chunk and model instance of a cast class (M-SHADOW-CAST-01) whose areas reach the light by lightReachesCaster (an area the light references, connected to the light's own area unless that is -1: FAL:494-501; D81's outside set for a light without references alone since LP3.2-FIX, M-SHADOW-DIFF-08; without a tree every chunk), whose entity is visible (its space made as R_AddLights makes a shadow-only viewEntity), whose bounds R_CullModelBoundsToLight keeps, whose material's spectrum is the light shader's, and whose light triangles for the light are not None (the cache of LightTriangles.h, the request queued when Pending), each kept with its space and light triangles in ViewLight::casters; nothing draws them before LP3.1. The engine's R_ShadowBounds view cull (FAL:605-618) is not mirrored (K49: casters are not view-culled) and MAX_CONTACTED_LIGHTS is not kept (M-FLOW-DIFF-03, extended to shadows). lightCastsShadows gains UpdateLightDef's spectrum rule (engineLightNoShadows), which also moves a spectrum light's noSelfShadow surfaces to the global list (FAM:999). P3.16's 'every parallel light has area -1' is not the engine's: R_CreateLightRefs falls back to PointInArea( parms.origin ) when the offset origin is outside (RenderWorld_defs.cpp:703-707, mirrored in LightData.cpp since LP4.0), so a parallel light inside the map has its origin's area and the connection test applies; only a light whose both origins are outside has area -1 and skips it. The counts (FrontendLists casterLights, casterPairs, casterPairsResident, casterPairsPending, casters, casterMs) reach LitFrameStats and the frame log's companion, <frame log>-casters.csv (casterLogPath), written while the frame log is open and the environment sets TB_LIT_CASTER_LOG (a measurement's opt-in: the suites' frame logs leave no companion): LP3.0's measurement channel ([.][measure] on admin), no frame-log column (LP3.1's D157 folds them in). The admin measurement (Release [.][measure], five runs with the per-build candidate table: three at step 6, two in the final run list): at the start view's settled frame 30 lights in view, 11 lights gather casters, 927 (light, chunk) pairs asked, all 927 answered, 698 casters, 1.5-2.2 ms of gathering when the lists are built; over the orbit at most 35 gathering lights, 2,177 pairs and 13,134 cache entries (the lit surfaces' pairs included, on the frames with 320-329 lights in view), gathering median 0.57-0.60 ms, p95 1.8-2.1 ms, max 2.2-4.7 ms. Budget (P3.24f): 4 ms and 250,000 pairs per presented frame, a miss any frame above either: no pair miss; the final second run had 3 of its 339 rebuilt frames above 4 ms (max 4.735 ms, all with 300+ lights in view), the other four runs none (a first version without the table had one frame at 5.7 ms). LightTriangleCacheSize stays 65,536: the rule is a power of two at least four times the largest per-build demand on admin (4 x 13,134 -> 65,536), never below LP2's bound. LP3.1 step 5 (D157): the companion CSV, CasterLogRow, casterLogPath and TB_LIT_CASTER_LOG are retired; the seven counts are the frame log's last columns (caster_lights, caster_pairs, caster_pairs_resident, caster_pairs_pending, casters, caster_ms, light_triangle_entries: 85-91 of 91), on every frame row. LP3.1 step 3 draws the casters into the tiles (M-SHADOW-06)"
     },
     {
-      "id": "M-SHADOW-TEMP-01",
-      "kind": "temporary",
-      "engine": [],
-      "sinkbroom": [
-        {
-          "file": "lib/TbLitLib/include/lit/FramePacer.h",
-          "symbol": "StillTimerDelay, FrameDrawReason, FramePacer::cameraMoved, setSettleWanted, stillTimerTime, stillTimerFired"
-        },
-        {
-          "file": "lib/TbLitLib/src/RenderThread.cpp",
-          "symbol": "RenderThread::setCamera (cameraMoved), the run loop (the still timer's check, setSettleWanted), FrameConvergence::settled (shadowsPending)"
-        },
-        {
-          "file": "lib/TbLitLib/src/LitPasses.h",
-          "symbol": "LitFrameStats::shadowsPending, shadowSettleWanted"
-        },
-        {
-          "file": "lib/TbLitLib/test/src/tst_FramePacer.cpp"
-        },
-        {
-          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
-          "symbol": "FrameConvergence; teardown (no firing); idle is zero frames, a camera change one frame"
-        }
-      ],
-      "note": "LP3.0 step 7 (D151, C62, P3.13, A49): the settle scaffolding, inert until LP3.3 replaces its two inputs. The still timer: the pacer fires a frame trigger once when the camera has been still for StillTimerDelay (200 ms) after its last move (setCamera's cameraMoved) while a settle is wanted (LitFrameStats::shadowSettleWanted: some light's held LOD differs from its exact LOD, or a cascade budget is pending), and is spent until the camera moves again; the reason of a frame so started is FrameDrawReason::StillTimer (A49's draw reason; the frame log has no draw-reason column at efe832c54, so the value lives in the pacer and is logged nowhere yet). FrameConvergence gains shadowsPending (LitFrameStats::shadowsPending: a tile not settled), in settled(), not a re-trigger term. Both inputs are false in LP3.0, so the timer never fires (every GPU fixture's teardown checks 0 firings) and no frame count moves (the pacing cases of tst_LitSession pass unchanged: 'idle is zero frames, a camera change one frame', the headless 20 cycles' 'no trigger, no frame', the injected fault's 'nothing more is drawn', the window's minimised and parked counts, the livelock guard, the feed's and the re-parse's idle checks). No engine counterpart: the engine draws every frame"
-    },
-    {
       "id": "M-SHADOW-COPY-05",
       "kind": "copied-range",
       "engine": [
@@ -31734,7 +31707,7 @@
           "symbol": "LitSession shadows on a GPU (LP3.1), [.][litgpu2]"
         }
       ],
-      "note": "LP3.1 steps 1 and 3 (C59, D142, D145, D147, SC714-SC720): pass 6 records between AmbientPass( false ) and the interactions. _shadowMapAtlas is one 8192 x 8192 nvrhi::Format::D32 texture (256 MB, renderTargetBytes), render target, initial and kept state DepthWrite, clear value 1, made by the first frame that places a tile and cleared whole once then (M-SHADOW-DIFF-05), released with the session's device objects (LitPasses::releaseAll, teardown step 2); its framebuffer has the depth attachment alone. Loop 1 (M-SHADOW-CAST-02) and the packing (M-SHADOW-03) as LP3.0 left them; loop 2 per light in viewLights order: imageSize the first side's output size, imageAtlasOffset[ Max( 0, side ) ] per side, a light with a side that did not fit unplaced (imageSize.x -1) and drawn with the plain interaction; each placed side is GL_ViewportAndScissor( x, y, size, size ) on the atlas (top-left, unflipped), its far-plane clear (M-SHADOW-DIFF-04), its matrices (M-SHADOW-04) and its draws (M-SHADOW-06). After the pass the state, ALPHA_TEST 0 and the view's scissor are restored. A failed creation warns once and no light casts for the session; a disabled depth program (D9) draws every light with the plain interaction. The counts: LitFrameStats lightsCasting, lightsPlaced, lightsUnplaced with unplacedLights by name, tilesDrawn, tilesVacated, shadowDraws, shadowCastersCulled, perforatedCastersSkipped, atlasBytesWritten (tiles x size^2 x 4), shadowRecordMs and the GPU time (TimedPass::Shadows); tilesRelocated, tilesCached and tilesProvisional stay 0 until LP3.3 and LP3.4. The admin measurement (Release [.][measure], two runs, 2026-10-27): at the start view's settled frame 11 lights cast, all placed, 66 tiles, 1,836 shadow draws, 44 perforated casters left out, 23.2 MB of tiles, pass 6's GPU time 0.34 / 0.20 ms and CPU record 3.16 / 2.77 ms; over the orbit (290 / 291 frames) tiles median 12, p95 96 / 102, max 120, shadow draws median 472, p95 2,423, max 2,793 / 2,683, vacated rects max 62 / 56, no light unplaced, pass 6's GPU median 0.17 / 0.18 ms, p95 0.44 / 0.42, max 0.50 / 0.45, its CPU median 0.74 / 0.73 ms, p95 3.95 / 3.69, max 7.24 / 4.72; the session's VRAM account peaks at 456.2 / 456.4 MB with the atlas (LP3.0: 198.2), allocations after Stop 0"
+      "note": "LP3.1 steps 1 and 3 (C59, D142, D145, D147, SC714-SC720): pass 6 records between AmbientPass( false ) and the interactions. _shadowMapAtlas is one 8192 x 8192 nvrhi::Format::D32 texture (256 MB, renderTargetBytes), render target, initial and kept state DepthWrite, clear value 1, made by the first frame that places a tile and cleared whole once then (M-SHADOW-DIFF-05), released with the session's device objects (LitPasses::releaseAll, teardown step 2); its framebuffer has the depth attachment alone. Loop 1 (M-SHADOW-CAST-02) and the packing (M-SHADOW-03) as LP3.0 left them; loop 2 per light in viewLights order: imageSize the first side's output size, imageAtlasOffset[ Max( 0, side ) ] per side, a light with a side that did not fit unplaced (imageSize.x -1) and drawn with the plain interaction; each placed side is GL_ViewportAndScissor( x, y, size, size ) on the atlas (top-left, unflipped), its far-plane clear (M-SHADOW-DIFF-04), its matrices (M-SHADOW-04) and its draws (M-SHADOW-06). After the pass the state, ALPHA_TEST 0 and the view's scissor are restored. A failed creation warns once and no light casts for the session; a disabled depth program (D9) draws every light with the plain interaction. The counts: LitFrameStats lightsCasting, lightsPlaced, lightsUnplaced with unplacedLights by name, tilesDrawn, tilesVacated, shadowDraws, shadowCastersCulled, perforatedCastersSkipped, atlasBytesWritten (tiles x size^2 x 4), shadowRecordMs and the GPU time (TimedPass::Shadows); tilesRelocated, tilesCached and tilesProvisional stay 0 until LP3.3 and LP3.4. The admin measurement (Release [.][measure], two runs, 2026-10-27): at the start view's settled frame 11 lights cast, all placed, 66 tiles, 1,836 shadow draws, 44 perforated casters left out, 23.2 MB of tiles, pass 6's GPU time 0.34 / 0.20 ms and CPU record 3.16 / 2.77 ms; over the orbit (290 / 291 frames) tiles median 12, p95 96 / 102, max 120, shadow draws median 472, p95 2,423, max 2,793 / 2,683, vacated rects max 62 / 56, no light unplaced, pass 6's GPU median 0.17 / 0.18 ms, p95 0.44 / 0.42, max 0.50 / 0.45, its CPU median 0.74 / 0.73 ms, p95 3.95 / 3.69, max 7.24 / 4.72; the session's VRAM account peaks at 456.2 / 456.4 MB with the atlas (LP3.0: 198.2), allocations after Stop 0 LP3.3: tilesRelocated and tilesCached are counted (M-SHADOW-DIFF-09, -10, -13), tilesProvisional stays 0 until LP3.4; the frame's records sample the kept tiles' stored matrices and fade."
     },
     {
       "id": "M-SHADOW-06",
@@ -31949,7 +31922,7 @@
           "symbol": "LitSession shadows on a GPU (LP3.1), [.][litgpu2]: (d), (f)"
         }
       ],
-      "note": "D147, P3.3 (LP3.1 steps 1 and 3): the engine clears the whole 8192^2 atlas to 1.0 every frame (256 MB of writes); the preview clears each tile it draws by a far-plane quad under the tile's viewport and scissor (builtin/depth, the identity MVP, (+-1, +-1, 1) with w 1, GLS_DEPTHFUNC_ALWAYS | GLS_CULL_TWOSIDED, depth written, no polygon offset: exactly 1.0), and first, by the same quad, every rect last run's tiles occupied that this run's tiles do not cover (tiles_cleared, vacated); NVRHI has no rect clear. Every texel a frame's consumer can sample through a placed side is then the engine's: its tile is cleared and drawn, the rest of the atlas is 1.0 (cleared at creation, M-SHADOW-DIFF-05, or vacated); a vacated rect is cleared on the next frame that runs pass 6 (a frame with no casting light keeps it until then, and no placed side samples it). The [litgpu2] case reads the atlas back: a translucent caster's tiles all 1.0 and a light that left the view leaves its six rects 1.0"
+      "note": "D147, P3.3 (LP3.1 steps 1 and 3): the engine clears the whole 8192^2 atlas to 1.0 every frame (256 MB of writes); the preview clears each tile it draws by a far-plane quad under the tile's viewport and scissor (builtin/depth, the identity MVP, (+-1, +-1, 1) with w 1, GLS_DEPTHFUNC_ALWAYS | GLS_CULL_TWOSIDED, depth written, no polygon offset: exactly 1.0), and first, by the same quad, every rect last run's tiles occupied that this run's tiles do not cover (tiles_cleared, vacated); NVRHI has no rect clear. Every texel a frame's consumer can sample through a placed side is then the engine's: its tile is cleared and drawn, the rest of the atlas is 1.0 (cleared at creation, M-SHADOW-DIFF-05, or vacated); a vacated rect is cleared on the next frame that runs pass 6 (a frame with no casting light keeps it until then, and no placed side samples it). The [litgpu2] case reads the atlas back: a translucent caster's tiles all 1.0 and a light that left the view leaves its six rects 1.0 LP3.3 (M-SHADOW-DIFF-09, -10): a tile drawn again is cleared first as before, a cached or relocated one is not; the vacated clear covers the parts of last run's rects that no tile of this run covers (uncoveredRects: never a part of a cached or moved tile) and comes after the moves; a clear skipped for a pending pipeline leaves its tile to be drawn again and its vacated rect to be cleared again; case (l) reads a cascade beside a vacated point tile back unchanged and the vacated texels 1.0."
     },
     {
       "id": "M-SHADOW-DIFF-05",
@@ -32562,6 +32535,205 @@
         }
       ],
       "note": "LP3.2-FIX (C57 rev 2.3; D47, D81, K14 extended; H03), no engine counterpart: D81's outside set (world chunks in area -1 and brush entities without references: geometry that a fresh dmap removes, a sealed hull's outer faces, or that a stale .proc places in solid, M-PARITY-DIFF-02) is in the caster set of a light without references alone, the light of the set, which lights that geometry alone (K14: a new room built outside the hull keeps its own light's shadows until the next dmap), and never in the caster set of a light with references, whatever its area (every parallel light has references: its globalLightOrigin lies 100,000 along its light_center and its frustum is pushed into the tree; its area is its origin's, M-SHADOW-CAST-02). The engine has none of that geometry, so for a light with references the preview's casters are the engine's again. LP3.2's H03 (a parallel light, its box x -23..407, y -23..407, z -20..180) failed at max 38 on 6,646 pixels while the outside set cast for every light by volume: the +y wall's outer face at y = 400, inside the light's box, shadowed the inner face at y = 384 below z 106.7 (z + 16 x 160 / 30 <= 192). One rule, lightReachesCaster over lightCasterAreas' per-light table of the areas it reaches (FAL:488-501), which the frontend's gathering calls (it repeated the rule inline before); the receivers are unchanged (lightReachesSurface: a light with references still lights the outside set it meets by volume, now without a shadow from it). Without a tree (D94) nothing is classified and every chunk casts: before the first dmap a hull face in the void can shadow the hull's inside at a grazing angle for a parallel light, accepted (an end-decision item). H03 exact (max 0) on LP3.2's shots, no second engine run; per H row two to four outer-face chunks fewer among each light's casters (H01 7 to 3, H11 301 to 129 over 43 lights) and fewer shadow draws (H01 28 to 13, H11 1,194 to 504), the tiles, atlas bytes, lights placed and the pictures of every other row unchanged. On admin (the map's brush faces that its tree puts in solid) the settled start view's casters 698 to 475, pairs 927 to 526, shadow draws 1,836 to 1,059"
+    },
+    {
+      "id": "M-SHADOW-DIFF-09",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3640,
+            3643
+          ],
+          "anchor": "ShadowAtlasPass: the whole atlas cleared every frame",
+          "sha256": "f42dc2de4aaafb8e9f7d3aa627033019296f5f192ff039b3c0abbdf4d184b669"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3798,
+            3895
+          ],
+          "anchor": "ShadowAtlasPass loop 2: every placed side drawn every frame",
+          "sha256": "e97528bbd96cf93dc9b40ba51dff04acae15e0b594dba8dfbbcc885306982237"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ShadowCache.h",
+          "symbol": "ShadowRecordKey, ShadowCvars, shadowLightVersion, shadowCasterTerm, ShadowTileRecord, ShadowRecord, ShadowCache"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (ViewLight::casterHash and casterCount, added as each caster is kept)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordShadowAtlas (the record keys, the cached tiles, the layout counters)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitPasses.cpp",
+          "symbol": "LitPasses: the shadow records' versions and caster hash (LP3.3, C61, D150)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession shadow records on a GPU (LP3.3): (h), (l)"
+        }
+      ],
+      "note": "LP3.3 steps 1 and 2 (C61, D146, D150; P3.6, P3.7, P3.27; S36): the engine clears the whole atlas and draws every placed side every frame; the preview keeps one record per light whose tiles are in the layout (ShadowCache, keyed by its preview id) with its key: shadowLightVersion (the projection, origin, axis, lightCenter and radius, pointLight and parallel, noShadows as UpdateLightDef leaves it, the casting shader's flags and spectrum, hasVolume, areaNum, hasAreaTree and the derived.areas list; never the colour or the record's version), the LOD, the caster hash and count (the sum of shadowCasterTerm over ViewLight::casters: the chunk's or instance's key and which, its caster version, its space's model matrix (SC739: the entity transform, origin, axis, modelscale), its cast class and its AreaSurface's kind, area and whether its references are empty, added in the frontend's gathering as each caster is kept, after lightReachesCaster, the volume's cull, the spectrum and the light triangles admitted it), a reserved perforated field (P3.6, LP3.4's), the nineteen shadow cvars by value (ShadowCvars) and the bake generation (LitPasses' count of the tree and AreaData pointers, tree presence in its low bit); per side the tile's rect, whether it was drawn whole, the shadowV / shadowP it was drawn with, its draws and its frame. A tile is drawn again when the key differs, it was not drawn whole (a draw or its clear skipped, a draw dropped for the budget, a caster's light triangles pending: drawn whole, drawn again once known) or its side's matrices differ; else cached (no clear, no draws), byte-identical to a fresh draw. Layers and filters reach the key through the caster set (a hidden entity has no space, a hidden light leaves the layout). A record goes when its light takes no tiles (it stopped casting, left the view, or was removed: nodesWereRemoved reaches the frame as the light's absence from the table), when none of its sides has a tile, and on Stop (documentWasLoaded stops the session, D41); releaseAll clears it. LitFrameStats::layoutTiles, layoutShadowDraws and layoutAtlasBytes (the tiles a frame samples, with what each was last drawn with) are what [.][parity]'s rows report as tiles_drawn, shadow_draws and atlas_bytes_written, so a row's counts do not depend on which of its frames settled: compare 206 of 206 gated rows, cmpident 0 differences over 210 rows against the gate at cba91682b. The CPU test moves the hash with a caster's version, transform (move, rotation, scale), cast class and membership (an entity without references, a caster entering) and the light version with its origin, radius, noshadows, area references and areaNum, never with the light's colour, a caster's _color or a UV drag; [.][litgpu2] case (h): a still scene's second settled frame 0 tiles drawn, 6 cached, 0 shadow draws, the atlas and the picture equal; every tile drawn again byte-identical (4,194,304 texels); a UV drag 0 tile clears or draws; a moved occluder 12 tile clears (the first frame's casters pending, then known); noshadows drops the record, casting again remakes it. Admin (Release x2): the settled start view 66 tiles cached and 0 shadow draws (LP3.2-FIX: 66 drawn, 1,059 draws); the orbit's tiles cached per frame median 12, p95 96, max 120, drawn median 0, p95 6, max 36, shadow draws median 0, p95 127 / 119, max 522 (296 / 1,429 / 1,454 before), pass 6's CPU p95 0.41 / 0.35 ms (2.34 / 2.40), the CPU record p95 22.28 / 20.12 ms (25.09 / 24.78; the 10 ms budget still missed, LP6)"
+    },
+    {
+      "id": "M-SHADOW-DIFF-10",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3718,
+            3783
+          ],
+          "anchor": "ShadowAtlasPass: the tile map cleared and the sides packed every frame",
+          "sha256": "65f3d7d8d501b9f76d1b09c395e08e7fb312ca92009c3c3061b5d967a94d8a72"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ShadowCache.h",
+          "symbol": "ShadowMove, ShadowCopy, ShadowRelocationPlan, planShadowRelocation, uncoveredRects"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordShadowAtlas (the moves, then the vacated clears, then the redraws), relocateTiles, ensureShadowAtlas (the scratch)"
+        },
+        {
+          "file": "lib/TbLitLib/src/VulkanDevice.cpp",
+          "symbol": "pickPhysicalDevice (GpuChoice::depthCopySupported)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitSession.cpp",
+          "symbol": "LitSession::programReport (the fallback's line)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ShadowAtlas.cpp",
+          "symbol": "ShadowAtlas: the relocation's permutation order (LP3.3, D146, P3.4)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession shadow records on a GPU (LP3.3): (i)"
+        }
+      ],
+      "note": "LP3.3 step 3 (D146, C61, P3.4): the engine clears its tile map and packs every side every frame, drawing each where it lands; the preview, at a settling frame, packs as the engine does and copies a tile whose record and matrices are unchanged but whose rect moved, atlas -> a 2048 x 2048 D32 scratch -> atlas (copyTexture D32 -> D32, the depth aspect; the scratch made with the atlas when the device copies D32 images, released with it, 16 MB on the render-target line), in planShadowRelocation's order: every source saved before any destination is written when they all fit the scratch (one save phase, one restore phase); else batches, a move joining one only when every unsaved source its destination overlaps belongs to it too (a batch never overwrites an unsaved source; chains go from their free end), a cycle through one parked slot, a move the scratch cannot hold drawn again. Pass 6's order of work: the moves, then the vacated clears (uncoveredRects: only the parts of last run's rects no tile of this run covers), then the redraws. The copy needs TRANSFER_SRC and TRANSFER_DST on D32_SFLOAT's optimal tiling (GpuChoice::depthCopySupported; this machine's device has them); without them a moved tile is drawn again and programReport() lists 'shadow atlas relocation' disabled with the reason. CPU tests: the permutation order on a model atlas (a swap and a chain in two phases; twelve 1024 moves, a chain and a cycle, through four slots; mixed sizes; a cycle the scratch cannot hold drawn again). [.][litgpu2] case (i): a parallel light entering H01's room with two point lights moves all twelve point tiles (its 1024 cascades sort first), 12 copies logged, 0 point-light tile clears, 0 texels differing from their old rects, the layout the engine's packing; with the copy switched off the twelve are drawn again, 0 texels differing. Admin: the settle after the orbit relocates 96 tiles (both runs), drawing none"
+    },
+    {
+      "id": "M-SHADOW-DIFF-11",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3718,
+            3783
+          ],
+          "anchor": "ShadowAtlasPass: the tile map cleared and the sides packed every frame",
+          "sha256": "65f3d7d8d501b9f76d1b09c395e08e7fb312ca92009c3c3061b5d967a94d8a72"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            391,
+            469
+          ],
+          "anchor": "R_AddSingleLight: the shadow LOD of every frame",
+          "sha256": "28e7018a456db7e8f9bb6271c9147bb7bb38879daa5ed5b58dbb292d18ff57f6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ShadowCache.h",
+          "symbol": "ShadowTileAllocator, LodHysteresisFrames"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordShadowAtlas (the LOD rule, the held layout and its first fit, the drift)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ShadowAtlas.cpp",
+          "symbol": "ShadowAtlas: the held layout's free-rect structure (LP3.3, C62, D152)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession shadow records on a GPU (LP3.3): (j)"
+        }
+      ],
+      "note": "LP3.3 step 4 (C62, D152): the engine packs every frame with every light's LOD of that frame; while the camera moves (M-SHADOW-DIFF-12) the preview holds the last settled packing: a kept light at its held LOD keeps its tiles, a side the packing left without one stays so (H11's two lights stay unplaced: first fit cannot place what the engine's packing refused, case (j): 0 drawn, 256 kept); a light entering the view, or whose LOD changed, takes free rects of its size by first fit over the held layout's free space, its sides in the engine's sort order (ShadowTileAllocator: TileMap's quad tree and child order down to 64, free meaning not taken, not under a taken node and not over one, so that over an empty map it is the engine's packing: the CPU test's five layouts, D160's orders among them; a parity row's lights enter an empty layout and land where the engine puts them); a light leaving frees its tiles at once (cleared on that frame). A kept light's LOD changes only after its exact LOD differed for LodHysteresisFrames (3) frames in a row; a light seen for the first time takes its exact one; the fade goes with the LOD (the record's, which the consumer's jitterTexScale.z reads). The frame reports shadowLayoutDrift when the held layout is not the engine's packing of its sides (the frame's packing is run for that comparison alone), which a settling frame undoes by relocation (M-SHADOW-DIFF-10). Case (j): a point light's LOD held 1, 1, then 3 on the third frame away"
+    },
+    {
+      "id": "M-SHADOW-DIFF-12",
+      "kind": "difference",
+      "engine": [],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/FramePacer.h",
+          "symbol": "StillTimerDelay, FramePacer::cameraMoving, setSettleWanted, stillTimerTime, stillTimerFired"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "the run loop (m_frameShadowsMoving, the still timer, setSettleWanted), RenderThread::converge (shadowsPending)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.h",
+          "symbol": "LitFrameStats::shadowsPending, shadowSettleWanted, shadowsMoving, shadowLodHeld, cascadesStale, shadowLayoutDrift"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_FramePacer.cpp",
+          "symbol": "a frame is moving while the last camera move is younger than the delay (LP3.3)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession shadow records on a GPU (LP3.3): (k); teardown's still-timer count"
+        }
+      ],
+      "note": "LP3.3 step 5 (D151, C62, A49, P3.13): no engine counterpart: the engine settles nothing, every frame is packed and drawn afresh. A frame is moving when the pacer's last camera move is younger than StillTimerDelay (200 ms) and the frame is not the still timer's (FramePacer::cameraMoving, taken at the frame's start; a camera trigger's frame always is); any other frame settles (the engine's packing, the relocation, the vacated clears, the changed tiles at the exact LOD). LitFrameStats::shadowsPending (a placed tile not drawn whole against its light's current record, a held LOD, a stale cascade, a caster's light triangles pending, a vacated rect whose clear was skipped, or the held layout not the engine's packing) is FrameConvergence's shadows term (no re-trigger: the still timer, the pipeline's onReady and the light triangles' job are the triggers); shadowSettleWanted (a held LOD, a stale cascade, or the held layout not the engine's packing) is the still timer's scope: it fires once per stop, 200 ms after the last move, and its frame (FrameDrawReason::StillTimer) settles. The drift term is LP3.3's addition to C62's scope, for D145 (without it a layout first-fitted while moving would stay unlike the engine's until some other frame came). A light seen for the first time takes its exact LOD and an empty held layout's first fit is the engine's packing, so the parity rows never wait ([.][parity] 87 s at LP3.3's run, as at LP3.2's). Case (k): turned round, the held light's tiles drift, the timer fires once and its frame relocates them to the engine's packing. Admin: the settled exact frame after the camera stops 217 / 215 ms (14 ms at LP3.2-FIX: the timer's 200 ms by design, under the 250 ms target). It replaces M-SHADOW-TEMP-01 (retired)"
+    },
+    {
+      "id": "M-SHADOW-DIFF-13",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            2839,
+            3164
+          ],
+          "anchor": "SetupShadowMapMatrices: every side's matrices from the current view",
+          "sha256": "4a75221f7971a8c171b08c71609adb0a9be5ab74194594a6face49ff37953bce"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3798,
+            3895
+          ],
+          "anchor": "ShadowAtlasPass loop 2: every placed side drawn every frame",
+          "sha256": "e97528bbd96cf93dc9b40ba51dff04acae15e0b594dba8dfbbcc885306982237"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ShadowCache.h",
+          "symbol": "MovingCascadeBudget"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordShadowAtlas (the cascade budget), setShadowParms and setInteractionSpace (the record's fade and stored matrices)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession shadow records on a GPU (LP3.3): (j)"
+        }
+      ],
+      "note": "LP3.3 step 4 (D152, K13, P3.7, Q38's default): the engine sets every side's matrices up from the current view and draws every cascade every frame; while the camera moves the preview redraws at most MovingCascadeBudget (2) parallel cascades a frame whose matrices alone changed, the stalest first (the tile drawn longest ago, then viewLights order and side), the others stale and sampled with the shadowV / shadowP they were drawn with (the frame's record holds them, setInteractionSpace reads nothing else; rpCascadeDistances are the current view's), counted among the cached (LitFrameStats::cascadesStale); a record change redraws every cascade, a settling frame every stale one. Case (j): after a move two cascades drawn and two stale with their stored matrices, the two stale ones in the next frame; after a second move the two drawn longest ago first"
     }
   ],
   "retired": [
@@ -32604,6 +32776,11 @@
       "id": "M-TEST-PARITY-09",
       "commit": "c70b8654c",
       "reason": "the parity root's default cube: the game's _default decl is staged in the models map's lp7_models.mtr since the LP7.2 fix round (M-TEST-PARITY-08), so N08 and N11 draw the same cube on both sides (max 0)"
+    },
+    {
+      "id": "M-SHADOW-TEMP-01",
+      "commit": "127fb457b",
+      "reason": "the settle scaffolding is live since LP3.3 step 5: the still timer's scope (shadowSettleWanted) and the shadows' convergence term (shadowsPending) are filled by pass 6, and FramePacer::cameraMoving decides the moving frames (M-SHADOW-DIFF-12)"
     }
   ]
 }
