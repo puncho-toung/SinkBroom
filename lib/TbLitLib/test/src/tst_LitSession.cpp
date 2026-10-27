@@ -17001,6 +17001,224 @@ TEST_CASE("LitSession shadow records on a GPU (LP3.3)", "[.][litgpu2]")
     CHECK_FALSE(settled->stats.shadowsPending);
   }
 
+  // ---------------------------------------------------------------------------------
+  SECTION("(l) D160: a cached tile beside a vacated rect; 100 lights; D76's layouts")
+  {
+    // a parallel light's four cascades (the first 2048 block) and a point light's six 512
+    // tiles beside them; the point light stops casting: its rects vacated and cleared,
+    // the cascades kept, their texels as they were (P3.3)
+    const auto camera = litCamera({-112, 0, 96}, {1, 0, 0}, {0, 0, 1});
+    const auto withPoint = [](const std::string& noShadows) {
+      return lp3MapText("lp3_parallel.map")
+             + fmt::format(
+               "// entity 4\n{{\n\"classname\" \"light\"\n\"name\" \"lp3_beside\"\n"
+               "\"origin\" \"0 -40 120\"\n\"light_radius\" \"300 300 300\"\n"
+               "\"_color\" \"1 1 1\"\n\"noshadows\" \"{}\"\n}}\n",
+               noShadows);
+    };
+    offer(withPoint("0"), "lp3_parallel.map");
+    const auto two = settledShadowFrame(*session, camera, 2, true);
+    REQUIRE(two);
+    REQUIRE(two->records.size() == 2u);
+    const auto parallelAt = std::ranges::find_if(two->records, [](const auto& record) {
+      return record.type == ShadowLightType::Parallel;
+    });
+    const auto pointAt = std::ranges::find_if(two->records, [](const auto& record) {
+      return record.type == ShadowLightType::Point;
+    });
+    REQUIRE(parallelAt != two->records.end());
+    REQUIRE(pointAt != two->records.end());
+    const auto parallel = *parallelAt;
+    const auto point = *pointAt;
+    auto vacated = std::vector<AtlasRect>{};
+    for (auto s = 0; s < 6; ++s)
+    {
+      vacated.push_back(tileOf(point, s));
+    }
+    // beside: a point tile shares an edge with a cascade
+    auto adjacent = false;
+    for (const auto& rect : vacated)
+    {
+      for (auto s = 0; s < 4; ++s)
+      {
+        const auto c = tileOf(parallel, s);
+        adjacent = adjacent
+                   || ((rect.x == c.x + c.size || c.x == rect.x + rect.size)
+                       && rect.y < c.y + c.size && c.y < rect.y + rect.size)
+                   || ((rect.y == c.y + c.size || c.y == rect.y + rect.size)
+                       && rect.x < c.x + c.size && c.x < rect.x + rect.size);
+      }
+    }
+    CHECK(adjacent);
+    // the point light stops casting while the layout is held (a moving frame: a settling
+    // one would pack the parallel light alone, whose equal-sized cascades the copied sort
+    // may order otherwise, so they would move rather than stay)
+    REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+      access.passes.setShadowsMovingForTesting(true);
+    }));
+    offer(withPoint("1"), "lp3_parallel.map");
+    auto one = std::optional<ShadowFrame>{};
+    for (auto attempt = 0; attempt < 200 && (!one || one->records.size() != 1u);
+         ++attempt)
+    {
+      one = settledShadowFrame(
+        *session, camera, 2, true, vacated, std::nullopt, 10000ms, false);
+    }
+    REQUIRE(one);
+    REQUIRE(one->records.size() == 1u);
+    CHECK(one->stats.shadowsMoving);
+    CHECK(one->stats.tilesCached == 4u);
+    CHECK(tileClearsOf(one->drawLog, parallel.light) == 0u);
+    auto cascadesChanged = std::size_t{0};
+    for (auto s = 0; s < 4; ++s)
+    {
+      const auto rect = tileOf(parallel, s);
+      CHECK(tileOf(one->records[0], s) == rect);
+      for (auto y = rect.y; y < rect.y + rect.size; ++y)
+      {
+        for (auto x = rect.x; x < rect.x + rect.size; ++x)
+        {
+          cascadesChanged += two->atlas.at(std::uint32_t(x), std::uint32_t(y))
+                             != one->atlas.at(std::uint32_t(x), std::uint32_t(y));
+        }
+      }
+    }
+    auto notCleared = std::size_t{0};
+    for (const auto& rect : vacated)
+    {
+      for (auto y = rect.y; y < rect.y + rect.size; ++y)
+      {
+        for (auto x = rect.x; x < rect.x + rect.size; ++x)
+        {
+          notCleared += one->atlas.at(std::uint32_t(x), std::uint32_t(y)) != 1.0f;
+        }
+      }
+    }
+    CHECK(cascadesChanged == 0u);
+    CHECK(notCleared == 0u);
+    std::cout << fmt::format(
+      "LP3.3 (l) vacated neighbour: point tiles beside the cascades {}, the cascades' "
+      "texels changed {}, the vacated texels not 1.0 {}\n",
+      adjacent,
+      cascadesChanged,
+      notCleared);
+    REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+      access.passes.setShadowsMovingForTesting(std::nullopt);
+    }));
+
+    // D76 (P3.5) with cached lights: the consumer draws them, so a still frame writes set
+    // 11 as the frame that drew its tiles did
+    offer(lp3MapText("lp3_layouts.map"), "lp3_layouts.map");
+    const auto layouts = litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1});
+    const auto drawnLayouts = settledShadowFrame(*session, layouts, 2, false);
+    REQUIRE(drawnLayouts);
+    const auto cachedLayouts = settledShadowFrame(*session, layouts, 2, false);
+    REQUIRE(cachedLayouts);
+    CHECK(cachedLayouts->stats.tilesDrawn == 0u);
+    CHECK(cachedLayouts->stats.tilesCached == cachedLayouts->stats.layoutTiles);
+    CHECK(cachedLayouts->stats.interactionSmWrites > 0u);
+    CHECK(
+      cachedLayouts->stats.interactionSmWrites
+      == drawnLayouts->stats.interactionSmWrites);
+    CHECK(
+      cachedLayouts->stats.interactionWrites == drawnLayouts->stats.interactionWrites);
+    std::cout << fmt::format(
+      "LP3.3 (l) D76 with cached tiles: set 11 writes {} (the drawing frame's {}), set "
+      "10 "
+      "{}\n",
+      cachedLayouts->stats.interactionSmWrites,
+      drawnLayouts->stats.interactionSmWrites,
+      cachedLayouts->stats.interactionWrites);
+
+    // S30 (P3.26): 100 lights added, deleted, added and deleted again: the record table
+    // and the held layout's tiles return to their starting size
+    const auto base = lp3MapText("lp3_point.map");
+    const auto inside = litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1});
+    auto hundred = base;
+    for (auto i = 0; i < 100; ++i)
+    {
+      hundred += fmt::format(
+        "// entity {}\n{{\n\"classname\" \"light\"\n\"name\" \"lp3_many_{:02}\"\n"
+        "\"origin\" \"{} {} {}\"\n\"light_radius\" \"120 120 120\"\n"
+        "\"_color\" \"0.01 0.01 0.01\"\n\"noshadows\" \"0\"\n}}\n",
+        4 + i,
+        i,
+        48 + 24 * (i % 5 - 2),
+        24 * (i / 5 % 5 - 2),
+        66 + 20 * (i / 25));
+    }
+    const auto sizes = [&] {
+      auto counts = std::pair<std::size_t, std::size_t>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        counts = {
+          access.passes.shadowCache().size(),
+          access.passes.shadowLayoutTilesForTesting()};
+      }));
+      return counts;
+    };
+    const auto offerSnapshot = [&](std::shared_ptr<const Snapshot> snapshot) {
+      REQUIRE(waitFor([&] { return session->snapshotSlotFree(); }, 10000ms, false));
+      REQUIRE(session->offerSnapshot(std::move(snapshot)));
+    };
+    offer(base, "lp3_point.map");
+    const auto startFrame = settledShadowFrame(*session, inside, 1, false);
+    REQUIRE(startFrame);
+    const auto start = sizes();
+    auto added = std::pair<std::size_t, std::size_t>{};
+    for (auto round = 0; round < 2; ++round)
+    {
+      CAPTURE(round);
+      auto many = lp3Snapshot(hundred, root, "lp3_point.map", ++sequence);
+      offerSnapshot(many);
+      REQUIRE(settledShadowFrame(*session, inside, 101, false));
+      const auto full = sizes();
+      CHECK(full.first > start.first);
+      CHECK(full.second > start.second);
+      if (round == 0)
+      {
+        added = full;
+      }
+      CHECK(full == added);
+      // a snapshot that removes the 100 lights: their entities' ids and their nodes'
+      auto few = Snapshot{};
+      few.generation = 7;
+      few.sequence = ++sequence;
+      few.mapPath = (root / "base" / "maps" / "lp3" / "lp3_point.map").string();
+      const auto names = snapshotEntityNames(*many);
+      auto lights = std::set<PreviewId>{};
+      for (const auto& [name, id] : names)
+      {
+        if (name.starts_with("lp3_many_"))
+        {
+          lights.insert(id);
+          few.removed.push_back(id);
+        }
+      }
+      for (const auto& node : many->nodes)
+      {
+        if (lights.contains(node.entity) && node.id != node.entity)
+        {
+          few.removed.push_back(node.id);
+        }
+      }
+      CHECK(lights.size() == 100u);
+      offerSnapshot(std::make_shared<const Snapshot>(std::move(few)));
+      const auto alone = settledShadowFrame(*session, inside, 1, false);
+      REQUIRE(alone);
+      CHECK(alone->stats.lightsCasting == startFrame->stats.lightsCasting);
+      CHECK(sizes() == start);
+    }
+    std::cout << fmt::format(
+      "LP3.3 (l) 100 lights: records / layout tiles {} / {} at the start, {} / {} with "
+      "the 100, {} / {} after each delete\n",
+      start.first,
+      start.second,
+      added.first,
+      added.second,
+      sizes().first,
+      sizes().second);
+  }
+
   std::cout << fmt::format(
     "LP3.3 shadow records on a GPU: {:.1f} s\n",
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());

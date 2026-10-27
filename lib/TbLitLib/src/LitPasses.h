@@ -770,6 +770,9 @@ public:
   nvrhi::ITexture* shadowAtlas() const;
   // LP3.3 (C61), render thread: the records kept across frames (tests)
   const ShadowCache& shadowCache() const;
+  // LP3.3 (S30, P3.26), render thread: the tiles the held layout's free-rect structure
+  // holds (tests: they return with the records)
+  std::size_t shadowLayoutTilesForTesting() const;
   // LP3.3 (D146, A49), render thread: the relocation scratch's bytes once it is made
   // (2048² × 4, 16 MB), 0 before
   std::uint64_t shadowScratchBytes() const;

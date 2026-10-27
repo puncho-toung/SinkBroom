@@ -4429,6 +4429,11 @@ const ShadowCache& LitPasses::shadowCache() const
   return m_shadowCache;
 }
 
+std::size_t LitPasses::shadowLayoutTilesForTesting() const
+{
+  return m_heldLayout ? m_heldLayout->taken() : 0;
+}
+
 std::uint64_t LitPasses::shadowScratchBytes() const
 {
   if (!m_relocationScratch)
