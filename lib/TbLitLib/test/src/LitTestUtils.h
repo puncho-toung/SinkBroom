@@ -21,6 +21,8 @@
 
 #include "lit/MaterialDecls.h"
 
+#include <nvrhi/nvrhi.h>
+
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -177,6 +179,54 @@ struct ProcessCounts
 };
 
 ProcessCounts processCounts();
+
+/**
+ * LP3.1 (C59): a region of a D32 texture read back (the shadow atlas; LP3.3's relocation
+ * test reads it the same way): its top-left texel, its size and one float per texel, row
+ * by row from the region's top row.
+ */
+struct DepthReadback
+{
+  std::uint32_t x = 0;
+  std::uint32_t y = 0;
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  std::vector<float> depth;
+
+  // the texel at the texture's (tx, ty), which lies in the region
+  float at(std::uint32_t tx, std::uint32_t ty) const;
+};
+
+/**
+ * Render thread, inside a frame's open command list: a staging texture of the region's
+ * size and the texture's format (D32), and the copy of the region into it
+ * (copyTexture); null when NVRHI cannot make the staging texture.
+ */
+nvrhi::StagingTextureHandle recordDepthReadback(
+  nvrhi::IDevice& device,
+  nvrhi::ICommandList& commandList,
+  nvrhi::ITexture* texture,
+  std::uint32_t x,
+  std::uint32_t y,
+  std::uint32_t width,
+  std::uint32_t height);
+
+// render thread, once the frame that recorded the copy has finished on the GPU (the
+// device is waited for idle first): the region's texels; empty when it cannot be mapped
+DepthReadback mapDepthReadback(
+  nvrhi::IDevice& device,
+  nvrhi::IStagingTexture* staging,
+  std::uint32_t x,
+  std::uint32_t y);
+
+// a PNG of 8-bit pixels (1 grey, 3 RGB or 4 RGBA channels, rows top first), written with
+// miniz; false when it cannot be written
+bool writePng(
+  const std::filesystem::path& path,
+  std::uint32_t width,
+  std::uint32_t height,
+  int channels,
+  const std::vector<std::uint8_t>& pixels);
 
 // the threads of now that baseline did not have (the same id and start counts as had)
 std::vector<ProcessThread> newThreads(

@@ -942,4 +942,98 @@ HandGlb handAnimatedGlb(const bool skinned, const bool animated)
   return glb;
 }
 
+float DepthReadback::at(const std::uint32_t tx, const std::uint32_t ty) const
+{
+  return depth[std::size_t(ty - y) * width + std::size_t(tx - x)];
+}
+
+nvrhi::StagingTextureHandle recordDepthReadback(
+  nvrhi::IDevice& device,
+  nvrhi::ICommandList& commandList,
+  nvrhi::ITexture* texture,
+  const std::uint32_t x,
+  const std::uint32_t y,
+  const std::uint32_t width,
+  const std::uint32_t height)
+{
+  auto staging = device.createStagingTexture(
+    nvrhi::TextureDesc{}
+      .setWidth(width)
+      .setHeight(height)
+      .setFormat(texture->getDesc().format)
+      .setDebugName("LitTestUtils depth readback"),
+    nvrhi::CpuAccessMode::Read);
+  if (!staging)
+  {
+    return nullptr;
+  }
+  commandList.copyTexture(
+    staging,
+    nvrhi::TextureSlice{}.setWidth(width).setHeight(height),
+    texture,
+    nvrhi::TextureSlice{}.setOrigin(x, y).setWidth(width).setHeight(height));
+  return staging;
+}
+
+DepthReadback mapDepthReadback(
+  nvrhi::IDevice& device,
+  nvrhi::IStagingTexture* staging,
+  const std::uint32_t x,
+  const std::uint32_t y)
+{
+  auto out = DepthReadback{};
+  if (!staging)
+  {
+    return out;
+  }
+  device.waitForIdle();
+  const auto& desc = staging->getDesc();
+  auto pitch = std::size_t{0};
+  const auto* bytes = static_cast<const std::uint8_t*>(device.mapStagingTexture(
+    staging, nvrhi::TextureSlice{}, nvrhi::CpuAccessMode::Read, &pitch));
+  if (!bytes)
+  {
+    return out;
+  }
+  out.x = x;
+  out.y = y;
+  out.width = desc.width;
+  out.height = desc.height;
+  out.depth.resize(std::size_t(desc.width) * desc.height);
+  for (std::uint32_t row = 0; row < desc.height; ++row)
+  {
+    std::memcpy(
+      out.depth.data() + std::size_t(row) * desc.width,
+      bytes + std::size_t(row) * pitch,
+      std::size_t(desc.width) * sizeof(float));
+  }
+  device.unmapStagingTexture(staging);
+  return out;
+}
+
+bool writePng(
+  const std::filesystem::path& path,
+  const std::uint32_t width,
+  const std::uint32_t height,
+  const int channels,
+  const std::vector<std::uint8_t>& pixels)
+{
+  if (pixels.size() != std::size_t(width) * height * std::size_t(channels))
+  {
+    return false;
+  }
+  auto size = std::size_t{0};
+  auto* png = tdefl_write_image_to_png_file_in_memory(
+    pixels.data(), int(width), int(height), channels, &size);
+  if (!png)
+  {
+    return false;
+  }
+  std::filesystem::create_directories(path.parent_path());
+  auto file = std::ofstream{path, std::ios::binary};
+  file.write(static_cast<const char*>(png), std::streamsize(size));
+  mz_free(png);
+  return bool(file);
+}
+
 } // namespace tb::lit

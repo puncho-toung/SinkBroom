@@ -1,0 +1,36 @@
+// LP3.1 (C57, C59, D160): the synthetic shadow scenes' materials (maps/lp3)
+
+// the rooms' faces: they receive light and cast no shadow
+textures/lp3/room
+{
+	noShadows
+	qer_editorimage textures/lp3/room.tga
+	diffusemap textures/lp3/room.tga
+}
+
+// the occluder boxes
+textures/lp3/box
+{
+	qer_editorimage textures/lp3/box.tga
+	diffusemap textures/lp3/box.tga
+}
+
+// a translucent caster, which draws nothing into the atlas (C57, P3.17)
+textures/lp3/panel
+{
+	translucent
+	forceShadows
+	qer_editorimage textures/lp3/panel.tga
+	diffusemap textures/lp3/panel.tga
+}
+
+// the spot light: LP2's spot image, whose black border keeps receivers in the frustum
+lights/lp3/spot
+{
+	lightFalloffImage _noFalloff
+	{
+		map lights/lp2/spot.tga
+		colored
+		zeroClamp
+	}
+}

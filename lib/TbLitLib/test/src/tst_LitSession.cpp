@@ -32,6 +32,7 @@
 #include "lit/EngineImageData.h"
 #include "lit/EnginePipelineState.h"
 #include "lit/EngineTables.h"
+#include "lit/EntityState.h"
 #include "lit/FramePacer.h"
 #include "lit/GameDeclSource.h"
 #include "lit/GameFile.h"
@@ -15123,6 +15124,1015 @@ TEST_CASE("LitSession model entities on a GPU (LP7.2)", "[.][litgpu3]")
   std::cout << fmt::format(
     "LP7.2 model entities on a GPU: {:.1f} s\n",
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+}
+
+namespace
+{
+
+// LP3.1 (D160, D161): the LP2.2a root with the synthetic shadow scenes (fixture/lit/
+// maps/lp3, materials/lp3_shadows.mtr) and the fixture's light images (lights/lp2's spot)
+std::filesystem::path assembleLp3Root(const std::filesystem::path& gamePath)
+{
+  const auto root = assembleLitRoot(gamePath);
+  if (root.empty())
+  {
+    return {};
+  }
+  const auto base = root / "base";
+  const auto fixture = litFixtureFolder();
+  std::filesystem::copy(
+    fixture / "maps" / "lp3",
+    base / "maps" / "lp3",
+    std::filesystem::copy_options::recursive);
+  std::filesystem::copy_file(
+    fixture / "materials" / "lp3_shadows.mtr", base / "materials" / "lp3_shadows.mtr");
+  std::filesystem::copy(
+    fixture / "lights", base / "lights", std::filesystem::copy_options::recursive);
+  return root;
+}
+
+std::string lp3MapText(const std::string& name)
+{
+  return readTextFile(litFixtureFolder() / "maps" / "lp3" / name);
+}
+
+std::shared_ptr<const Snapshot> lp3Snapshot(
+  const std::string& text,
+  const std::filesystem::path& root,
+  const std::string& name,
+  const std::uint64_t sequence)
+{
+  auto snapshot = snapshotOfMapText(text);
+  snapshot.generation = 7;
+  snapshot.sequence = sequence;
+  // no .proc beside it: no tree (D94), every chunk a candidate
+  snapshot.mapPath = (root / "base" / "maps" / "lp3" / name).string();
+  return std::make_shared<const Snapshot>(std::move(snapshot));
+}
+
+// a map's text with an entity's key added after its name line
+std::string withKey(
+  std::string text,
+  const std::string& name,
+  const std::string& key,
+  const std::string& value)
+{
+  const auto line = fmt::format("\"name\" \"{}\"\n", name);
+  const auto at = text.find(line);
+  REQUIRE(at != std::string::npos);
+  text.insert(at + line.size(), fmt::format("\"{}\" \"{}\"\n", key, value));
+  return text;
+}
+
+// what a settled frame of the shadow cases leaves: its HDR picture, its stats and lists,
+// the casting lights' records, the draw log and a region of the atlas read back
+struct ShadowFrame
+{
+  HdrImage hdr;
+  LitFrameStats stats;
+  std::vector<ShadowLightRecord> records;
+  // the lists' lights in viewLights order: their "name" keys
+  std::vector<std::string> lights;
+  std::vector<LitDrawRecord> drawLog;
+  DepthReadback atlas;
+  bool atlasMade = false;
+  std::uint64_t atlasBytes = 0;
+  std::uint64_t smWrites = 0;
+  std::uint64_t plainWrites = 0;
+};
+
+// the atlas rect of a record's side
+AtlasRect tileOf(const ShadowLightRecord& record, const int side)
+{
+  const auto slice = std::size_t(std::max(0, side));
+  return AtlasRect{
+    record.atlasOffsets[slice][0], record.atlasOffsets[slice][1], record.imageSize[1]};
+}
+
+// the bounds of every placed tile of the records, and of extra rects
+std::optional<AtlasRect> regionOf(
+  const std::vector<ShadowLightRecord>& records, const std::vector<AtlasRect>& extra)
+{
+  auto x0 = 8192;
+  auto y0 = 8192;
+  auto x1 = 0;
+  auto y1 = 0;
+  auto add = [&](const AtlasRect& rect) {
+    x0 = std::min(x0, rect.x);
+    y0 = std::min(y0, rect.y);
+    x1 = std::max(x1, rect.x + rect.size);
+    y1 = std::max(y1, rect.y + rect.size);
+  };
+  for (const auto& record : records)
+  {
+    for (std::size_t s = 0; s < std::size_t(record.sides); ++s)
+    {
+      if (record.placements[s].placed)
+      {
+        add(AtlasRect{
+          record.placements[s].x, record.placements[s].y, record.placements[s].size});
+      }
+    }
+  }
+  for (const auto& rect : extra)
+  {
+    add(rect);
+  }
+  if (x1 <= x0 || y1 <= y0)
+  {
+    return std::nullopt;
+  }
+  // a square-free region (the readback's width and height)
+  return AtlasRect{x0, y0, std::max(x1 - x0, y1 - y0)};
+}
+
+/**
+ * The first frame of camera that is settled by the product's rule (D77) with at least
+ * minLights lights in its lists: its HDR target, its records and stats, and (readAtlas)
+ * the atlas over its tiles' bounds and extra, copied after its tonemap passes and read in
+ * the next frame; nullopt at the deadline.
+ */
+std::optional<ShadowFrame> settledShadowFrame(
+  LitSession& session,
+  const CameraState& camera,
+  const std::size_t minLights,
+  const bool readAtlas,
+  const std::vector<AtlasRect>& extra = {},
+  const std::optional<AtlasRect> regionOverride = std::nullopt,
+  const std::chrono::milliseconds timeout = 60000ms)
+{
+  struct State
+  {
+    ShadowFrame frame;
+    bool settled = false;
+    nvrhi::StagingTextureHandle hdr;
+    nvrhi::StagingTextureHandle atlas;
+    std::optional<AtlasRect> region;
+  };
+  session.setCamera(camera);
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    session.tableChanged();
+    auto state = std::make_shared<State>();
+    auto done = std::make_shared<std::promise<void>>();
+    auto future = done->get_future();
+    session.runAfterTonemapForTesting(
+      [state, done, camera, minLights, readAtlas, extra, regionOverride](
+        RenderFrameAccess& access) {
+        const auto& stats = access.passes.lastStats();
+        const auto& lists = access.passes.lists();
+        state->settled = stats.camera == camera && !stats.unconverged
+                         && access.images.pending() == 0 && !access.images.hasLoading()
+                         && !lists.drawSurfs.empty() && lists.lights.size() >= minLights
+                         && !access.arenas.pending() && access.convergence.settled();
+        if (state->settled)
+        {
+          auto& frame = state->frame;
+          frame.stats = stats;
+          frame.records = access.passes.shadowLights();
+          for (const auto& light : lists.lights)
+          {
+            frame.lights.emplace_back(spawnString(light.record->spawnArgs, "name"));
+          }
+          frame.drawLog = access.passes.drawLogForTesting();
+          frame.atlasBytes = access.passes.shadowAtlasBytes();
+          auto* hdr = access.frame.find(frame_resource::CurrentRenderHdr)->texture;
+          const auto& desc = hdr->getDesc();
+          state->hdr = access.device.createStagingTexture(
+            nvrhi::TextureDesc{}
+              .setWidth(desc.width)
+              .setHeight(desc.height)
+              .setFormat(desc.format),
+            nvrhi::CpuAccessMode::Read);
+          access.commandList.copyTexture(
+            state->hdr, nvrhi::TextureSlice{}, hdr, nvrhi::TextureSlice{});
+          auto* atlas = access.passes.shadowAtlas();
+          frame.atlasMade = atlas != nullptr;
+          state->region =
+            regionOverride ? regionOverride : regionOf(frame.records, extra);
+          if (readAtlas && atlas && state->region)
+          {
+            state->atlas = recordDepthReadback(
+              access.device,
+              access.commandList,
+              atlas,
+              std::uint32_t(state->region->x),
+              std::uint32_t(state->region->y),
+              std::uint32_t(state->region->size),
+              std::uint32_t(state->region->size));
+          }
+        }
+        done->set_value();
+      });
+    if (future.wait_for(10000ms) != std::future_status::ready)
+    {
+      return std::nullopt;
+    }
+    if (!state->settled)
+    {
+      std::this_thread::sleep_for(50ms);
+      continue;
+    }
+    const auto read = inFrame(session, [state](RenderFrameAccess& access) {
+      access.device.waitForIdle();
+      const auto& desc = state->hdr->getDesc();
+      auto& image = state->frame.hdr;
+      image.width = desc.width;
+      image.height = desc.height;
+      image.rgba.resize(std::size_t(desc.width) * desc.height * 4);
+      auto pitch = std::size_t{0};
+      const auto* bytes =
+        static_cast<const std::uint8_t*>(access.device.mapStagingTexture(
+          state->hdr, nvrhi::TextureSlice{}, nvrhi::CpuAccessMode::Read, &pitch));
+      for (std::uint32_t y = 0; y < desc.height; ++y)
+      {
+        const auto* row = reinterpret_cast<const std::uint16_t*>(bytes + y * pitch);
+        for (std::uint32_t x = 0; x < desc.width * 4; ++x)
+        {
+          image.rgba[std::size_t(y) * desc.width * 4 + x] = halfToFloat(row[x]);
+        }
+      }
+      access.device.unmapStagingTexture(state->hdr);
+      state->hdr = nullptr;
+      if (state->atlas)
+      {
+        state->frame.atlas = mapDepthReadback(
+          access.device,
+          state->atlas,
+          std::uint32_t(state->region->x),
+          std::uint32_t(state->region->y));
+        state->atlas = nullptr;
+      }
+    });
+    if (!read)
+    {
+      return std::nullopt;
+    }
+    return std::move(state->frame);
+  }
+  return std::nullopt;
+}
+
+// the folder the cases' pictures go to (TB_LIT_PNG_OUT), or none
+std::optional<std::filesystem::path> pngFolder()
+{
+  const auto* value = std::getenv("TB_LIT_PNG_OUT");
+  if (!value || !*value)
+  {
+    return std::nullopt;
+  }
+  return std::filesystem::path{value};
+}
+
+// the atlas region as a grey PNG: 1.0 (the far clear) black, nearer brighter
+void saveAtlasPng(const DepthReadback& atlas, const std::string& name)
+{
+  const auto folder = pngFolder();
+  if (!folder || atlas.depth.empty())
+  {
+    return;
+  }
+  auto grey = std::vector<std::uint8_t>(atlas.depth.size());
+  for (std::size_t i = 0; i < grey.size(); ++i)
+  {
+    const auto d = std::clamp(atlas.depth[i], 0.0f, 1.0f);
+    grey[i] = std::uint8_t(std::lround(255.0 * std::sqrt(double(1.0f - d))));
+  }
+  const auto path = *folder / (name + "_atlas.png");
+  CHECK(writePng(path, atlas.width, atlas.height, 1, grey));
+  std::cout << fmt::format(
+    "LP3.1 {}: atlas region ({}, {}) {} x {} -> {}\n",
+    name,
+    atlas.x,
+    atlas.y,
+    atlas.width,
+    atlas.height,
+    path.string());
+}
+
+// the HDR picture as an RGB PNG, scaled by its brightest component
+void saveHdrPng(const HdrImage& hdr, const std::string& name)
+{
+  const auto folder = pngFolder();
+  if (!folder || hdr.rgba.empty())
+  {
+    return;
+  }
+  auto most = 1e-6f;
+  for (std::size_t i = 0; i < hdr.rgba.size(); ++i)
+  {
+    if (i % 4 != 3)
+    {
+      most = std::max(most, hdr.rgba[i]);
+    }
+  }
+  auto rgb = std::vector<std::uint8_t>{};
+  rgb.reserve(std::size_t(hdr.width) * hdr.height * 3);
+  for (std::size_t i = 0; i < hdr.rgba.size(); ++i)
+  {
+    if (i % 4 != 3)
+    {
+      rgb.push_back(
+        std::uint8_t(std::lround(255.0f * std::clamp(hdr.rgba[i] / most, 0.0f, 1.0f))));
+    }
+  }
+  const auto path = *folder / (name + "_hdr.png");
+  CHECK(writePng(path, hdr.width, hdr.height, 3, rgb));
+  std::cout << fmt::format("LP3.1 {}: picture -> {}\n", name, path.string());
+}
+
+// the atlas texel a world point projects to through a record's stored side matrices, as
+// interactionSM samples it (SC729): clipToWindow · shadowP · shadowV (point, parallel),
+// shadowP · shadowV (spot), divided by w, then offset + st · size; none behind the side
+std::optional<std::array<float, 2>> texelOf(
+  const ShadowLightRecord& record, const int side, const EngineVec3& point)
+{
+  const auto slice = std::size_t(std::max(0, side));
+  auto matrix = engineMatrixMultiply(record.shadowP[slice], record.shadowV[slice]);
+  if (record.type != ShadowLightType::Spot)
+  {
+    matrix = engineMatrixMultiply(engineClipSpaceToWindowSpace(), matrix);
+  }
+  const auto p = std::array<float, 4>{point[0], point[1], point[2], 1.0f};
+  auto out = std::array<float, 4>{};
+  for (std::size_t r = 0; r < 4; ++r)
+  {
+    out[r] = matrix[r * 4 + 0] * p[0] + matrix[r * 4 + 1] * p[1]
+             + matrix[r * 4 + 2] * p[2] + matrix[r * 4 + 3] * p[3];
+  }
+  if (!(out[3] > 1e-4f))
+  {
+    return std::nullopt;
+  }
+  const auto tile = tileOf(record, side);
+  return std::array<float, 2>{
+    float(tile.x) + out[0] / out[3] * float(tile.size),
+    float(tile.y) + out[1] / out[3] * float(tile.size)};
+}
+
+// the texel bounds of a box's eight corners in a side (none when a corner is behind it)
+std::optional<std::array<float, 4>> footprintOf(
+  const ShadowLightRecord& record, const int side, const EngineBounds& box)
+{
+  auto bounds = std::array<float, 4>{1e9f, 1e9f, -1e9f, -1e9f};
+  for (auto c = 0; c < 8; ++c)
+  {
+    const auto corner = EngineVec3{
+      box[(c & 1) ? 1 : 0][0], box[(c & 2) ? 1 : 0][1], box[(c & 4) ? 1 : 0][2]};
+    const auto texel = texelOf(record, side, corner);
+    if (!texel)
+    {
+      return std::nullopt;
+    }
+    bounds[0] = std::min(bounds[0], (*texel)[0]);
+    bounds[1] = std::min(bounds[1], (*texel)[1]);
+    bounds[2] = std::max(bounds[2], (*texel)[0]);
+    bounds[3] = std::max(bounds[3], (*texel)[1]);
+  }
+  return bounds;
+}
+
+/**
+ * The atlas check of a light's tiles (D160): every texel below 1.0 lies inside the
+ * footprint of a caster box (its corners' texels, 2 texels of margin; a footprint with a
+ * corner behind the side is the whole tile), the box's own footprint centre is below 1.0
+ * in the side holding it, and every other texel is the far clear, exactly 1.0. Returns
+ * the tile's texels below 1.0 per side.
+ */
+std::vector<std::size_t> checkTiles(
+  const ShadowFrame& frame,
+  const ShadowLightRecord& record,
+  const std::vector<EngineBounds>& casters,
+  const std::optional<EngineBounds>& box)
+{
+  auto nearer = std::vector<std::size_t>(std::size_t(record.sides), 0);
+  const auto first = record.type == ShadowLightType::Spot ? -1 : 0;
+  for (auto side = first; side < first + record.sides; ++side)
+  {
+    CAPTURE(side);
+    const auto tile = tileOf(record, side);
+    auto footprints = std::vector<std::array<float, 4>>{};
+    for (const auto& caster : casters)
+    {
+      const auto footprint = footprintOf(record, side, caster);
+      footprints.push_back(
+        footprint ? *footprint
+                  : std::array<float, 4>{
+                      float(tile.x),
+                      float(tile.y),
+                      float(tile.x + tile.size),
+                      float(tile.y + tile.size)});
+    }
+    auto outside = std::size_t{0};
+    for (auto ty = tile.y; ty < tile.y + tile.size; ++ty)
+    {
+      for (auto tx = tile.x; tx < tile.x + tile.size; ++tx)
+      {
+        const auto d = frame.atlas.at(std::uint32_t(tx), std::uint32_t(ty));
+        if (d >= 1.0f)
+        {
+          continue;
+        }
+        ++nearer[std::size_t(side - first)];
+        const auto inside = std::ranges::any_of(footprints, [&](const auto& f) {
+          return float(tx) + 0.5f >= f[0] - 2.0f && float(tx) + 0.5f <= f[2] + 2.0f
+                 && float(ty) + 0.5f >= f[1] - 2.0f && float(ty) + 0.5f <= f[3] + 2.0f;
+        });
+        if (!inside)
+        {
+          ++outside;
+        }
+      }
+    }
+    CHECK(outside == 0u);
+    if (box)
+    {
+      const auto footprint = footprintOf(record, side, *box);
+      if (footprint)
+      {
+        const auto cx = ((*footprint)[0] + (*footprint)[2]) * 0.5f;
+        const auto cy = ((*footprint)[1] + (*footprint)[3]) * 0.5f;
+        if (
+          cx >= float(tile.x) && cx < float(tile.x + tile.size) && cy >= float(tile.y)
+          && cy < float(tile.y + tile.size))
+        {
+          CHECK(frame.atlas.at(std::uint32_t(cx), std::uint32_t(cy)) < 1.0f);
+        }
+      }
+    }
+  }
+  return nearer;
+}
+
+// the receiver check (SC733): per pixel, darker, brighter or equal between two pictures
+struct PictureDiff
+{
+  std::size_t darker = 0;
+  std::size_t brighter = 0;
+  std::size_t equal = 0;
+};
+
+PictureDiff comparePictures(const HdrImage& shadowed, const HdrImage& unshadowed)
+{
+  auto diff = PictureDiff{};
+  for (std::uint32_t y = 0; y < shadowed.height; ++y)
+  {
+    for (std::uint32_t x = 0; x < shadowed.width; ++x)
+    {
+      const auto a = shadowed.at(x, y);
+      const auto b = unshadowed.at(x, y);
+      if (a[0] == b[0] && a[1] == b[1] && a[2] == b[2])
+      {
+        ++diff.equal;
+      }
+      else if (a[0] <= b[0] && a[1] <= b[1] && a[2] <= b[2])
+      {
+        ++diff.darker;
+      }
+      else
+      {
+        ++diff.brighter;
+      }
+    }
+  }
+  return diff;
+}
+
+// the interaction programs a frame's draw log holds
+std::set<int> interactionPrograms(const std::vector<LitDrawRecord>& log)
+{
+  auto programs = std::set<int>{};
+  for (const auto& record : log)
+  {
+    if (record.pass == LitDrawRecord::Pass::Interaction)
+    {
+      programs.insert(record.program);
+    }
+  }
+  return programs;
+}
+
+// the sides a chunk of an entity's was drawn into (the draw log's Shadow records)
+std::set<int> shadowSidesOf(const std::vector<LitDrawRecord>& log, const PreviewId entity)
+{
+  auto sides = std::set<int>{};
+  for (const auto& record : log)
+  {
+    if (record.pass == LitDrawRecord::Pass::Shadow && record.chunk.entity == entity)
+    {
+      sides.insert(record.side);
+    }
+  }
+  return sides;
+}
+
+// the expected placements of a light's sides when it is packed alone (D145)
+std::vector<EngineAtlasPlacement> packedAlone(const int sides, const int size)
+{
+  auto map = EngineTileMap{};
+  REQUIRE(map.init(8192, 1024, 8));
+  return engineShadowAtlasLayout(
+    map,
+    std::vector<EngineAtlasSize>(std::size_t(sides), EngineAtlasSize{size, size}),
+    8192);
+}
+
+constexpr auto Lp3Box = EngineBounds{EngineVec3{32, -16, 80}, EngineVec3{64, 16, 112}};
+
+} // namespace
+
+// LP3.1 (C57-C61, D145-D149, D154, D160, D161; SC714-SC736): the shadow atlas and the
+// shadow-atlas interactions on synthetic scenes (fixture/lit/maps/lp3): (a) a point light
+// and a box, (b) a spot light, (c) a parallel light, (d) a translucent-only caster, (e)
+// 43 point lights overflowing the atlas, (f) the vacated rects' clear, (g) D76's two
+// layouts. Hidden: the blobs live only in the game folder; it needs a GPU.
+TEST_CASE("LitSession shadows on a GPU (LP3.1)", "[.][litgpu2]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto started = std::chrono::steady_clock::now();
+  const auto root = assembleLp3Root(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  const auto instance = testInstance(true, false, messages);
+  REQUIRE(instance.valid());
+  REQUIRE(initInstanceDispatcher(instance.handles()));
+  auto service = rootService(root);
+  auto events = Events{};
+  auto session = rootSession(instance, events, *service, root, true, false, true);
+  session->setExposed(true);
+  REQUIRE(waitFor(
+    [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+  REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+    access.passes.setDrawLogForTesting(true);
+  }));
+  auto sequence = std::uint64_t{0};
+  const auto offer = [&](const std::string& text, const std::string& name) {
+    REQUIRE(session->offerSnapshot(lp3Snapshot(text, root, name, ++sequence)));
+    // the draw log of the new scene's frames alone
+    REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+      access.passes.setDrawLogForTesting(true);
+    }));
+  };
+
+  // ---------------------------------------------------------------------------------
+  SECTION("(a) a point light and a box: six 512 tiles, the box's footprint, its shadow")
+  {
+    const auto camera = litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1});
+    const auto text = lp3MapText("lp3_point.map");
+    offer(text, "lp3_point.map");
+    const auto shadowed = settledShadowFrame(*session, camera, 1, true);
+    REQUIRE(shadowed);
+    const auto& frame = *shadowed;
+    CHECK(frame.stats.lightsCasting == 1u);
+    CHECK(frame.stats.lightsPlaced == 1u);
+    CHECK(frame.stats.lightsUnplaced == 0u);
+    CHECK(frame.stats.tilesDrawn == 6u);
+    CHECK(frame.stats.shadowDraws > 0u);
+    CHECK(frame.stats.perforatedCastersSkipped == 0u);
+    CHECK(frame.atlasMade);
+    CHECK(frame.atlasBytes == 8192ull * 8192ull * 4ull);
+    REQUIRE(frame.records.size() == 1u);
+    const auto& record = frame.records[0];
+    CHECK(record.type == ShadowLightType::Point);
+    // the camera inside the volume: LOD 0, a point light's 1 (FAL:463-466), 512
+    CHECK(record.lod == 1);
+    CHECK(record.imageSize == std::array<int, 2>{512, 512});
+    // the copied packing's own positions (D145)
+    const auto expected = packedAlone(6, 512);
+    for (std::size_t side = 0; side < 6; ++side)
+    {
+      CAPTURE(side);
+      CHECK(record.placements[side].placed);
+      CHECK(record.placements[side].x == expected[side].x);
+      CHECK(record.placements[side].y == expected[side].y);
+      CHECK(
+        record.atlasOffsets[side]
+        == std::array<int, 2>{expected[side].x, expected[side].y});
+    }
+    // the shadow-atlas point programs alone (legacy or PBR by the specular image)
+    for (const auto program : interactionPrograms(frame.drawLog))
+    {
+      CHECK(
+        (program == EngineBuiltinInteractionShadowAtlasPoint
+         || program == EngineBuiltinPbrInteractionShadowAtlasPoint));
+    }
+    CHECK_FALSE(interactionPrograms(frame.drawLog).empty());
+    // D149: the box is drawn into the sides whose true frustum meets it
+    auto boxSides = std::set<int>{};
+    for (const auto& draw : frame.drawLog)
+    {
+      if (draw.pass == LitDrawRecord::Pass::Shadow)
+      {
+        boxSides.insert(draw.side);
+      }
+    }
+    std::cout << fmt::format(
+      "LP3.1 (a): tiles {}, shadow draws {}, culled {}, sides drawn {}\n",
+      frame.stats.tilesDrawn,
+      frame.stats.shadowDraws,
+      frame.stats.shadowCastersCulled,
+      fmt::join(boxSides, " "));
+    // the atlas: the box's and the anchor's footprints below 1.0, the far clear elsewhere
+    REQUIRE_FALSE(frame.atlas.depth.empty());
+    const auto anchor = EngineBounds{EngineVec3{92, -208, 24}, EngineVec3{108, -192, 40}};
+    const auto nearer = checkTiles(frame, record, {Lp3Box, anchor}, Lp3Box);
+    std::cout << fmt::format(
+      "LP3.1 (a): texels below 1.0 per side {}\n", fmt::join(nearer, " "));
+    saveAtlasPng(frame.atlas, "lp31_a_point");
+    saveHdrPng(frame.hdr, "lp31_a_point");
+
+    // the same scene with the box noshadows 1: the anchor keeps the light casting, so
+    // the shadow-atlas program draws both pictures (SC733)
+    offer(withKey(text, "lp3_box", "noshadows", "1"), "lp3_point.map");
+    const auto unshadowed = settledShadowFrame(*session, camera, 1, true);
+    REQUIRE(unshadowed);
+    CHECK(unshadowed->stats.lightsPlaced == 1u);
+    const auto diff = comparePictures(frame.hdr, unshadowed->hdr);
+    std::cout << fmt::format(
+      "LP3.1 (a): the box's shadow: {} pixels darker, {} brighter, {} equal\n",
+      diff.darker,
+      diff.brighter,
+      diff.equal);
+    CHECK(diff.darker > 100u);
+    CHECK(diff.brighter == 0u);
+    saveHdrPng(unshadowed->hdr, "lp31_a_point_unshadowed");
+  }
+
+  // ---------------------------------------------------------------------------------
+  SECTION("(b) a spot light and a box: one 512 tile, the box's footprint, its shadow")
+  {
+    // inside the spot's frustum, beside the light, so that the box's shadow on the far
+    // wall is not behind the box
+    const auto camera = litCamera({0, -100, 140}, {0.9f, 0.4359f, 0}, {0, 0, 1});
+    const auto text = lp3MapText("lp3_spot.map");
+    offer(text, "lp3_spot.map");
+    const auto shadowed = settledShadowFrame(*session, camera, 1, true);
+    REQUIRE(shadowed);
+    const auto& frame = *shadowed;
+    CHECK(frame.stats.lightsCasting == 1u);
+    CHECK(frame.stats.lightsPlaced == 1u);
+    CHECK(frame.stats.tilesDrawn == 1u);
+    CHECK(frame.stats.shadowDraws > 0u);
+    REQUIRE(frame.records.size() == 1u);
+    const auto& record = frame.records[0];
+    CHECK(record.type == ShadowLightType::Spot);
+    CHECK(record.sides == 1);
+    CHECK(record.lod == 1);
+    CHECK(record.imageSize == std::array<int, 2>{512, 512});
+    const auto expected = packedAlone(1, 512);
+    CHECK(record.placements[0].x == expected[0].x);
+    CHECK(record.placements[0].y == expected[0].y);
+    for (const auto program : interactionPrograms(frame.drawLog))
+    {
+      CHECK(
+        (program == EngineBuiltinInteractionShadowAtlasSpot
+         || program == EngineBuiltinPbrInteractionShadowAtlasSpot));
+    }
+    CHECK_FALSE(interactionPrograms(frame.drawLog).empty());
+    REQUIRE_FALSE(frame.atlas.depth.empty());
+    const auto anchor = EngineBounds{EngineVec3{232, 192, 8}, EngineVec3{248, 208, 24}};
+    const auto nearer = checkTiles(frame, record, {Lp3Box, anchor}, Lp3Box);
+    std::cout << fmt::format(
+      "LP3.1 (b): tile ({}, {}), shadow draws {}, texels below 1.0 {}\n",
+      record.placements[0].x,
+      record.placements[0].y,
+      frame.stats.shadowDraws,
+      nearer[0]);
+    CHECK(nearer[0] > 0u);
+    saveAtlasPng(frame.atlas, "lp31_b_spot");
+    saveHdrPng(frame.hdr, "lp31_b_spot");
+
+    offer(withKey(text, "lp3_box", "noshadows", "1"), "lp3_spot.map");
+    const auto unshadowed = settledShadowFrame(*session, camera, 1, false);
+    REQUIRE(unshadowed);
+    CHECK(unshadowed->stats.lightsPlaced == 1u);
+    const auto diff = comparePictures(frame.hdr, unshadowed->hdr);
+    std::cout << fmt::format(
+      "LP3.1 (b): the box's shadow: {} pixels darker, {} brighter, {} equal\n",
+      diff.darker,
+      diff.brighter,
+      diff.equal);
+    CHECK(diff.darker > 100u);
+    CHECK(diff.brighter == 0u);
+    saveHdrPng(unshadowed->hdr, "lp31_b_spot_unshadowed");
+  }
+
+  // ---------------------------------------------------------------------------------
+  SECTION("(c) a parallel light and a box: four 1024 cascades, the box's shadow")
+  {
+    const auto camera = litCamera({-112, 0, 96}, {1, 0, 0}, {0, 0, 1});
+    const auto text = lp3MapText("lp3_parallel.map");
+    offer(text, "lp3_parallel.map");
+    const auto shadowed = settledShadowFrame(*session, camera, 1, true);
+    REQUIRE(shadowed);
+    const auto& frame = *shadowed;
+    CHECK(frame.stats.lightsCasting == 1u);
+    CHECK(frame.stats.lightsPlaced == 1u);
+    CHECK(frame.stats.tilesDrawn == 4u);
+    CHECK(frame.stats.shadowDraws > 0u);
+    REQUIRE(frame.records.size() == 1u);
+    const auto& record = frame.records[0];
+    CHECK(record.type == ShadowLightType::Parallel);
+    CHECK(record.sides == 4);
+    CHECK(record.lod == 0);
+    CHECK(record.imageSize == std::array<int, 2>{1024, 1024});
+    // the copied packing: cascade 0 the fourth tile, at (1024, 7168) (D160)
+    const auto expected = packedAlone(4, 1024);
+    for (std::size_t side = 0; side < 4; ++side)
+    {
+      CAPTURE(side);
+      CHECK(record.placements[side].x == expected[side].x);
+      CHECK(record.placements[side].y == expected[side].y);
+    }
+    CHECK(record.placements[0].x == 1024);
+    CHECK(record.placements[0].y == 7168);
+    for (const auto program : interactionPrograms(frame.drawLog))
+    {
+      CHECK(
+        (program == EngineBuiltinInteractionShadowAtlasParallel
+         || program == EngineBuiltinPbrInteractionShadowAtlasParallel));
+    }
+    CHECK_FALSE(interactionPrograms(frame.drawLog).empty());
+    REQUIRE_FALSE(frame.atlas.depth.empty());
+    const auto box = EngineBounds{EngineVec3{16, -16, 64}, EngineVec3{48, 16, 96}};
+    const auto anchor = EngineBounds{EngineVec3{-88, 72, 24}, EngineVec3{-72, 88, 40}};
+    const auto nearer = checkTiles(frame, record, {box, anchor}, box);
+    std::cout << fmt::format(
+      "LP3.1 (c): shadow draws {}, culled {}, texels below 1.0 per cascade {}\n",
+      frame.stats.shadowDraws,
+      frame.stats.shadowCastersCulled,
+      fmt::join(nearer, " "));
+    CHECK(nearer[0] > 0u);
+    saveAtlasPng(frame.atlas, "lp31_c_parallel");
+    saveHdrPng(frame.hdr, "lp31_c_parallel");
+
+    offer(withKey(text, "lp3_box", "noshadows", "1"), "lp3_parallel.map");
+    const auto unshadowed = settledShadowFrame(*session, camera, 1, false);
+    REQUIRE(unshadowed);
+    CHECK(unshadowed->stats.lightsPlaced == 1u);
+    const auto diff = comparePictures(frame.hdr, unshadowed->hdr);
+    std::cout << fmt::format(
+      "LP3.1 (c): the box's shadow: {} pixels darker, {} brighter, {} equal\n",
+      diff.darker,
+      diff.brighter,
+      diff.equal);
+    CHECK(diff.darker > 100u);
+    CHECK(diff.brighter == 0u);
+    saveHdrPng(unshadowed->hdr, "lp31_c_parallel_unshadowed");
+  }
+
+  // ---------------------------------------------------------------------------------
+  SECTION("(d) a translucent-only caster: tiles and the program, nothing drawn")
+  {
+    const auto camera = litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1});
+    offer(lp3MapText("lp3_translucent.map"), "lp3_translucent.map");
+    const auto shadowed = settledShadowFrame(*session, camera, 1, true);
+    REQUIRE(shadowed);
+    const auto& frame = *shadowed;
+    // P3.17: the panel counts as a caster, so the light takes its tiles and the program,
+    // but it draws nothing into them (RB:3506-3509)
+    CHECK(frame.stats.lightsCasting == 1u);
+    CHECK(frame.stats.lightsPlaced == 1u);
+    CHECK(frame.stats.tilesDrawn == 6u);
+    CHECK(frame.stats.shadowDraws == 0u);
+    REQUIRE(frame.records.size() == 1u);
+    for (const auto program : interactionPrograms(frame.drawLog))
+    {
+      CHECK(
+        (program == EngineBuiltinInteractionShadowAtlasPoint
+         || program == EngineBuiltinPbrInteractionShadowAtlasPoint));
+    }
+    CHECK_FALSE(interactionPrograms(frame.drawLog).empty());
+    REQUIRE_FALSE(frame.atlas.depth.empty());
+    // every texel of its tiles the far clear, 1.0: the wall unshadowed
+    const auto nearer = checkTiles(frame, frame.records[0], {}, std::nullopt);
+    CHECK(std::ranges::all_of(nearer, [](const auto n) { return n == 0u; }));
+    std::cout << fmt::format(
+      "LP3.1 (d): tiles {}, shadow draws {}, texels below 1.0 {}\n",
+      frame.stats.tilesDrawn,
+      frame.stats.shadowDraws,
+      fmt::join(nearer, " "));
+    saveAtlasPng(frame.atlas, "lp31_d_translucent");
+    saveHdrPng(frame.hdr, "lp31_d_translucent");
+  }
+
+  // ---------------------------------------------------------------------------------
+  SECTION("(e) 43 point lights: 41 placed, the first and the 22nd unplaced")
+  {
+    const auto camera = litCamera({0, 0, 128}, {1, 0, 0}, {0, 0, 1});
+    offer(lp3MapText("lp3_overflow.map"), "lp3_overflow.map");
+    const auto shadowed =
+      settledShadowFrame(*session, camera, 43, true, {}, AtlasRect{0, 6144, 2048});
+    REQUIRE(shadowed);
+    const auto& frame = *shadowed;
+    CHECK(frame.stats.lightsCasting == 43u);
+    CHECK(frame.stats.lightsPlaced == 41u);
+    CHECK(frame.stats.lightsUnplaced == 2u);
+    CHECK(frame.stats.lightsDrawn == 43u);
+    CHECK(frame.stats.lightsOverflowed == 0u);
+    REQUIRE(frame.records.size() == 43u);
+    REQUIRE(frame.lights.size() == 43u);
+    // D160, D162: the copied packing of 258 equal sides leaves shadowIndex 0 and 128
+    // without a tile: the first light in viewLights order and the 22nd
+    CHECK_FALSE(frame.records[0].placed());
+    CHECK_FALSE(frame.records[21].placed());
+    REQUIRE(frame.stats.unplacedLights.size() == 2u);
+    CHECK(frame.stats.unplacedLights[0] == frame.lights[0]);
+    CHECK(frame.stats.unplacedLights[1] == frame.lights[21]);
+    std::cout << fmt::format(
+      "LP3.1 (e): unplaced {} and {} (viewLights 0 and 21 of 43)\n",
+      frame.stats.unplacedLights[0],
+      frame.stats.unplacedLights[1]);
+    // every side where engineShadowAtlasLayout puts it
+    {
+      auto map = EngineTileMap{};
+      REQUIRE(map.init(8192, 1024, 8));
+      const auto expected = engineShadowAtlasLayout(
+        map, std::vector<EngineAtlasSize>(258, EngineAtlasSize{512, 512}), 8192);
+      auto mismatches = 0;
+      for (std::size_t r = 0; r < 43; ++r)
+      {
+        for (std::size_t s = 0; s < 6; ++s)
+        {
+          const auto& got = frame.records[r].placements[s];
+          const auto& want = expected[r * 6 + s];
+          mismatches += got.placed != want.placed || got.x != want.x || got.y != want.y;
+        }
+      }
+      CHECK(mismatches == 0);
+    }
+    // the unplaced lights draw the plain interaction, the others the atlas's (K26, C60)
+    auto plainOf = std::set<PreviewId>{};
+    auto atlasOf = std::set<PreviewId>{};
+    for (const auto& draw : frame.drawLog)
+    {
+      if (draw.pass != LitDrawRecord::Pass::Interaction)
+      {
+        continue;
+      }
+      if (
+        draw.program == EngineBuiltinInteraction
+        || draw.program == EngineBuiltinPbrInteraction)
+      {
+        plainOf.insert(draw.light);
+      }
+      else
+      {
+        atlasOf.insert(draw.light);
+      }
+    }
+    CHECK(
+      plainOf == std::set<PreviewId>{frame.records[0].light, frame.records[21].light});
+    CHECK(atlasOf.size() == 41u);
+    saveAtlasPng(frame.atlas, "lp31_e_overflow");
+    saveHdrPng(frame.hdr, "lp31_e_overflow");
+  }
+
+  // ---------------------------------------------------------------------------------
+  SECTION("(f) a light leaving the view leaves its rects cleared to 1.0")
+  {
+    offer(lp3MapText("lp3_vacated.map"), "lp3_vacated.map");
+    const auto both = settledShadowFrame(
+      *session, litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1}), 2, false);
+    REQUIRE(both);
+    REQUIRE(both->records.size() == 2u);
+    CHECK(both->stats.lightsPlaced == 2u);
+    auto before = std::vector<AtlasRect>{};
+    for (const auto& record : both->records)
+    {
+      for (std::size_t s = 0; s < std::size_t(record.sides); ++s)
+      {
+        before.push_back(AtlasRect{
+          record.placements[s].x, record.placements[s].y, record.placements[s].size});
+      }
+    }
+    // turned round: light B's volume behind the view, A's around the camera
+    const auto one = settledShadowFrame(
+      *session, litCamera({-200, 0, 128}, {-1, 0, 0}, {0, 0, 1}), 1, true, before);
+    REQUIRE(one);
+    REQUIRE(one->records.size() == 1u);
+    auto after = std::vector<AtlasRect>{};
+    for (std::size_t s = 0; s < 6; ++s)
+    {
+      const auto& p = one->records[0].placements[s];
+      after.push_back(AtlasRect{p.x, p.y, p.size});
+    }
+    // P3.3: every rect of the first frame's tiles the second's do not cover reads 1.0
+    auto vacated = 0;
+    auto notCleared = std::size_t{0};
+    for (const auto& rect : before)
+    {
+      auto covered = std::int64_t{0};
+      for (const auto& tile : after)
+      {
+        const auto x0 = std::max(rect.x, tile.x);
+        const auto y0 = std::max(rect.y, tile.y);
+        const auto x1 = std::min(rect.x + rect.size, tile.x + tile.size);
+        const auto y1 = std::min(rect.y + rect.size, tile.y + tile.size);
+        covered += x1 > x0 && y1 > y0 ? std::int64_t(x1 - x0) * (y1 - y0) : 0;
+      }
+      if (covered == std::int64_t(rect.size) * rect.size)
+      {
+        continue;
+      }
+      ++vacated;
+      for (auto ty = rect.y; ty < rect.y + rect.size; ++ty)
+      {
+        for (auto tx = rect.x; tx < rect.x + rect.size; ++tx)
+        {
+          notCleared += one->atlas.at(std::uint32_t(tx), std::uint32_t(ty)) != 1.0f;
+        }
+      }
+    }
+    std::cout << fmt::format(
+      "LP3.1 (f): {} rects of the first frame vacated, {} of their texels not 1.0\n",
+      vacated,
+      notCleared);
+    CHECK(vacated > 0);
+    CHECK(notCleared == 0u);
+    saveAtlasPng(one->atlas, "lp31_f_vacated");
+  }
+
+  // ---------------------------------------------------------------------------------
+  SECTION("(g) D76: both interaction layouts in one frame, a light overflowed whole")
+  {
+    const auto camera = litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1});
+    offer(lp3MapText("lp3_layouts.map"), "lp3_layouts.map");
+    const auto settled = settledShadowFrame(*session, camera, 2, true);
+    REQUIRE(settled);
+    const auto& frame = *settled;
+    REQUIRE(frame.records.size() == 1u);
+    const auto programs = interactionPrograms(frame.drawLog);
+    const auto atlasProgram = std::ranges::any_of(programs, [](const int program) {
+      return program == EngineBuiltinInteractionShadowAtlasPoint
+             || program == EngineBuiltinPbrInteractionShadowAtlasPoint;
+    });
+    const auto plainProgram = std::ranges::any_of(programs, [](const int program) {
+      return program == EngineBuiltinInteraction
+             || program == EngineBuiltinPbrInteraction;
+    });
+    CHECK(atlasProgram);
+    CHECK(plainProgram);
+    CHECK(frame.stats.interactionWrites > 0u);
+    CHECK(frame.stats.interactionSmWrites > 0u);
+    CHECK(frame.stats.interactionWrites <= frame.stats.constantWriteBudget);
+    CHECK(frame.stats.interactionSmWrites <= frame.stats.constantWriteBudget);
+    CHECK(frame.stats.lightsOverflowed == 0u);
+    std::cout << fmt::format(
+      "LP3.1 (g): set 10 writes {}, set 11 writes {}, budget {}\n",
+      frame.stats.interactionWrites,
+      frame.stats.interactionSmWrites,
+      frame.stats.constantWriteBudget);
+    saveAtlasPng(frame.atlas, "lp31_g_layouts");
+    saveHdrPng(frame.hdr, "lp31_g_layouts");
+
+    // a budget one write short of the casting light's: it is not drawn, whole (no draw of
+    // its program), and the frame never meets NVRHI's maxVersions error
+    const auto versions = std::uint32_t(3 * (frame.stats.interactionSmWrites - 1));
+    REQUIRE(inFrame(*session, [versions](RenderFrameAccess& access) {
+      access.passes.setConstantBufferVersionsForTesting(versions);
+      access.passes.setDrawLogForTesting(true);
+    }));
+    auto overflowed = LitFrameStats{};
+    auto log = std::vector<LitDrawRecord>{};
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      overflowed = access.passes.lastStats();
+      log = access.passes.drawLogForTesting();
+    }));
+    CHECK(overflowed.lightsOverflowed >= 1u);
+    CHECK(overflowed.interactionSmWrites == 0u);
+    for (const auto program : interactionPrograms(log))
+    {
+      CHECK(
+        (program == EngineBuiltinInteraction || program == EngineBuiltinPbrInteraction));
+    }
+    std::cout << fmt::format(
+      "LP3.1 (g): at maxVersions {} (budget {}): {} lights overflowed, set 11 writes "
+      "{}\n",
+      versions,
+      overflowed.constantWriteBudget,
+      overflowed.lightsOverflowed,
+      overflowed.interactionSmWrites);
+    REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+      access.passes.setConstantBufferVersionsForTesting(
+        EngineFrame.constantBufferVersions);
+    }));
+  }
+
+  std::cout << fmt::format(
+    "LP3.1 shadows on a GPU: {:.1f} s\n",
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+  teardown(*session);
+  messages.print("LP3.1 shadows, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
 }
 
 } // namespace tb::lit
