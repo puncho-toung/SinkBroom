@@ -37,17 +37,21 @@
 // the light facade, as R_MatrixMultiply is (engineGlMatrixMultiply): the test transcribes
 // what the ranges themselves compute.
 
+#include "LitPasses.h"
 #include "LitView.h"
 #include "lit/EngineLight.h"
 #include "lit/EngineShadowMatrices.h"
 #include "lit/EngineTables.h"
 #include "lit/LitSession.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
 #include <iostream>
 #include <optional>
+#include <tuple>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -605,6 +609,97 @@ TEST_CASE("EngineShadowMatrices (LP3.1, C58, D160)")
     CHECK(
       engineClipSpaceToWindowSpace()
       == EngineMat4{0.5f, 0, 0, 0.5f, 0, 0.5f, 0, 0.5f, 0, 0, 0.5f, 0.5f, 0, 0, 0, 1});
+  }
+
+  SECTION("D149: the per-side cull keeps a caster in the sides whose frustum it meets")
+  {
+    auto geometry = EngineLightGeometry{};
+    geometry.origin = {10.0f, 20.0f, 30.0f};
+    geometry.lightRadius = {300.0f, 300.0f, 300.0f};
+    geometry.pointLight = true;
+    const auto projection = engineDeriveLightProjection(geometry);
+    auto light = EngineShadowLight{};
+    light.globalLightOrigin = projection.globalLightOrigin;
+    light.baseLightProject = projection.baseLightProject;
+    light.inverseBaseLightProject = projection.inverseBaseLightProject;
+    light.pointLight = true;
+    const auto splits = engineSetupSplitFrustums(shadowView);
+    const auto box = [&](const float x, const float y, const float z) {
+      const auto& o = light.globalLightOrigin;
+      return EngineBounds{
+        EngineVec3{o[0] + x - 4.0f, o[1] + y - 4.0f, o[2] + z - 4.0f},
+        EngineVec3{o[0] + x + 4.0f, o[1] + y + 4.0f, o[2] + z + 4.0f}};
+    };
+    // the sides a world-space caster is kept in (its space the world's: M the identity)
+    const auto keptIn = [&](const EngineBounds& bounds) {
+      auto kept = std::vector<int>{};
+      for (auto side = 0; side < 6; ++side)
+      {
+        const auto matrices = engineShadowMapMatrices(light, side, shadowView, splits);
+        const auto mvp = engineMatrixMultiply(
+          matrices.lightProjection,
+          engineMatrixMultiply(matrices.lightView, engineIdentityMatrix()));
+        if (!engineShadowCasterCulled(mvp, bounds))
+        {
+          kept.push_back(side);
+        }
+      }
+      return kept;
+    };
+    // the side whose frustum holds a point (its clip x, y within ±w, z within 0..w)
+    const auto sideOf = [&](const float x, const float y, const float z) {
+      const auto& o = light.globalLightOrigin;
+      for (auto side = 0; side < 6; ++side)
+      {
+        const auto matrices = engineShadowMapMatrices(light, side, shadowView, splits);
+        const auto mvp =
+          engineMatrixMultiply(matrices.lightProjection, matrices.lightView);
+        const auto p = std::array<float, 4>{o[0] + x, o[1] + y, o[2] + z, 1.0f};
+        auto clip = std::array<float, 4>{};
+        for (std::size_t r = 0; r < 4; ++r)
+        {
+          clip[r] = mvp[r * 4 + 0] * p[0] + mvp[r * 4 + 1] * p[1] + mvp[r * 4 + 2] * p[2]
+                    + mvp[r * 4 + 3] * p[3];
+        }
+        if (
+          std::abs(clip[0]) < clip[3] && std::abs(clip[1]) < clip[3] && clip[2] > 0.0f
+          && clip[2] < clip[3])
+        {
+          return side;
+        }
+      }
+      return -1;
+    };
+    // a box 64 units along each axis lies in that axis's side alone
+    for (const auto& [x, y, z] :
+         {std::tuple{64.0f, 0.0f, 0.0f},
+          std::tuple{-64.0f, 0.0f, 0.0f},
+          std::tuple{0.0f, 64.0f, 0.0f},
+          std::tuple{0.0f, -64.0f, 0.0f},
+          std::tuple{0.0f, 0.0f, 64.0f},
+          std::tuple{0.0f, 0.0f, -64.0f}})
+    {
+      CAPTURE(x, y, z);
+      const auto side = sideOf(x, y, z);
+      REQUIRE(side >= 0);
+      CHECK(keptIn(box(x, y, z)) == std::vector<int>{side});
+    }
+    // one on the diagonal of +X and +Y lies in both those sides (the 92° frusta overlap)
+    auto both = std::vector<int>{sideOf(64.0f, 1.0f, 0.0f), sideOf(1.0f, 64.0f, 0.0f)};
+    std::sort(both.begin(), both.end());
+    CHECK(keptIn(box(64.0f, 64.0f, 0.0f)) == both);
+    // one nearer than zNear 4 / 0.999 to the light's origin: inside every side's near
+    // plane only where it reaches past it
+    CHECK(keptIn(EngineBounds{
+                   EngineVec3{
+                     light.globalLightOrigin[0] - 1.0f,
+                     light.globalLightOrigin[1] - 1.0f,
+                     light.globalLightOrigin[2] - 1.0f},
+                   EngineVec3{
+                     light.globalLightOrigin[0] + 1.0f,
+                     light.globalLightOrigin[1] + 1.0f,
+                     light.globalLightOrigin[2] + 1.0f}})
+            .empty());
   }
 
   SECTION("a parallel light's four cascades")

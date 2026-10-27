@@ -320,6 +320,12 @@ struct LitFrameStats
   std::size_t tilesProvisional = 0;
   // the atlas bytes the tiles' far-plane clears and draws cover (tiles × size² × 4)
   std::uint64_t atlasBytesWritten = 0;
+  // the casters' depth draws into the tiles, the (caster, side) pairs the per-side cull
+  // left out (D149), and the perforated casters of the lights that take tiles, not drawn
+  // until LP3.4 (D155: H04 and H08 are reported until then)
+  std::size_t shadowDraws = 0;
+  std::size_t shadowCastersCulled = 0;
+  std::size_t perforatedCastersSkipped = 0;
   // the pass ran (its timer begun and ended), its CPU record time, and whether a failed
   // pipeline or the atlas's creation disabled it (every light then unplaced, D9)
   bool shadowAtlasTimed = false;
@@ -403,6 +409,16 @@ struct ShadowLightRecord
 
   bool placed() const { return imageSize[0] != -1 && imageSize[1] != -1; }
 };
+
+/**
+ * LP3.1 (D149, P3.19): whether a caster's local bounds lie outside a shadow map side's
+ * true frustum, mvp the side's clip matrix of the caster's space (the matrix its draw
+ * takes): the planes extracted from it as the device clips (x and y within ±w, z within
+ * 0..w, the far plane), each normalised, with a margin of 0.01 units inside of which
+ * nothing is culled. A point side is 92° wide with zNear 4, a parallel side the crop box
+ * with the light bounds' z range. Conservative, so picture-neutral. Pure.
+ */
+bool engineShadowCasterCulled(const EngineMat4& mvp, const EngineBounds& bounds);
 
 // DX.5: the state bits of an interaction draw with this depth function (EQUAL, LESS for
 // the translucent list): additive RGB, alpha overwritten, no depth write, stencil
@@ -746,6 +762,23 @@ private:
   // identity MVP, DEPTHFUNC_ALWAYS | CULL_TWOSIDED and no offset: depth 1.0 under the
   // rect's viewport and scissor; false when the pass is disabled
   bool clearAtlasRect(Frame& frame, const AtlasRect& rect, PreviewId light, int side);
+  /**
+   * LP3.1 (C59, D149, SC721-SC722, SC749): ShadowMapPassFast( globalShadows, vLight,
+   * side, atlas ) (RenderBackend.cpp:3395-3584) into the side's tile: every caster of the
+   * light (ViewLight::casters, on screen or off, K49) by cast class: Opaque on
+   * builtin/depth with its chunk's or instance's arena range and its light-triangle runs
+   * (a Pending one whole), as the prepass draws it (SC749), under GLS_POLYGON_OFFSET |
+   * CULL_TWOSIDED with slope r_shadowMapPolygonFactor and int bias
+   * r_vkShadowMapPolygonOffset, depth LessOrEqual, written, its MVP the side's raster
+   * pair times the model matrix (spot: windowToClip first); TranslucentCaster nothing
+   * (:3506-3509); Perforated nothing until LP3.4; a caster outside the side's true
+   * frustum (engineShadowCasterCulled) is not drawn. False when the pass is disabled.
+   */
+  bool shadowMapPass(
+    Frame& frame,
+    const ShadowLightRecord& record,
+    int side,
+    const EngineShadowSideMatrices& matrices);
   // LP3.1 (C59, SC719): GL_ViewportAndScissor( x, y, size, size ) on the atlas: the
   // frame's viewport and m_scissor (RenderBackend_NVRHI.cpp:2176-2193)
   void setAtlasViewport(Frame& frame, const AtlasRect& rect);

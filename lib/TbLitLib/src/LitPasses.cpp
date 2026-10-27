@@ -46,6 +46,7 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <cmath>
 
 namespace tb::lit
 {
@@ -1795,6 +1796,18 @@ void LitPasses::recordShadowAtlas(Frame& frame)
       vacated.push_back(rect);
     }
   }
+  // the perforated casters a light that takes tiles leaves out until LP3.4 (D155)
+  for (const auto& record : m_shadowRecords)
+  {
+    for (const auto& caster : m_lists.lights[record.index].casters)
+    {
+      if (caster.chunk && caster.chunk->castClass == CastClass::Perforated)
+      {
+        ++m_stats.perforatedCastersSkipped;
+      }
+    }
+  }
+
   // the lights placed and not, the latter by name (D157), at every way out
   const auto countRecords = [&] {
     for (const auto& record : m_shadowRecords)
@@ -1878,6 +1891,11 @@ void LitPasses::recordShadowAtlas(Frame& frame)
     ++m_stats.tilesDrawn;
     m_stats.atlasBytesWritten +=
       std::uint64_t(rect.size) * std::uint64_t(rect.size) * sizeof(float);
+    if (!shadowMapPass(atlasFrame, record, side, matrices))
+    {
+      disabled = true;
+      break;
+    }
   }
   m_atlasOccupied = std::move(current);
 
@@ -1998,6 +2016,138 @@ bool LitPasses::clearAtlasRect(
     record.scissor = m_scissor;
     record.side = side;
     m_drawLog.push_back(std::move(record));
+  }
+  return true;
+}
+
+bool engineShadowCasterCulled(const EngineMat4& mvp, const EngineBounds& bounds)
+{
+  // the side's clip volume as the device rasterizes it: x and y in [-w, w] (the planes
+  // of GetFrustumPlanes( zeroToOne false )), z in [0, w] (its zeroToOne near plane: row
+  // 2, NVRHI's pipelines clip depth, RasterState::depthClipEnable unset), the far plane
+  // row 3 - row 2; the planes point inside. A box is culled by a plane its corner
+  // farthest inside lies outside of by more than CullMargin (model units), so that a
+  // caster the device would rasterize at a tile's edge is never left out (D149)
+  constexpr auto CullMargin = 0.01f;
+  auto planes = engineFrustumPlanes(mvp, false, false);
+  planes[4] = engineFrustumPlanes(mvp, true, false)[4];
+  for (const auto& plane : planes)
+  {
+    const auto length =
+      std::sqrt(plane.a * plane.a + plane.b * plane.b + plane.c * plane.c);
+    if (!(length > 1e-12f))
+    {
+      continue;
+    }
+    const auto x = plane.a >= 0.0f ? bounds[1][0] : bounds[0][0];
+    const auto y = plane.b >= 0.0f ? bounds[1][1] : bounds[0][1];
+    const auto z = plane.c >= 0.0f ? bounds[1][2] : bounds[0][2];
+    const auto distance = (plane.a * x + plane.b * y + plane.c * z + plane.d) / length;
+    if (distance < -CullMargin)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool LitPasses::shadowMapPass(
+  Frame& frame,
+  const ShadowLightRecord& record,
+  const int side,
+  const EngineShadowSideMatrices& matrices)
+{
+  // ShadowMapPassFast (RenderBackend.cpp:3395-3584) into the side's tile (its viewport
+  // and scissor set by the tile's clear): GLS_POLYGON_OFFSET, then
+  // r_shadowMapOccluderFacing 2's TWOSIDED with GL_PolygonOffset(
+  // r_shadowMapPolygonFactor, r_vkShadowMapPolygonOffset ) (the key's bias an int,
+  // RBN:460, SC722); 0 FRONTSIDED and 1 BACKSIDED with the negated offsets as written
+  // (:3433-3449)
+  auto stateBits = gls::PolygonOffset;
+  auto slope = EngineFrame.shadowMapPolygonFactor;
+  auto bias = EngineFrame.vkShadowMapPolygonOffset;
+  switch (EngineFrame.shadowMapOccluderFacing)
+  {
+  case 0:
+    stateBits |= gls::CullFrontSided;
+    break;
+  case 1:
+    stateBits |= gls::CullBackSided;
+    slope = -slope;
+    bias = -bias;
+    break;
+  default:
+    stateBits |= gls::CullTwoSided;
+    break;
+  }
+  const auto& light = m_lists.lights[record.index];
+  m_logLight = record.light;
+  m_currentSpace.reset();
+  for (const auto& caster : light.casters)
+  {
+    if (!caster.chunk || surfaceIndexCount(caster) == 0)
+    {
+      // a job may have created an empty shadow geometry
+      continue;
+    }
+    // translucent surfaces don't put anything in the depth buffer (:3506-3509, P3.17);
+    // perforated ones go through ShadowMapPassPerforated, LP3.4's (D155): left out, and
+    // counted
+    if (caster.chunk->castClass != CastClass::Opaque)
+    {
+      continue;
+    }
+    // :3519-3555: model -> world, world -> light, then the clip MVP; a parallel light's
+    // and a point light's clipMVP, a spot light's windowToClip · clipMVP
+    const auto& space = m_lists.spaces[caster.space];
+    const auto modelRenderMatrix = engineMatrixTranspose(space.modelMatrix);
+    const auto modelToLight = engineMatrixMultiply(matrices.lightView, modelRenderMatrix);
+    const auto clipMvp = engineMatrixMultiply(matrices.lightProjection, modelToLight);
+    const auto mvp = record.type == ShadowLightType::Spot
+                       ? engineMatrixMultiply(engineWindowSpaceToClipSpace(), clipMvp)
+                       : clipMvp;
+    // D149 (P3.19): not inside the side's true frustum, so it adds no fragment
+    if (engineShadowCasterCulled(mvp, caster.chunk->bounds))
+    {
+      ++m_stats.shadowCastersCulled;
+      continue;
+    }
+    setMvp(m_parms, mvp);
+    // :3559-3572: BindShader_Depth (never the skinned form: no skinned model, P3.24e);
+    // DrawElementsWithCounters on the caster's light triangles (a Pending one whole)
+    const auto outcome = draw(
+      frame,
+      EngineBuiltinDepth,
+      *caster.chunk,
+      stateBits,
+      slope,
+      bias,
+      caster.lightTriangles.get());
+    switch (outcome)
+    {
+    case DrawOutcome::Drawn:
+      ++m_stats.shadowDraws;
+      if (m_logDraws)
+      {
+        auto drawn = LitDrawRecord{};
+        drawn.pass = LitDrawRecord::Pass::Shadow;
+        drawn.light = record.light;
+        drawn.chunk = caster.chunk->key;
+        drawn.program = EngineBuiltinDepth;
+        drawn.state = stateBits;
+        drawn.scissor = m_scissor;
+        drawn.side = side;
+        m_drawLog.push_back(std::move(drawn));
+      }
+      break;
+    case DrawOutcome::Disabled:
+      return false;
+    case DrawOutcome::Overflowed:
+      drawOverflowed(frame);
+      break;
+    case DrawOutcome::Skipped:
+      break;
+    }
   }
   return true;
 }
