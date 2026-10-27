@@ -524,15 +524,23 @@ TEST_CASE("MaterialService")
 
   SECTION("a reload builds a new registry, keeps the looked-up names, refuses old ids")
   {
+    const auto started = std::chrono::steady_clock::now();
     auto service = start(options(fixtureSource));
     const auto before = waitForEntry(*service, "textures/lp1a/screen");
     const auto firstRegistry = service->table()->registry;
+    // LP6.0 (C65): the first table's time, after the service started
+    const auto firstTableAt = service->stats().firstTableAt;
+    REQUIRE(firstTableAt);
+    CHECK(*firstTableAt >= started);
+    CHECK(*firstTableAt <= std::chrono::steady_clock::now());
 
     service->reload();
     REQUIRE(service->waitForStatsForTesting(
       [](const auto& s) { return s.builds == 2u; }, Timeout));
     const auto table = service->table();
     CHECK(table->registry != firstRegistry);
+    // the reload's tables do not move it
+    CHECK(service->stats().firstTableAt == firstTableAt);
     // published at the switch, with the name looked up again
     const auto slot = table->find("textures/lp1a/screen");
     REQUIRE(slot);

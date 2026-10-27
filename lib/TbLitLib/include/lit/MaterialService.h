@@ -35,6 +35,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -457,6 +458,10 @@ struct MaterialServiceStats
   double sourceSeconds = 0.0;
   double buildSeconds = 0.0;
   double parseAllSeconds = 0.0;
+  // LP6.0 (C65): when the service published its first table (the first build's: the
+  // containers' scan, the decl read and the lookups before it), on the steady clock; the
+  // measurement's Start -> first table, which a later build or table does not move
+  std::optional<std::chrono::steady_clock::time_point> firstTableAt;
   bool parseAllDone = false;
   // a build that the stop cut short
   bool buildCancelled = false;

@@ -1167,6 +1167,22 @@ constexpr auto ModelsPending = std::size_t{61};
 constexpr auto ModelsSkinned = std::size_t{62};
 constexpr auto DressSurfaces = std::size_t{63};
 constexpr auto AdoptedTris = std::size_t{66};
+// LP3.1 (D157): pass 6's draws and CPU record time; LP3.0 (C57): the caster gathering's
+// time (inside lists_ms)
+constexpr auto ShadowDraws = std::size_t{70};
+constexpr auto ShadowCpuMs = std::size_t{82};
+constexpr auto CasterMs = std::size_t{92};
+// LP6.0 (C65): the CPU record's split after perforated_draws
+constexpr auto ListsMs = std::size_t{95};
+constexpr auto PrepassCpuMs = std::size_t{96};
+constexpr auto AmbientCpuMs = std::size_t{97};
+constexpr auto InteractionCpuMs = std::size_t{98};
+constexpr auto StageCpuMs = std::size_t{99};
+constexpr auto FogCpuMs = std::size_t{100};
+constexpr auto TonemapCpuMs = std::size_t{101};
+constexpr auto UploadMs = std::size_t{102};
+constexpr auto SubmitMs = std::size_t{103};
+constexpr auto RecordOtherMs = std::size_t{104};
 // LPF.1 (C44, P5.21): and the live feed's three (feed_applied, feed_ms, override_bytes);
 // LP5.1 (C45): and the interaction phases' two (math_lights, ambient_lights); LP5.2a
 // (C46): and the stage pass's three (stage_draws, stage_skipped, gpu_stages_ms); LP5.3
@@ -1181,6 +1197,31 @@ constexpr auto AdoptedTris = std::size_t{66};
 // 108th the last
 constexpr auto Count = std::size_t{108};
 } // namespace column
+
+/**
+ * LP6.0 (C65): the CPU record's split in the frame log's order, pass 6's shadow_cpu_ms
+ * among the passes: they and record_other_ms sum to cpu_record_ms; caster_ms is inside
+ * lists_ms and is not among them.
+ */
+struct SplitColumn
+{
+  std::string_view name;
+  std::size_t index = 0;
+};
+
+constexpr auto SplitColumns = std::array{
+  SplitColumn{"lists_ms", column::ListsMs},
+  SplitColumn{"prepass_cpu_ms", column::PrepassCpuMs},
+  SplitColumn{"ambient_cpu_ms", column::AmbientCpuMs},
+  SplitColumn{"shadow_cpu_ms", column::ShadowCpuMs},
+  SplitColumn{"interaction_cpu_ms", column::InteractionCpuMs},
+  SplitColumn{"stage_cpu_ms", column::StageCpuMs},
+  SplitColumn{"fog_cpu_ms", column::FogCpuMs},
+  SplitColumn{"tonemap_cpu_ms", column::TonemapCpuMs},
+  SplitColumn{"upload_ms", column::UploadMs},
+  SplitColumn{"submit_ms", column::SubmitMs},
+  SplitColumn{"record_other_ms", column::RecordOtherMs},
+};
 
 std::vector<LogRow> readFrameLog(const std::filesystem::path& path)
 {
@@ -1293,6 +1334,46 @@ Distribution columnOf(
   return distributionOf(std::move(values));
 }
 
+// a least-squares line of the y column against the x column over the rows first..last
+// that have both: its value at x = 0 and its slope, in the y column's unit
+struct LineFit
+{
+  double intercept = 0.0;
+  double slope = 0.0;
+  std::size_t count = 0;
+};
+
+LineFit lineFitOf(
+  const std::vector<LogRow>& rows,
+  const std::size_t xColumn,
+  const std::size_t yColumn,
+  const std::size_t first,
+  const std::size_t last)
+{
+  auto n = 0.0, sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
+  for (auto i = first; i <= last && i < rows.size(); ++i)
+  {
+    const auto x = rows[i].number(xColumn);
+    const auto y = rows[i].number(yColumn);
+    if (x && y)
+    {
+      n += 1.0;
+      sx += *x;
+      sy += *y;
+      sxx += *x * *x;
+      sxy += *x * *y;
+    }
+  }
+  auto fit = LineFit{};
+  fit.count = std::size_t(n);
+  if (const auto d = n * sxx - sx * sx; n > 1.0 && d != 0.0)
+  {
+    fit.slope = (n * sxy - sx * sy) / d;
+    fit.intercept = (sy - fit.slope * sx) / n;
+  }
+  return fit;
+}
+
 // one Start of the preview, its milestones in ms after the press
 struct StartMeasure
 {
@@ -1305,6 +1386,9 @@ struct StartMeasure
   double sessionMs = -1;
   double firstFrameMs = -1;
   double firstTableMs = -1;
+  // LP6.0 (C65): when the session's material service published its first table
+  // (MaterialServiceStats::firstTableAt), not when the GUI thread saw it
+  double firstTablePublishedMs = -1;
   double firstSnapshotMs = -1;
   double firstBatchMs = -1;
   // from the frame log (C16): the first frame that drew interactions, and the first
@@ -1910,6 +1994,9 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     if (const auto* service = session->materialServiceForTesting())
     {
       measure.service = service->stats();
+      // LP6.0 (C65)
+      measure.firstTablePublishedMs =
+        msOrMinusOne(measure.service.firstTableAt, measure.pressed);
     }
     if (measure.compileAtSettled.lastJobEnd)
     {
@@ -2120,30 +2207,39 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
   const auto cpu = orbit(column::CpuRecordMs);
   const auto gpu = orbit(column::GpuFrameMs);
   // the CPU record time against the draws a frame records: a least-squares line
-  auto perDrawUs = 0.0;
-  auto perFrameMs = 0.0;
+  const auto frameFit =
+    lineFitOf(firstRows, column::Draws, column::CpuRecordMs, orbitBegin, orbitEnd);
+  const auto perDrawUs = frameFit.slope * 1000.0;
+  const auto perFrameMs = frameFit.intercept;
+  // LP6.0 (C65): every frame row's split sums to its CPU record time (eleven fields of
+  // 0.001 ms each), lists_ms holding caster_ms
+  auto splitFrames = std::size_t{0};
+  auto splitMismatches = std::size_t{0};
+  for (const auto& row : log)
   {
-    auto n = 0.0, sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
-    for (auto i = orbitBegin; i <= orbitEnd; ++i)
+    if (row.at(column::Event) != "frame")
     {
-      const auto x = firstRows[i].number(column::Draws);
-      const auto y = firstRows[i].number(column::CpuRecordMs);
-      if (x && y)
-      {
-        n += 1.0;
-        sx += *x;
-        sy += *y;
-        sxx += *x * *x;
-        sxy += *x * *y;
-      }
+      continue;
     }
-    if (const auto d = n * sxx - sx * sx; n > 1.0 && d != 0.0)
+    ++splitFrames;
+    auto sum = 0.0;
+    for (const auto& split : SplitColumns)
     {
-      const auto slope = (n * sxy - sx * sy) / d;
-      perDrawUs = slope * 1000.0;
-      perFrameMs = (sy - slope * sx) / n;
+      sum += row.number(split.index).value_or(-1000.0);
+    }
+    if (
+      std::abs(sum - row.number(column::CpuRecordMs).value_or(0.0)) > 0.05
+      || row.number(column::ListsMs).value_or(0.0)
+           < row.number(column::CasterMs).value_or(0.0))
+    {
+      ++splitMismatches;
     }
   }
+  std::cout << fmt::format(
+    "the CPU record's split (LP6.0): {} frame rows, {} whose split does not sum to "
+    "cpu_record_ms within 0.05 ms or whose lists_ms is below caster_ms\n",
+    splitFrames,
+    splitMismatches);
 
   const auto& sizeRow = firstRows[orbitBegin];
   const auto frameWidth = sizeRow.at(column::Width);
@@ -2166,16 +2262,93 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     gaps.median,
     gaps.p95);
   summary += "| §10 case | measured | target | verdict |\n|---|---|---|---|\n";
+  // LP6.0 (C65): what the harness sees of a Start's way to its first lit frame: the
+  // material service's first build (the containers' scan, the decl read) and its first
+  // table, the session, the first snapshot and batch, the scene's batches, the frames'
+  // record before the first lit one, and the compile thread by then
+  const auto startBreakdown = [&](const StartMeasure& measure) {
+    const auto rows = sessionFrames(log, measure.generation);
+    auto before = 0.0;
+    auto longest = 0.0;
+    for (std::size_t k = 1; k < measure.firstLitFrame && k <= rows.size(); ++k)
+    {
+      const auto ms = rows[k - 1].number(column::CpuRecordMs).value_or(0.0);
+      before += ms;
+      longest = std::max(longest, ms);
+    }
+    const auto litField = [&](const std::size_t c) {
+      return measure.firstLitFrame > 0 && measure.firstLitFrame <= rows.size()
+                 && !rows[measure.firstLitFrame - 1].at(c).empty()
+               ? rows[measure.firstLitFrame - 1].at(c)
+               : std::string{"-"};
+    };
+    // the scene's geometry batches by the first lit frame, each at the first frame the
+    // GUI thread saw drawn with it
+    auto batches = std::string{};
+    auto lastBatches = std::uint64_t{0};
+    for (const auto& record : measure.records)
+    {
+      if (record.status.frames > measure.firstLitFrame)
+      {
+        break;
+      }
+      if (record.geometryBatches != lastBatches)
+      {
+        lastBatches = record.geometryBatches;
+        batches += fmt::format(
+          "{}{} at {}",
+          batches.empty() ? "" : ", ",
+          record.geometryBatches,
+          msText(millisecondsBetween(measure.pressed, record.at)));
+      }
+    }
+    const auto& service = measure.service;
+    return fmt::format(
+      "the material service's build {}: the containers' scan {:.0f} ms, the decl read "
+      "{:.0f} ms, its first table published at {} (seen by the GUI thread at {}); the "
+      "session at {}, its first frame at {}, first snapshot at {}, first batch at {}; "
+      "the scene's geometry batches by the first lit frame {}; the {} frames before the "
+      "first lit one recorded in {:.1f} ms (the longest {:.1f} "
+      "ms); the first lit frame's record {} ms (lists_ms {}, upload_ms {}, "
+      "record_other_ms {}); the compile thread by the first lit frame: {} jobs, {:.0f} "
+      "ms busy ({} pipelines {:.0f} ms, {} shaders {:.0f} ms), its last job so far "
+      "ended at {}",
+      service.builds,
+      service.sourceSeconds * 1000.0,
+      (service.buildSeconds - service.sourceSeconds) * 1000.0,
+      msText(measure.firstTablePublishedMs),
+      msText(measure.firstTableMs),
+      msText(measure.sessionMs),
+      msText(measure.firstFrameMs),
+      msText(measure.firstSnapshotMs),
+      msText(measure.firstBatchMs),
+      batches.empty() ? std::string{"none"} : batches,
+      measure.firstLitFrame > 0 ? measure.firstLitFrame - 1 : 0,
+      before,
+      longest,
+      litField(column::CpuRecordMs),
+      litField(column::ListsMs),
+      litField(column::UploadMs),
+      litField(column::RecordOtherMs),
+      measure.compileAtFirstLit.jobs,
+      measure.compileAtFirstLit.jobMs,
+      measure.compileAtFirstLit.pipelines,
+      measure.compileAtFirstLit.pipelineMs,
+      measure.compileAtFirstLit.shaders,
+      measure.compileAtFirstLit.shaderMs,
+      msText(measure.compileEndAtFirstLitMs));
+  };
   for (const auto* measure : {&first, &second, &third})
   {
     summary += fmt::format(
       "| Start → first lit frame, {} Start | {} (frame {}; no draw skipped from {}, "
-      "frame {}) | ≤ 1 s warm, ≤ 5 s cold | {} |\n",
+      "frame {}); {} | ≤ 1 s warm, ≤ 5 s cold | {} |\n",
       measure->label,
       msText(measure->firstLitMs),
       measure->firstLitFrame,
       msText(measure->completeLitMs),
       measure->completeLitFrame,
+      startBreakdown(*measure),
       pass(measure->firstLitMs <= 1000.0));
   }
   // LP7.2 (C52, C56, P7.14): the models, against LP5.3's first lit frames (1.33-1.41 s)
@@ -2278,6 +2451,126 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     perFrameMs,
     perDrawUs,
     pass(cpu.p95 <= 10.0));
+  // LP6.0 (C65, D165): the moving frames' CPU record split, column by column (each
+  // column's own median, p95 and max), caster_ms as a part of lists_ms
+  const auto splitText = [](const Distribution& d) {
+    return fmt::format(
+      "median {:.3f} ms, p95 {:.3f} ms, max {:.3f} ms ({} frames)",
+      d.median,
+      d.p95,
+      d.max,
+      d.count);
+  };
+  for (const auto& split : SplitColumns)
+  {
+    summary += fmt::format(
+      "| Camera moving: CPU record, split: {} | {} | — | — |\n",
+      split.name,
+      splitText(orbit(split.index)));
+    if (split.index == column::ListsMs)
+    {
+      summary += fmt::format(
+        "| Camera moving: CPU record, split: lists_ms's caster_ms (inside it) | {} "
+        "| — | — |\n",
+        splitText(orbit(column::CasterMs)));
+    }
+  }
+  // the split of the moving p95, which adds up where the columns' own p95s do not: each
+  // column's mean over the frames whose CPU record is at the p95 or above
+  {
+    auto tail = std::vector<std::size_t>{};
+    for (auto i = orbitBegin; i <= orbitEnd; ++i)
+    {
+      if (firstRows[i].number(column::CpuRecordMs).value_or(0.0) >= cpu.p95)
+      {
+        tail.push_back(i);
+      }
+    }
+    const auto mean = [&](const std::size_t c) {
+      auto sum = 0.0;
+      for (const auto i : tail)
+      {
+        sum += firstRows[i].number(c).value_or(0.0);
+      }
+      return tail.empty() ? 0.0 : sum / double(tail.size());
+    };
+    auto parts = std::string{};
+    for (const auto& split : SplitColumns)
+    {
+      parts += fmt::format(
+        "{}{} {:.2f}", parts.empty() ? "" : ", ", split.name, mean(split.index));
+      if (split.index == column::ListsMs)
+      {
+        parts += fmt::format(" (caster_ms {:.2f})", mean(column::CasterMs));
+      }
+    }
+    summary += fmt::format(
+      "| Camera moving: CPU record at its p95, split (each column's mean over the {} "
+      "frames at or above {:.2f} ms) | cpu_record_ms {:.2f} ms: {}; draws {:.0f} "
+      "(prepass {:.0f}, ambient {:.0f}, interactions {:.0f}, stages {:.0f}), "
+      "shadow draws {:.0f} | — | — |\n",
+      tail.size(),
+      cpu.p95,
+      mean(column::CpuRecordMs),
+      parts,
+      mean(column::Draws),
+      mean(column::PrepassDraws),
+      mean(column::AmbientDraws),
+      mean(column::InteractionDraws),
+      mean(column::StageDraws),
+      mean(column::ShadowDraws));
+  }
+  // the fit per pass: each pass's record time against its own draws (the whole frame's
+  // beside them)
+  {
+    struct PassFit
+    {
+      std::string_view time;
+      std::size_t timeColumn = 0;
+      std::string_view draws;
+      std::size_t drawColumn = 0;
+    };
+    for (const auto& f :
+         {PassFit{
+            "prepass_cpu_ms",
+            column::PrepassCpuMs,
+            "prepass_draws",
+            column::PrepassDraws},
+          PassFit{
+            "ambient_cpu_ms",
+            column::AmbientCpuMs,
+            "ambient_draws",
+            column::AmbientDraws},
+          PassFit{
+            "interaction_cpu_ms",
+            column::InteractionCpuMs,
+            "interaction_draws",
+            column::InteractionDraws},
+          PassFit{"stage_cpu_ms", column::StageCpuMs, "stage_draws", column::StageDraws}})
+    {
+      const auto fit =
+        lineFitOf(firstRows, f.drawColumn, f.timeColumn, orbitBegin, orbitEnd);
+      const auto draws = orbit(f.drawColumn);
+      summary += fmt::format(
+        "| Camera moving: fit per pass, {} against {} | {:.3f} ms + {:.2f} µs per "
+        "draw ({} frames; the draws median {:.0f}, p95 {:.0f}, max {:.0f}) "
+        "| — | — |\n",
+        f.time,
+        f.draws,
+        fit.intercept,
+        fit.slope * 1000.0,
+        fit.count,
+        draws.median,
+        draws.p95,
+        draws.max);
+    }
+    summary += fmt::format(
+      "| Camera moving: fit, the whole frame, cpu_record_ms against draws | {:.3f} ms + "
+      "{:.2f} µs per draw ({} frames) | — | — |\n",
+      perFrameMs,
+      perDrawUs,
+      frameFit.count);
+  }
   // LP4.1 (D92): the start view's portal flow, from the first Start's settled frame
   if (first.settledFrame > 0 && first.settledFrame <= firstRows.size())
   {
@@ -2312,6 +2605,31 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       field(column::StageSkipped),
       field(column::FogDraws),
       field(column::BlendDraws));
+    // LP6.0 (C65): the same frame's CPU record split, its values
+    auto parts = std::string{};
+    for (const auto& split : SplitColumns)
+    {
+      parts +=
+        fmt::format("{}{} {}", parts.empty() ? "" : ", ", split.name, field(split.index));
+      if (split.index == column::ListsMs)
+      {
+        parts += fmt::format(" (caster_ms {})", field(column::CasterMs));
+      }
+    }
+    summary += fmt::format(
+      "| Settled start view, split (first Start, frame {}) | cpu_record_ms {}: {}; draws "
+      "{} (prepass {}, ambient {}, interactions {}, stages {}, fog {}), shadow draws "
+      "{} | — | — |\n",
+      first.settledFrame,
+      field(column::CpuRecordMs),
+      parts,
+      field(column::Draws),
+      field(column::PrepassDraws),
+      field(column::AmbientDraws),
+      field(column::InteractionDraws),
+      field(column::StageDraws),
+      field(column::FogDraws),
+      field(column::ShadowDraws));
   }
   {
     const auto flow = orbit(column::FlowMs);
@@ -2473,6 +2791,29 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       measure->compileAtSettled.pipelines,
       measure->compileAtSettled.pipelineMs,
       msText(measure->lastCompileEndMs));
+    // LP6.0 (C65): the frames to the first lit one, as the frame log has them
+    const auto rows = sessionFrames(log, measure->generation);
+    for (std::size_t k = 1; k <= measure->firstLitFrame && k <= rows.size(); ++k)
+    {
+      const auto& row = rows[k - 1];
+      const auto* record = measure->record(k);
+      summary += fmt::format(
+        "  - frame {} at {} (geometry batches {}): CPU record {} ms (lists_ms {}, "
+        "upload_ms {}, record_other_ms {}; {} bytes uploaded), draws {} (interactions "
+        "{}), {} skipped, {} pipelines pending\n",
+        k,
+        msText(measure->msOf(k)),
+        record ? fmt::format("{}", record->geometryBatches) : std::string{"-"},
+        row.at(column::CpuRecordMs),
+        row.at(column::ListsMs),
+        row.at(column::UploadMs),
+        row.at(column::RecordOtherMs),
+        row.at(column::BytesUploaded),
+        row.at(column::Draws),
+        row.at(column::InteractionDraws),
+        row.at(column::SkippedDraws),
+        row.at(column::PendingPipelines));
+    }
   }
 #ifdef NDEBUG
   const auto build = std::string{"Release: no validation layer"};
@@ -2499,6 +2840,9 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
 
   CHECK(idleFrames == 0u);
   CHECK(reloadIdleFrames == 0u);
+  // LP6.0 (C65)
+  CHECK(splitFrames > 0u);
+  CHECK(splitMismatches == 0u);
   CHECK(allocationsAfterFirstStop == 0);
   CHECK(allocationsAfterSecondStop == 0);
   CHECK(allocationsAfterThirdStop == 0);

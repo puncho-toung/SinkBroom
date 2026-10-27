@@ -1098,6 +1098,11 @@ private:
     {
       auto lock = std::scoped_lock{m_shared.mutex};
       m_shared.table = std::move(table);
+      // LP6.0 (C65): the first table's time, once
+      if (!m_shared.stats.firstTableAt)
+      {
+        m_shared.stats.firstTableAt = Clock::now();
+      }
       m_shared.stats.imageBytes = imageBytes;
       m_shared.stats.procBytes = procBytes;
       m_shared.stats.models = models;
