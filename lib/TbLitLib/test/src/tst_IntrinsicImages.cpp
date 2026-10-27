@@ -508,7 +508,6 @@ TEST_CASE("IntrinsicImages (D69)")
           "_redClay",
           "_alphaNotch",
           "_defaultUACIrradiance",
-          "_blueNoise256",
           "_jitter4",
           "_shadowMapAtlas"})
     {
@@ -573,6 +572,98 @@ TEST_CASE("IntrinsicImages (D69)")
     CHECK(engineF16toF32(texel(65535)[0]) == 0.309326171875f);
     // through the service's path, as the parse thread answers it
     const auto made = intrinsicImage(decls, "_brdfLut");
+    REQUIRE(made.is_success());
+    CHECK(made.value()->data == image.data);
+  }
+
+  SECTION("LP3.0 (C60, P3.24a): _blueNoise256, the copied generator on the copied table")
+  {
+    // the copied header's table: 512 x 512 RGB8 texels (its "R8" comment is wrong)
+    REQUIRE(engineBlueNoiseTableWidth() == 512);
+    REQUIRE(engineBlueNoiseTableHeight() == 512);
+    REQUIRE(engineBlueNoiseTablePitch() == 512 * 3);
+    REQUIRE(engineBlueNoiseTableSize() == 786432u);
+    const auto* table = engineBlueNoiseTable();
+    // SHA-256 known answers, then the whole table as the test's script computed it from
+    // the engine's file at 285ea4d1 (neo/renderer/Image_blueNoiseVC_2.h, blob c06f4cd5)
+    CHECK(
+      sha256Hex(nullptr, 0)
+      == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    const auto abc = std::array<std::uint8_t, 3>{'a', 'b', 'c'};
+    CHECK(
+      sha256Hex(abc.data(), abc.size())
+      == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    CHECK(
+      sha256Hex(table, engineBlueNoiseTableSize())
+      == "95f0659ba2aa9d007fe2a56fd35664c92b37e63929df5307671a0d3a77509ab3");
+
+    // what the generator hands GenerateImage: 512 x 512, TF_NEAREST, TR_REPEAT,
+    // TD_LOOKUP_TABLE_RGBA
+    const auto generated = engineBlueNoise256Image();
+    CHECK(generated.width == 512);
+    CHECK(generated.height == 512);
+    CHECK(generated.filter == FilterNearest);
+    CHECK(generated.repeat == RepeatRepeat);
+    CHECK(generated.usage == UsageLookupTableRgba);
+    REQUIRE(generated.rgba.size() == 512u * 512u * 4u);
+
+    CHECK_FALSE(intrinsicRecipe("_blueNoise256"));
+    const auto raw = rawIntrinsicImage("_blueNoise256");
+    REQUIRE(raw);
+    const auto& image = **raw;
+    CHECK(image.textureType == Type2D);
+    CHECK(image.format == FormatRgba8);
+    CHECK(image.storedFormat == FormatRgba8);
+    CHECK(image.colorFormat == ColorDefault);
+    CHECK(image.width == 512);
+    CHECK(image.height == 512);
+    CHECK(image.numLevels == 1);
+    CHECK_FALSE(image.fromSource);
+    REQUIRE(image.data.size() == 1048576u);
+    REQUIRE(image.levels.size() == 1u);
+    CHECK(image.levels[0].width == 512);
+    CHECK(image.levels[0].height == 512);
+    CHECK(image.levels[0].offset == 0u);
+    CHECK(image.levels[0].size == 1048576u);
+    CHECK(image.data == generated.rgba);
+    CHECK(engineRowPitch(FormatRgba8, 512) == 2048);
+
+    // the fill is transposed (data[x][y]): the image's texel at row r, column c is the
+    // table's at row c, column r; four texels against the table, by value
+    const auto texel = [&](const int row, const int column) {
+      const auto at = (std::size_t(row) * 512 + std::size_t(column)) * 4;
+      return std::array<std::uint8_t, 4>{
+        image.data[at], image.data[at + 1], image.data[at + 2], image.data[at + 3]};
+    };
+    const auto tableTexel = [&](const int row, const int column) {
+      const auto at = std::size_t(row) * 1536 + std::size_t(column) * 3;
+      return std::array<std::uint8_t, 4>{table[at], table[at + 1], table[at + 2], 1};
+    };
+    for (const auto& [row, column] :
+         std::vector<std::pair<int, int>>{{0, 1}, {1, 0}, {5, 300}, {511, 511}})
+    {
+      CAPTURE(row, column);
+      CHECK(texel(row, column) == tableTexel(column, row));
+    }
+    CHECK(texel(0, 1) == std::array<std::uint8_t, 4>{5, 129, 67, 1});
+    CHECK(texel(1, 0) == std::array<std::uint8_t, 4>{57, 113, 48, 1});
+    CHECK(texel(5, 300) == std::array<std::uint8_t, 4>{48, 168, 40, 1});
+    CHECK(texel(511, 511) == std::array<std::uint8_t, 4>{75, 8, 25, 1});
+    // not the table untransposed
+    CHECK(texel(0, 1) != tableTexel(0, 1));
+    // every alpha is the byte 1, not 255
+    auto alphaOne = true;
+    for (std::size_t i = 3; i < image.data.size(); i += 4)
+    {
+      alphaOne = alphaOne && image.data[i] == 1;
+    }
+    CHECK(alphaOne);
+    // the whole image, as the script computed it (the table transposed, alpha 1)
+    CHECK(
+      sha256Hex(image.data.data(), image.data.size())
+      == "8f5391b220e381928cbd90f2141269e082f32d5d5cd3c2b1b22789b992dd1b63");
+    // through the service's path, as the parse thread answers it
+    const auto made = intrinsicImage(decls, "_blueNoise256");
     REQUIRE(made.is_success());
     CHECK(made.value()->data == image.data);
   }

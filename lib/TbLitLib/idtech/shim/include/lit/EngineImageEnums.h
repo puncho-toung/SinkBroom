@@ -79,6 +79,8 @@ constexpr int UsageLight = 5;
 constexpr int UsageLookupTableMono = 6;
 constexpr int UsageLookupTableAlpha = 7;
 constexpr int UsageLookupTableRgb1 = 8;
+// LP3.0 (C60): _blueNoise256's
+constexpr int UsageLookupTableRgba = 9;
 constexpr int UsageCoverage = 10;
 constexpr int UsageSpecularPbrRmao = 12;
 constexpr int UsageHdrLightProbe = 21;

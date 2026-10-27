@@ -64,6 +64,11 @@ target_sources(TbLitIdLib
     # LP4.2a (D85): the BRDF lookup table's data header, copied whole, included by
     # shim/src/EngineImageData.cpp behind the facade lit/EngineImageData.h
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_brdfLut.h
+    # LP3.0 (C60, P3.24a): the blue-noise table's data header, copied whole (4.78 MB of
+    # text), and R_CreateBlueNoise256Image's range of Image_intrinsic.cpp, both compiled
+    # inside shim/src/EngineBlueNoise.cpp behind the facade lit/EngineImageData.h
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_blueNoiseVC_2.h
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_intrinsic.cpp
     # LP7.1a (C51, D135, D137): the OBJ loader, copied whole; renderer/Model.cpp's ranges,
     # compiled inside shim/src/ShimModels.cpp, which declares the reduced
     # idRenderModelStatic they belong to; the conversion's slop merge (VectorSet.h);
@@ -101,6 +106,8 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Model_gltf.cpp
 
     ${TB_LIT_ID_SHIM_DIR}/src/DeclManagerShim.cpp
+    # LP3.0 (C60): _blueNoise256's generator and table
+    ${TB_LIT_ID_SHIM_DIR}/src/EngineBlueNoise.cpp
     # LP7.3 (C54): the dress decals' facade over the copied DecalProjection.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineDecal.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineGeometry.cpp
@@ -157,6 +164,7 @@ set_source_files_properties(
   ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_load.cpp
   ${TB_LIT_ID_ENGINE_DIR}/renderer/PipelineCache.cpp
   ${TB_LIT_ID_ENGINE_DIR}/renderer/Interaction.cpp
+  ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_intrinsic.cpp
   ${TB_LIT_ID_ENGINE_DIR}/renderer/Model.cpp
   ${TB_LIT_ID_ENGINE_DIR}/idlib/math/Simd_Generic.cpp
   ${TB_LIT_ID_ENGINE_DIR}/idlib/Lib.cpp

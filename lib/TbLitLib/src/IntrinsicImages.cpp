@@ -670,6 +670,38 @@ std::optional<std::shared_ptr<const CachedImage>> rawIntrinsicImage(
       CachedImageLevel{0, 0, image.width, image.height, 0, image.data.size()});
     return std::make_shared<const CachedImage>(std::move(image));
   }
+  if (name == "_blueNoise256")
+  {
+    // LP3.0 (C60, P3.24a): R_CreateBlueNoise256Image (Image_intrinsic.cpp:793-815, keyed
+    // at :1089) through GenerateImage( data, 512, 512, TF_NEAREST, TR_REPEAT,
+    // TD_LOOKUP_TABLE_RGBA ): DeriveOpts gives FMT_RGBA8 and one level for TF_NEAREST
+    // (Image_load.cpp:150-318, engineImageOpts and engineMipLevels), which
+    // Load2DFromMemory stores as it is; the parse thread (the generator's static buffer)
+    const auto generated = engineBlueNoise256Image();
+    const auto opts = engineImageOpts(generated.usage);
+    const auto numLevels =
+      engineMipLevels(opts.format, generated.filter, generated.width, generated.height);
+    if (
+      opts.format != FormatRgba8 || numLevels != 1
+      || generated.rgba.size()
+           != std::size_t(generated.width) * std::size_t(generated.height) * 4)
+    {
+      return std::nullopt;
+    }
+    auto image = CachedImage{};
+    image.file = std::string{name};
+    image.textureType = Type2D;
+    image.storedFormat = FormatRgba8;
+    image.format = FormatRgba8;
+    image.colorFormat = opts.colorFormat;
+    image.width = generated.width;
+    image.height = generated.height;
+    image.numLevels = numLevels;
+    image.data = generated.rgba;
+    image.levels.push_back(
+      CachedImageLevel{0, 0, image.width, image.height, 0, image.data.size()});
+    return std::make_shared<const CachedImage>(std::move(image));
+  }
   if (name == "_defaultUACRadiance")
   {
     // R_CreateDefaultRadianceCube: GenerateCubeImage( six faces of zeros, 8, TF_LINEAR,

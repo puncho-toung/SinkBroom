@@ -85,7 +85,9 @@ std::vector<std::uint8_t> constantDxt5Blocks(
 /**
  * LP4.2a (D85, P4.13): the raw intrinsic path, beside the recipes: an intrinsic whose
  * texels are no single RGBA8 colour, handed over as a ready image in the engine's GPU
- * format, made on the parse thread (any thread may call it: it reads only constant data):
+ * format, made on the parse thread (any thread may call it for _brdfLut and
+ * _defaultUACRadiance, which read only constant data; _blueNoise256 is the parse
+ * thread's):
  *
  * - _brdfLut (R_CreateBrdfLutImage, Image_intrinsic.cpp:1021-1024, keyed at :1136):
  *   renderer/Image_brdfLut.h's array copied whole (lit/EngineImageData.h), 256 × 256
@@ -99,7 +101,14 @@ std::vector<std::uint8_t> constantDxt5Blocks(
  *   bytes (LoadCubeFromMemory's BC6H branch, BinaryImage.cpp:762-790), and a block whose
  *   endpoints are zero decodes to 0 in BC6H_UFLOAT, the texels of the engine's encode
  *   (no encoder runs here: the blocks are constants, D24); the records level-major as
- *   LoadCubeFromMemory writes them (destZ the side).
+ *   LoadCubeFromMemory writes them (destZ the side);
+ * - LP3.0 (C60, P3.24a, SC732): _blueNoise256 (R_CreateBlueNoise256Image,
+ *   Image_intrinsic.cpp:793-815, keyed at :1089): the copied generator on the copied
+ *   table renderer/Image_blueNoiseVC_2.h (lit/EngineImageData.h engineBlueNoise256Image):
+ *   512 × 512 RGBA8, the table's RGB8 texels transposed (the image's row r, column c is
+ *   the table's row c, column r) with alpha 1, TF_NEAREST so one level, TR_REPEAT,
+ *   TD_LOOKUP_TABLE_RGBA → FMT_RGBA8; 2D. Made only when asked for (LP3.1 binds it at
+ *   unit 6); its generator writes a static, so this name is the parse thread's alone.
  *
  * nullopt for any other name (the recipe path's, intrinsicImage).
  */

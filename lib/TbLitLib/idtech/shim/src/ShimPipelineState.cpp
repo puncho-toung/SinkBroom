@@ -142,6 +142,7 @@ static_assert(engine_image::UsageLight == int(TD_LIGHT));
 static_assert(engine_image::UsageLookupTableMono == int(TD_LOOKUP_TABLE_MONO));
 static_assert(engine_image::UsageLookupTableAlpha == int(TD_LOOKUP_TABLE_ALPHA));
 static_assert(engine_image::UsageLookupTableRgb1 == int(TD_LOOKUP_TABLE_RGB1));
+static_assert(engine_image::UsageLookupTableRgba == int(TD_LOOKUP_TABLE_RGBA));
 static_assert(engine_image::UsageCoverage == int(TD_COVERAGE));
 static_assert(engine_image::UsageSpecularPbrRmao == int(TD_SPECULAR_PBR_RMAO));
 static_assert(engine_image::UsageHdrLightProbe == int(TD_HDR_LIGHTPROBE));

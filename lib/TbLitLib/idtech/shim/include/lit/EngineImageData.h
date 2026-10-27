@@ -21,10 +21,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 // LP4.2a (D85, P4.13): the engine's image data headers copied whole into TbLitIdLib
-// (renderer/Image_brdfLut.h, mirror.json M-INTR-08), behind a facade any thread may read:
-// the arrays are constant data, constant-initialised (C9), never written.
+// (renderer/Image_brdfLut.h, mirror.json M-INTR-08; LP3.0:
+// renderer/Image_blueNoiseVC_2.h, M-SHADOW-COPY-01), behind a facade any thread may read:
+// the arrays are constant data, constant-initialised (C9), never written. LP3.0's
+// blue-noise generator is the one exception: the parse thread's.
 
 namespace tb::lit
 {
@@ -42,5 +45,39 @@ std::size_t engineBrdfLutSize();
 // BRDFLUT_TEX_WIDTH and BRDFLUT_TEX_HEIGHT
 int engineBrdfLutWidth();
 int engineBrdfLutHeight();
+
+// what an intrinsic image's generator hands idImage::GenerateImage: its pixels (RGBA8, in
+// the generator's order, row by row) and its size and options (textureFilter_t,
+// textureRepeat_t, textureUsage_t)
+struct EngineGeneratedImage
+{
+  std::vector<std::uint8_t> rgba;
+  int width = 0;
+  int height = 0;
+  int filter = 0;
+  int repeat = 0;
+  int usage = 0;
+};
+
+/**
+ * LP3.0 (C60, P3.24a, SC732): _blueNoise256 as the engine makes it: the copied
+ * generator R_CreateBlueNoise256Image (Image_intrinsic.cpp:793-815) run on the copied
+ * table renderer/Image_blueNoiseVC_2.h (blueNoiseTexBytes, 512 × 512 RGB8 texels, 786,432
+ * bytes, top row first; the header's comment "Stored in R8 format" is wrong). The
+ * generator fills its static RGBA8 buffer data[x][y] from the table's texel (x, y), so
+ * the image it hands GenerateImage is the table transposed: the image's texel in row r
+ * and column c is the table's texel in row c and column r; its alpha is the byte 1, not
+ * 255; BLUENOISE_TEX_WIDTH × BLUENOISE_TEX_HEIGHT, TF_NEAREST, TR_REPEAT,
+ * TD_LOOKUP_TABLE_RGBA. The generator writes its function-local static on every call:
+ * the parse thread alone (C20), as intrinsicImage.
+ */
+EngineGeneratedImage engineBlueNoise256Image();
+// the copied table itself (BLUENOISE_TEX_WIDTH, _HEIGHT and _PITCH: 512, 512, 1536);
+// constant data, any thread
+const std::uint8_t* engineBlueNoiseTable();
+std::size_t engineBlueNoiseTableSize();
+int engineBlueNoiseTableWidth();
+int engineBlueNoiseTableHeight();
+int engineBlueNoiseTablePitch();
 
 } // namespace tb::lit

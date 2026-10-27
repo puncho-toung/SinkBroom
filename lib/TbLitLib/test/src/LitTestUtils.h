@@ -36,6 +36,10 @@ namespace tb::lit
 {
 
 std::string readTextFile(const std::filesystem::path& path);
+
+// LP3.0: the SHA-256 of bytes (FIPS 180-4), as lowercase hex, for tests that record a
+// hash a script computed (the blue-noise image)
+std::string sha256Hex(const std::uint8_t* data, std::size_t size);
 void writeTextFile(const std::filesystem::path& path, const std::string& text);
 
 // a material decl with one diffuse stage of this image

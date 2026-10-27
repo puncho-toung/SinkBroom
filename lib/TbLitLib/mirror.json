@@ -30643,6 +30643,140 @@
         }
       ],
       "note": "LP3.0 step 1 (C60, SC728, P3.24b, P3.24e): DRAW_INTERACTION_SM's four sets: set 0 the uniforms item (the 1088-byte volatile constant buffer; PushConstants( 0, 1088 ) only where pcEnabled, never on a desktop), visibility All; set 1 Texture_SRV 0, 1, 2 (normal, specular, base colour) Pixel; set 2 Texture_SRV 3, 4, 5, 6 (falloff, projection, the shadow atlas, _blueNoise256) Pixel; set 3 Sampler 0-3 Pixel. The binding sets per draw: units 0-6 at t0-t6 (INTERACTION_TEXUNIT_SHADOWMAPS 5, INTERACTION_TEXUNIT_JITTER 6), s0 AnisotropicWrap (PointWrap under R_UsePixelatedLook, which r_renderMode 0 never picks, as every other mirrored set), s1 LinearBorder, s2 LinearClampCompare (Border (0, 0, 0, 1) with Comparison: E-LIT-14's misnomer), s3 PointWrap (the blue noise). No DRAW_INTERACTION_SM_SKINNED layout or set is mirrored (P3.24e: no skinned model draws; engineBindingLayoutDescs and engineBindingSetShape answer nullopt for it). Nothing selects these sets before LP3.1, whose atlas binding slot keeps one version for the session (P3.24b)"
+    },
+    {
+      "id": "M-SHADOW-COPY-01",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_blueNoiseVC_2.h",
+          "lines": [
+            1,
+            65549
+          ],
+          "anchor": "whole file",
+          "gitBlob": "c06f4cd572febd030696cb1d9bc4da56eaf5bff1",
+          "sha256": "bae9435fa7330ab7e9050d1cf43859d94e01678570bc45c28b1a22cae061770f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Image_blueNoiseVC_2.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob. LP3.0 step 2 (C60, P3.24a, SC732): _blueNoise256's table, blueNoiseTexBytes, 512 x 512 RGB8 texels (786,432 data bytes, BLUENOISE_TEX_PITCH 1536) in 4,784,451 bytes of text (65,549 lines of hex literals). The header's own comment \"Stored in R8 format\" is wrong: the data is RGB8, as the engine's include line says (Image_intrinsic.cpp:41, \"512^2 RGB8 data\") and the generator reads three bytes a texel. Provenance: added upstream in RBDOOM-3-BFG commit 99235ec92c32f7a03e850f7813a144f3faa481a0 (2020-05-10, \"Optimized Filmic Dithering with precalculated Blue Noise\"), unchanged to 285ea4d1; the file carries no licence header of its own (the engine's GPL-3 with the additional terms covers it as part of the tree; the generator's file, whose licence is copied with its range, M-SHADOW-COPY-02, names its authors). Only the shim's EngineBlueNoise.cpp includes it (M-SHADOW-INTR-01); the table is a static const array there, constant-initialised (M-SHADOW-STATIC-01). Compile cost: EngineBlueNoise.obj is about 1 MB; recompiling the file adds well under a second to TbLitIdLib's build (LP3.0's measurement, in the step's report)"
+    },
+    {
+      "id": "M-SHADOW-COPY-02",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            1,
+            29
+          ],
+          "anchor": "licence",
+          "sha256": "bee4f386a8fa0d201609a5fa3cae21fc714327fdc9eca5803f1b64d95ac0bf79"
+        },
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            793,
+            815
+          ],
+          "anchor": "R_CreateBlueNoise256Image",
+          "sha256": "8c3cc295569ffb1a76970c553d5f1166772aff0a1ff48dce02f2bdea8a2970dd"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/Image_intrinsic.cpp"
+        }
+      ],
+      "note": "52 of the file's 1451 lines, in 2 ranges, each preceded by one marker line. LP3.0 step 2 (C60, P3.24a): the blue-noise generator, compiled inside the namespace tbLitBlueNoise of ../shim/src/EngineBlueNoise.cpp, whose idImage there is the reduced stand-in the range's GenerateImage call reaches (it keeps the pixels and the options); marked HEADER_FILE_ONLY in idtech/CMakeLists.txt. The range keeps its #if 1 / #else branch verbatim (the R8 branch is dead code)"
+    },
+    {
+      "id": "M-SHADOW-INTR-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            793,
+            815
+          ],
+          "anchor": "R_CreateBlueNoise256Image",
+          "sha256": "8c3cc295569ffb1a76970c553d5f1166772aff0a1ff48dce02f2bdea8a2970dd"
+        },
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            1089,
+            1089
+          ],
+          "anchor": "blueNoiseImage256 = ImageFromFunction( \"_blueNoise256\", R_CreateBlueNoise256Image )",
+          "sha256": "425cf7006e68d85a86d9936d23b6b06790769478ea9e2e5df805b0caccc8acf9"
+        },
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            40,
+            41
+          ],
+          "anchor": "the include of Image_blueNoiseVC_2.h, \"512^2 RGB8 data\"",
+          "sha256": "92c656e3f258ae23032697f031a99e32e191034a49a3171793a9bf5be078fd9c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineBlueNoise.cpp",
+          "symbol": "tbLitBlueNoise::idImage, engineBlueNoise256Image, engineBlueNoiseTable"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineImageData.h",
+          "symbol": "EngineGeneratedImage, engineBlueNoise256Image"
+        },
+        {
+          "file": "lib/TbLitLib/src/IntrinsicImages.cpp",
+          "symbol": "rawIntrinsicImage (_blueNoise256)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_IntrinsicImages.cpp",
+          "symbol": "LP3.0 (C60, P3.24a): _blueNoise256, the copied generator on the copied table"
+        }
+      ],
+      "note": "LP3.0 step 2 (C60, P3.24a, SC732): _blueNoise256 on the LP4 _brdfLut pattern, the raw intrinsic path: the copied generator runs on the copied table and hands the stand-in GenerateImage( data, 512, 512, TF_NEAREST, TR_REPEAT, TD_LOOKUP_TABLE_RGBA ); DeriveOpts' format and mips for that usage and filter (engineImageOpts: FMT_RGBA8; engineMipLevels: one level for TF_NEAREST) give one RGBA8 level stored as it is, 1,048,576 bytes, 2D. The fill is data[x][y] = table texel (x, y) on a buffer declared [HEIGHT][WIDTH], so the image is the table transposed (the image's row r, column c is the table's row c, column r), and its alpha is the byte 1, not 255. Made only when the name is asked for (intrinsicImage, the parse thread; LP3.1 binds it at INTERACTION_TEXUNIT_JITTER 6 with the PointWrap sampler, M-SHADOW-TABLE-02). The test holds the table to its sha256 (95f0659b...), four texels of the image to the table transposed, every alpha to 1 and the whole image to its sha256 (8f5391b2...), both computed by a script from the engine's file at 285ea4d1. The rand()-seeded _jitter1/4/16 and _random256 are not made (never bound, SC732)"
+    },
+    {
+      "id": "M-SHADOW-STATIC-01",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_blueNoiseVC_2.h",
+          "lines": [
+            9,
+            9
+          ],
+          "anchor": "static const unsigned char blueNoiseTexBytes[]",
+          "sha256": "4a3c38b01431fc0c999ed347430197842ceaa42f93ab5959f66dd150405bae53"
+        },
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            795,
+            795
+          ],
+          "anchor": "R_CreateBlueNoise256Image's static byte data[512][512][4]",
+          "sha256": "66d7631ed5476d5797bfe275f2bdbeffc9443fad7293d2266de98f194c22e175"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineBlueNoise.cpp"
+        }
+      ],
+      "note": "LP3.0 step 2 (C9, C17, C20): blueNoiseTexBytes is an internal-linkage const array of 786,432 bytes, initialised from literals: constant-initialised (in .rdata; no ??__E dynamic initialiser, check_static_init's count unchanged), never written, so any thread may read it. The generator's function-local static data[512][512][4] (1,048,576 bytes) is zero-initialised at load (.bss, no initialiser) and written in full by every call before GenerateImage reads it: no reset is needed (each call rewrites every byte), but two calls at once would race on it, so the generator is the parse thread's alone (C20: the parse thread runs the copied code; intrinsicImage is its caller)"
     }
   ],
   "retired": [
