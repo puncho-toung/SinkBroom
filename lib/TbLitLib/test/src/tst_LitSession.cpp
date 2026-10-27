@@ -16255,7 +16255,7 @@ std::string withEntityLines(
       lines.push_back(line);
     }
   }
-  const auto nameLine = fmt::format("\"name\" \"{}\"", name);
+  const auto nameLine = fmt::format(R"("name" "{}")", name);
   const auto at = std::ranges::find(lines, nameLine);
   REQUIRE(at != lines.end());
   auto open = std::size_t(at - lines.begin());
@@ -16294,14 +16294,14 @@ std::string withEntityLines(
 // a brush line's three points moved by d, and an "origin" key with them
 std::string movedLine(const std::string& line, const EngineVec3& d)
 {
-  if (line.starts_with("\"origin\" \""))
+  if (line.starts_with(R"("origin" ")"))
   {
     auto stream = std::istringstream{line.substr(10)};
     auto x = 0.0f;
     auto y = 0.0f;
     auto z = 0.0f;
     stream >> x >> y >> z;
-    return fmt::format("\"origin\" \"{} {} {}\"", x + d[0], y + d[1], z + d[2]);
+    return fmt::format(R"("origin" "{} {} {}")", x + d[0], y + d[1], z + d[2]);
   }
   if (!line.starts_with("( "))
   {
@@ -16493,8 +16493,8 @@ TEST_CASE("LitSession shadow records on a GPU (LP3.3)", "[.][litgpu2]")
     // the light's noshadows: its record dropped, and made again when it casts once more
     const auto toggled = [&](const std::string& value) {
       return withEntityLines(moved, "lp3_point", [&](const std::string& line) {
-        return line == "\"noshadows\" \"0\"" ? fmt::format("\"noshadows\" \"{}\"", value)
-                                             : line;
+        return line == R"("noshadows" "0")" ? fmt::format(R"("noshadows" "{}")", value)
+                                            : line;
       });
     };
     offer(toggled("1"), "lp3_point.map");
@@ -16634,7 +16634,7 @@ TEST_CASE("LitSession shadow records on a GPU (LP3.3)", "[.][litgpu2]")
         moved.push_back(side);
       }
     }
-    CHECK(moved.size() > 0u);
+    CHECK_FALSE(moved.empty());
     // the path the device takes (P3.4a): the copies, or the fallback's redraws
     const auto copies = session->shadowDepthCopyForTesting();
     auto pointLights = std::set<PreviewId>{};
