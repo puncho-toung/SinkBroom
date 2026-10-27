@@ -1951,6 +1951,11 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
 
     // the frame's lit passes' counts (none in the HDR clear test mode)
     auto litStats = LitFrameStats{};
+    // LP6.0 (C65): the CPU record's splits the render thread times (the lit passes' are
+    // in litStats)
+    auto uploadMs = 0.0;
+    auto tonemapMs = 0.0;
+    auto submitStart = recordStart;
 
     {
       auto recording = OpenCommandList{device, *m_commandList};
@@ -1967,7 +1972,14 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         m_samplers.common(device) | kdl::transform([](const auto*) { return true; })
         | kdl::if_error([&](const auto& e) { m_events.markFailed(e.msg); })
         | kdl::value_or(false);
-      if (!samplers || !recordUploads(commandList))
+      if (!samplers)
+      {
+        return FrameOutcome::Stopped;
+      }
+      const auto uploadStart = FrameClock::now();
+      const auto uploaded = recordUploads(commandList);
+      uploadMs = millisecondsSince(uploadStart);
+      if (!uploaded)
       {
         return FrameOutcome::Stopped;
       }
@@ -1996,8 +2008,11 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       }
       runAfterPassHooks(commandList);
       // LP2.2b: the tonemap passes into the LDR target and its blit into the frame's
-      // target, which replace LP0's clear of it
+      // target, which replace LP0's clear of it; LP6.0 (C65): their CPU record time, the
+      // debug view's (LP3.4) included
+      const auto tonemapStart = FrameClock::now();
       recordTonemap(commandList, texture, targetFramebuffer, hdrDrawn);
+      tonemapMs = millisecondsSince(tonemapStart);
       // LP3.4 (D158): a debug view's draw skipped for a pending pipeline keeps the frame
       // unconverged (the compile thread's onReady triggers the next)
       if (!hdrClear && m_debugView.load() != DebugView::None)
@@ -2021,6 +2036,8 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         commandList.endTimerQuery(timer);
         m_timers.passTimed(slot, TimedPass::Frame);
       }
+      // LP6.0 (C65): the submit's CPU time, from the close to the event query
+      submitStart = FrameClock::now();
       recording.close();
 
       if (target)
@@ -2048,6 +2065,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
     device.setEventQuery(m_frameEvents[slot], nvrhi::CommandQueue::Graphics);
     m_frameEventSet[slot] = true;
     m_timers.frameSubmitted(slot);
+    const auto submitMs = millisecondsSince(submitStart);
     const auto cpuRecordMs = millisecondsSince(recordStart);
     // C29: a readback's wait for the GPU is not the frame's record time
     finishLdrReadback(slot);
@@ -2237,6 +2255,24 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.lightTriangleEntries = litStats.lightTriangleEntries;
       // LP3.4 (D155): the perforated casters' shadow draws
       row.perforatedDraws = litStats.perforatedShadowDraws;
+      // LP6.0 (C65): the CPU record's split inside cpu_record_ms's span, and the rest of
+      // the span (never below 0: the splits are disjoint intervals of it)
+      row.listsMs = litStats.listsMs;
+      row.prepassCpuMs = litStats.prepassRecordMs;
+      row.ambientCpuMs = litStats.ambientRecordMs;
+      row.interactionCpuMs = litStats.interactionRecordMs;
+      row.stageCpuMs = litStats.stageRecordMs;
+      row.fogCpuMs = litStats.fogRecordMs;
+      row.tonemapCpuMs = tonemapMs;
+      row.uploadMs = uploadMs;
+      row.submitMs = submitMs;
+      row.recordOtherMs = std::max(
+        0.0,
+        cpuRecordMs
+          - (litStats.listsMs + litStats.prepassRecordMs + litStats.ambientRecordMs
+             + litStats.shadowRecordMs + litStats.interactionRecordMs
+             + litStats.stageRecordMs + litStats.fogRecordMs + tonemapMs + uploadMs
+             + submitMs));
       m_timers.frameShown(slot, row);
       ++m_framesPresented;
       // LP2.3 (D9): the panel's status line reads the frame's counts

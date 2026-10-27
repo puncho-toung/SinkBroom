@@ -1729,12 +1729,15 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     // proc_bytes and LP7's eleven counts, 69; LP7.3 (C54, K42): inlined_surfaces, the
     // 70th; LP3.1 (D157, P3.24d): pass 6's fourteen and LP3.0's seven caster columns, 91;
     // LP3.2 (D157 extended): the per-list shadow-atlas interaction draws after
-    // set11_writes, 94; LP3.4 (D155): perforated_draws, the 95th
-    REQUIRE(rows[0].size() == 95u);
+    // set11_writes, 94; LP3.4 (D155): perforated_draws, the 95th; LP6.0 (C65): the CPU
+    // record's ten split columns after it, 105
+    REQUIRE(rows[0].size() == 105u);
     CHECK(rows[0][70] == "shadow_draws");
     CHECK(rows[0][84] == "sm_draws_local");
     CHECK(rows[0][93] == "light_triangle_entries");
     CHECK(rows[0][94] == "perforated_draws");
+    CHECK(rows[0][95] == "lists_ms");
+    CHECK(rows[0][104] == "record_other_ms");
     CHECK(rows[0][6] == "gpu_frame_ms");
     CHECK(rows[0][18] == "gpu_prepass_ms");
     CHECK(rows[0][21] == "gpu_blit_ms");
@@ -1757,7 +1760,7 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     auto presentMs = std::vector<double>{};
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 95u);
+      REQUIRE(rows[i].size() == 105u);
       sessions.insert(rows[i][0]);
       if (rows[i][1] == "start")
       {

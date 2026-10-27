@@ -377,6 +377,18 @@ struct LitFrameStats
   std::size_t smDrawsLocal = 0;
   std::size_t smDrawsGlobal = 0;
   std::size_t smDrawsTranslucent = 0;
+  // ----- LP6.0 (C65, D165): the passes' CPU record times this frame, in ms on FrameClock
+  // (the frame log's lists_ms ... fog_cpu_ms) -----
+  // rebuildLists whole, kept lists too (the key's test alone): the flow's flowMs and the
+  // gathering's casterMs are inside it; and passes 1, 5, 7, 8 (every stage call of the
+  // frame, summed) and 9, each from its timer's begin to its end (pass 6's is
+  // shadowRecordMs); 0 for a pass not recorded
+  double listsMs = 0.0;
+  double prepassRecordMs = 0.0;
+  double ambientRecordMs = 0.0;
+  double interactionRecordMs = 0.0;
+  double stageRecordMs = 0.0;
+  double fogRecordMs = 0.0;
 };
 
 // a recorded draw (setDrawLogForTesting)

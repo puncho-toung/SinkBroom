@@ -222,8 +222,28 @@ struct FrameLogRow
   std::optional<double> casterMs;
   std::optional<std::uint64_t> lightTriangleEntries;
   // LP3.4 (D155): the perforated casters' draws among shadow_draws
-  // (LitFrameStats::perforatedShadowDraws), the last column
+  // (LitFrameStats::perforatedShadowDraws)
   std::optional<std::uint64_t> perforatedDraws;
+  // ----- LP6.0 (C65, D165), frame rows, at the end (LP7.0's rule) -----
+  // the CPU record's split, each timed on FrameClock inside cpu_record_ms's span:
+  // lists_ms is LitPasses::rebuildLists whole (the portal flow, the caster gathering and
+  // the lists: flow_ms and caster_ms are inside it, never added to it); the record of
+  // pass 1, pass 5, pass 7, pass 8 (every stage call of the frame) and pass 9, each from
+  // its timer's begin to its end (pass 6's is shadow_cpu_ms); the tonemap passes' record
+  // with the debug views; the uploads (the arenas' and the textures', recordUploads
+  // whole); the submit (the close, queueSignalSemaphore, executeCommandList and
+  // setEventQuery); and record_other_ms, cpu_record_ms less lists_ms, the seven pass
+  // columns (shadow_cpu_ms among them), upload_ms and submit_ms
+  std::optional<double> listsMs;
+  std::optional<double> prepassCpuMs;
+  std::optional<double> ambientCpuMs;
+  std::optional<double> interactionCpuMs;
+  std::optional<double> stageCpuMs;
+  std::optional<double> fogCpuMs;
+  std::optional<double> tonemapCpuMs;
+  std::optional<double> uploadMs;
+  std::optional<double> submitMs;
+  std::optional<double> recordOtherMs;
 };
 
 // the CSV header line, ending in a newline

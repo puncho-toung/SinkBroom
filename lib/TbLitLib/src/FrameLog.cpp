@@ -205,6 +205,27 @@ std::string shadowFields(const FrameLogRow& row)
     optionalCount(row.perforatedDraws));
 }
 
+// LP6.0's columns (C65): the CPU record's split inside cpu_record_ms's span: lists_ms
+// (rebuildLists whole; flow_ms and caster_ms are inside it), the record of passes 1, 5,
+// 7, 8 and 9 (pass 6's is shadow_cpu_ms), the tonemap passes', the uploads, the submit,
+// and record_other_ms, the span less lists_ms, the seven pass columns, upload_ms and
+// submit_ms; empty in a start or stop row
+std::string cpuSplitFields(const FrameLogRow& row)
+{
+  return fmt::format(
+    "{},{},{},{},{},{},{},{},{},{}",
+    optionalField(row.listsMs, "{:.3f}"),
+    optionalField(row.prepassCpuMs, "{:.3f}"),
+    optionalField(row.ambientCpuMs, "{:.3f}"),
+    optionalField(row.interactionCpuMs, "{:.3f}"),
+    optionalField(row.stageCpuMs, "{:.3f}"),
+    optionalField(row.fogCpuMs, "{:.3f}"),
+    optionalField(row.tonemapCpuMs, "{:.3f}"),
+    optionalField(row.uploadMs, "{:.3f}"),
+    optionalField(row.submitMs, "{:.3f}"),
+    optionalField(row.recordOtherMs, "{:.3f}"));
+}
+
 std::string_view eventName(const FrameLogEvent event)
 {
   switch (event)
@@ -240,7 +261,9 @@ std::string_view frameLogHeader()
          "unplaced,perforated_skipped,atlas_bytes_written,gpu_shadow_ms,shadow_cpu_ms,"
          "set11_writes,sm_draws_local,sm_draws_global,sm_draws_translucent,caster_"
          "lights,caster_pairs,caster_pairs_resident,caster_pairs_pending,casters,caster_"
-         "ms,light_triangle_entries,perforated_draws\n";
+         "ms,light_triangle_entries,perforated_draws,lists_ms,prepass_cpu_ms,ambient_cpu_"
+         "ms,interaction_cpu_ms,stage_cpu_ms,fog_cpu_ms,tonemap_cpu_ms,upload_ms,submit_"
+         "ms,record_other_ms\n";
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)
@@ -252,10 +275,11 @@ std::string formatFrameLogRow(const FrameLogRow& row)
   if (row.event != FrameLogEvent::Frame)
   {
     // the frame's columns empty (gpu_prepass_ms ... gpu_fog_ms), then proc_bytes, then
-    // LP7's twelve counts, LP3.1's twenty-one, LP3.2's three and LP3.4's one empty
+    // LP7's twelve counts, LP3.1's twenty-one, LP3.2's three, LP3.4's one and LP6.0's
+    // ten empty
     return fmt::format(
       "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,{},,,,,,,,,,,,"
-      ",,,,,,,,,,,,,,,,,,,,,,,,,\n",
+      ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n",
       row.session,
       eventName(row.event),
       vram,
@@ -263,8 +287,8 @@ std::string formatFrameLogRow(const FrameLogRow& row)
       optionalCount(row.procBytes));
   }
   return fmt::format(
-    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}"
-    "\n",
+    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},"
+    "{}\n",
     row.session,
     eventName(row.event),
     row.frameIndex,
@@ -288,7 +312,8 @@ std::string formatFrameLogRow(const FrameLogRow& row)
     fogFields(row),
     optionalCount(row.procBytes),
     lp7Fields(row),
-    shadowFields(row));
+    shadowFields(row),
+    cpuSplitFields(row));
 }
 
 std::optional<std::string> FrameLogWriter::open(const std::filesystem::path& path)

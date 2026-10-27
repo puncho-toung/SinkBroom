@@ -374,8 +374,9 @@ using namespace std::chrono_literals;
 // the frame log's fields (lit/FrameLog.cpp, frameLogHeader): LP5.3's 57, LP7.0's
 // proc_bytes and the eleven model, dress and adoption counts (C52, P7.20), LP7.3's
 // inlined_surfaces (C54), LP3.1's pass 6 and caster columns (D157), LP3.2's per-list
-// shadow-atlas interaction draws, LP3.4's perforated_draws (D155)
-constexpr auto FrameLogFields = std::size_t{95};
+// shadow-atlas interaction draws, LP3.4's perforated_draws (D155), LP6.0's ten split
+// columns of the CPU record (C65)
+constexpr auto FrameLogFields = std::size_t{105};
 
 // LP2.0, T0.2: the validation layer's id of "Vertex attribute at location N not consumed
 // by vertex shader" (mirror.json M-PIPE-DEFECT-01), as this machine's layer names it
@@ -5371,6 +5372,36 @@ double fieldValue(const std::vector<std::string>& row, const std::size_t column)
   return row.size() > column && !row[column].empty() ? std::stod(row[column]) : 0.0;
 }
 
+// LP6.0 (C65): the frame log's columns of the CPU record and its split: cpu_record_ms,
+// LP3.1's shadow_cpu_ms (pass 6), LP3.0's caster_ms, and LP6.0's ten after
+// perforated_draws, lists_ms ... record_other_ms
+constexpr auto CpuRecordMsColumn = std::size_t{3};
+constexpr auto ShadowCpuMsColumn = std::size_t{82};
+constexpr auto CasterMsColumn = std::size_t{92};
+constexpr auto ListsMsColumn = std::size_t{95};
+constexpr auto RecordOtherMsColumn = std::size_t{104};
+
+/**
+ * LP6.0 (C65): a frame row's CPU record split: the ten columns are numbers, none below 0;
+ * they and shadow_cpu_ms sum to cpu_record_ms within 0.05 ms (eleven fields, each rounded
+ * to 0.001 ms); the caster gathering's time is inside the lists'.
+ */
+void checkCpuSplit(const std::vector<std::string>& row)
+{
+  REQUIRE(row.size() == FrameLogFields);
+  auto sum = fieldValue(row, ShadowCpuMsColumn);
+  for (auto c = ListsMsColumn; c <= RecordOtherMsColumn; ++c)
+  {
+    CAPTURE(c);
+    REQUIRE_FALSE(row[c].empty());
+    CHECK(fieldValue(row, c) >= 0.0);
+    sum += fieldValue(row, c);
+  }
+  CAPTURE(row[2]);
+  CHECK(std::abs(sum - fieldValue(row, CpuRecordMsColumn)) <= 0.05);
+  CHECK(fieldValue(row, ListsMsColumn) >= fieldValue(row, CasterMsColumn));
+}
+
 } // namespace
 
 // LP2.2b: the tonemap passes and the blit put the lit picture on the frame's target.
@@ -5682,6 +5713,11 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     // LP4.2a (C34): the ambient pass's two
     CHECK(rows[0][42] == "ambient_draws");
     CHECK(rows[0][43] == "gpu_ambient_ms");
+    // LP6.0 (C65): the CPU record's ten split columns after perforated_draws
+    CHECK(rows[0][ListsMsColumn] == "lists_ms");
+    CHECK(rows[0][ListsMsColumn + 1] == "prepass_cpu_ms");
+    CHECK(rows[0][RecordOtherMsColumn - 2] == "upload_ms");
+    CHECK(rows[0][RecordOtherMsColumn] == "record_other_ms");
     auto lastLit = std::optional<std::vector<std::string>>{};
     auto settledRows = 0;
     for (std::size_t i = 1; i < rows.size(); ++i)
@@ -5692,6 +5728,8 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
         continue;
       }
       CHECK((rows[i][34] == "0" || rows[i][34] == "1"));
+      // LP6.0 (C65): every frame's split sums to its record time, the settled ones too
+      checkCpuSplit(rows[i]);
       if (rows[i][34] == "1")
       {
         ++settledRows;
@@ -5733,6 +5771,22 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
       (*lastLit)[31],
       (*lastLit)[33],
       (*lastLit)[3]);
+    std::cout << fmt::format(
+      "LP2.2b fixture settled frame's CPU record split (LP6.0): lists {}, prepass {}, "
+      "ambient {}, shadows {}, interactions {}, stages {}, fog {}, tonemap {}, uploads "
+      "{}, "
+      "submit {}, other {} ms\n",
+      (*lastLit)[ListsMsColumn],
+      (*lastLit)[ListsMsColumn + 1],
+      (*lastLit)[ListsMsColumn + 2],
+      (*lastLit)[ShadowCpuMsColumn],
+      (*lastLit)[ListsMsColumn + 3],
+      (*lastLit)[ListsMsColumn + 4],
+      (*lastLit)[ListsMsColumn + 5],
+      (*lastLit)[ListsMsColumn + 6],
+      (*lastLit)[ListsMsColumn + 7],
+      (*lastLit)[ListsMsColumn + 8],
+      (*lastLit)[RecordOtherMsColumn]);
     std::filesystem::remove(logPath);
   }
 
@@ -7628,6 +7682,33 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
       }
       writeTextFile(out / (rows->array[order[i]].text("id") + ".framelog.csv"), rowLog);
     }
+  }
+  // LP6.0 (C65): every frame's CPU record split sums to its record time; the rows with
+  // casters time their gathering inside the lists
+  {
+    const auto logRows = readCsv(frameLog);
+    REQUIRE(logRows.size() > 1u);
+    REQUIRE(logRows[0].size() == FrameLogFields);
+    CHECK(logRows[0][ListsMsColumn] == "lists_ms");
+    CHECK(logRows[0][RecordOtherMsColumn] == "record_other_ms");
+    auto frameRows = std::size_t{0};
+    auto gathered = std::size_t{0};
+    for (std::size_t i = 1; i < logRows.size(); ++i)
+    {
+      if (logRows[i].size() > 1u && logRows[i][1] == "frame")
+      {
+        checkCpuSplit(logRows[i]);
+        ++frameRows;
+        gathered += fieldValue(logRows[i], CasterMsColumn) > 0.0 ? 1u : 0u;
+      }
+    }
+    std::cout << fmt::format(
+      "parity frame log (LP6.0): {} frames' CPU record split checked, {} with caster_ms "
+      "above 0\n",
+      frameRows,
+      gathered);
+    CHECK(frameRows > 0u);
+    CHECK(gathered > 0u);
   }
 
   messages.print("parity, validation");

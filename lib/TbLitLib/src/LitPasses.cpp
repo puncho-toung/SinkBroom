@@ -35,6 +35,7 @@
 #include "lit/EngineBuiltins.h"
 #include "lit/EnginePipelineState.h"
 #include "lit/EntityState.h"
+#include "lit/FramePacer.h"
 #include "lit/ImageCache.h"
 #include "lit/LitConfig.h"
 
@@ -55,6 +56,13 @@ namespace
 
 namespace em = engine_material;
 namespace gls = engine_gls;
+
+// LP6.0 (C65): the milliseconds from start to now on FrameClock, the frame log's clock;
+// render thread
+double recordMsSince(const FrameClock::time_point start)
+{
+  return std::chrono::duration<double, std::milli>(FrameClock::now() - start).count();
+}
 
 // the layout's push constants or volatile constant buffer: the first item of set 0
 bool pushesConstants(const std::vector<nvrhi::BindingLayoutHandle>& layouts)
@@ -214,7 +222,12 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
   setViewParms(m_parms, frame.view);
   recordClears(frame);
 
-  rebuildLists(inputs, frame.view);
+  // LP6.0 (C65): the lists' CPU time, kept lists too
+  {
+    const auto start = FrameClock::now();
+    rebuildLists(inputs, frame.view);
+    m_stats.listsMs = recordMsSince(start);
+  }
   m_stats.lightsVisible = m_lists.lights.size();
   m_stats.gridSurfaces = m_lists.gridSurfaces;
   m_stats.dressSurfaces = m_lists.dressSurfaces;
@@ -310,9 +323,14 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
     m_stats.stoppedEarly = true;
     return m_stats;
   }
-  beginTimer(frame, inputs.prepassTimer);
-  recordPrepass(frame);
-  m_stats.prepassTimed = endTimer(frame, inputs.prepassTimer);
+  // LP6.0 (C65): each pass's CPU record time from its timer's begin to its end
+  {
+    const auto start = FrameClock::now();
+    beginTimer(frame, inputs.prepassTimer);
+    recordPrepass(frame);
+    m_stats.prepassTimed = endTimer(frame, inputs.prepassTimer);
+    m_stats.prepassRecordMs = recordMsSince(start);
+  }
   if (inputs.afterPrepass)
   {
     inputs.afterPrepass();
@@ -333,9 +351,11 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
                              | kdl::value_or(nullptr);
   if (ambientTarget == frame.framebuffer)
   {
+    const auto start = FrameClock::now();
     beginTimer(frame, inputs.ambientTimer);
     recordAmbient(frame);
     m_stats.ambientTimed = endTimer(frame, inputs.ambientTimer);
+    m_stats.ambientRecordMs = recordMsSince(start);
     if (const auto it = m_frameWrites.find(EngineBindingLayout::AmbientLightingIbl);
         it != m_frameWrites.end())
     {
@@ -383,9 +403,11 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
                                    | kdl::value_or(nullptr);
     if (interactionTarget == frame.framebuffer)
     {
+      const auto start = FrameClock::now();
       beginTimer(frame, inputs.interactionTimer);
       recordInteractions(frame);
       m_stats.interactionsTimed = endTimer(frame, inputs.interactionTimer);
+      m_stats.interactionRecordMs = recordMsSince(start);
       // LP3.1 (D76, P3.5): each interaction layout's writes
       m_stats.interactionWrites = m_frameWrites[EngineBindingLayout::DrawInteraction];
       m_stats.interactionSmWrites = m_frameWrites[EngineBindingLayout::DrawInteractionSm];
@@ -415,9 +437,12 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
                              | kdl::value_or(nullptr);
     if (stageTarget == frame.framebuffer)
     {
+      // LP6.0 (C65): summed over the frame's stage calls (LP6.5b adds the second)
+      const auto start = FrameClock::now();
       beginTimer(frame, inputs.stageTimer);
       recordStages(frame);
       m_stats.stagesTimed = endTimer(frame, inputs.stageTimer);
+      m_stats.stageRecordMs += recordMsSince(start);
     }
   }
 
@@ -436,9 +461,11 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
                          | kdl::value_or(nullptr);
   if (fogTarget == frame.framebuffer)
   {
+    const auto start = FrameClock::now();
     beginTimer(frame, inputs.fogTimer);
     recordFogLights(frame);
     m_stats.fogTimed = endTimer(frame, inputs.fogTimer);
+    m_stats.fogRecordMs = recordMsSince(start);
   }
   return m_stats;
 }
