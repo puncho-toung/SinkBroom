@@ -37,6 +37,7 @@
 #include "kd/result.h"
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <vulkan/vulkan.hpp>
 
 #include <algorithm>
@@ -847,6 +848,11 @@ std::string sessionStatusLine(
     {
       line += fmt::format(", {} overflowed", status.lightsOverflowed);
     }
+    // LP3.4 (D158, P3.25): the lights the shadow atlas left unshadowed
+    if (status.lightsUnshadowed > 0)
+    {
+      line += fmt::format(", {} unshadowed (atlas full)", status.lightsUnshadowed);
+    }
     line += fmt::format(" | {} draws", status.draws);
     if (status.skippedDraws > 0)
     {
@@ -904,6 +910,17 @@ std::string sessionStatusLine(
     }
   }
   return line;
+}
+
+std::string sessionStatusTooltip(
+  const SessionStatus& status, const std::vector<ProgramReport>& programs)
+{
+  auto tooltip = sessionStatusLine(status, programs);
+  if (status.frames > 0 && status.lightsUnshadowed > 0)
+  {
+    tooltip += fmt::format("\nunshadowed: {}", fmt::join(status.unshadowedLights, ", "));
+  }
+  return tooltip;
 }
 
 nvrhi::IDevice* LitSession::nvrhiDeviceForTesting() const

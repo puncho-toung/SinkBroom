@@ -2029,6 +2029,10 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     CHECK(text.contains("VRAM "));
     // LP4.1 (D90): the document has no .proc, so nothing of the portal flow
     CHECK_FALSE(text.contains("| area "));
+    // LP3.4 (D158, P3.25): no light is left unshadowed by the atlas here, so no clause,
+    // and the tooltip (lit::sessionStatusTooltip) is the line alone
+    CHECK_FALSE(text.contains("unshadowed"));
+    CHECK(status->toolTip() == text);
 
     panel.stop();
     CHECK(status->text().isEmpty());

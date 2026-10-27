@@ -318,6 +318,33 @@ TEST_CASE("LitSession: the panel's status line (D9, LP2.3)")
   CHECK(
     sessionStatusLine(none, {})
     == "settled | 1 of 1 light drawn | 9 draws | VRAM 1.0 MB | bake: none");
+
+  // LP3.4 (D158, P3.25, Q40): the lights the atlas left unshadowed: none, no clause and
+  // the tooltip the line; two, the clause after the lights drawn and their names on the
+  // tooltip's second line
+  auto shadowed = flowed;
+  shadowed.lightsVisible = 43;
+  shadowed.lightsDrawn = 43;
+  CHECK(sessionStatusLine(shadowed, {}).find("unshadowed") == std::string::npos);
+  CHECK(sessionStatusTooltip(shadowed, {}) == sessionStatusLine(shadowed, {}));
+  shadowed.lightsUnshadowed = 2;
+  shadowed.unshadowedLights = {"lp3p_h11_00", "lp3p_h11_21"};
+  CHECK(
+    sessionStatusLine(shadowed, programs)
+    == "settled | 43 of 43 lights drawn, 2 unshadowed (atlas full) | 9 draws | VRAM 1.0 "
+       "MB | area -1, 8 of 8 areas | disabled: builtin/post/histogram (no shader blob "
+       "builtin/post/histogram.cs.bin)");
+  CHECK(
+    sessionStatusTooltip(shadowed, programs)
+    == sessionStatusLine(shadowed, programs) + "\nunshadowed: lp3p_h11_00, lp3p_h11_21");
+  // with an overflowed light too: after it
+  shadowed.lightsOverflowed = 1;
+  CHECK(
+    sessionStatusLine(shadowed, {})
+      .starts_with(
+        "settled | 43 of 43 lights drawn, 1 overflowed, 2 unshadowed (atlas full) |"));
+  // before the first frame: "starting", no names
+  CHECK(sessionStatusTooltip({}, {}) == "starting");
 }
 
 } // namespace tb::lit

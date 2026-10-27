@@ -460,14 +460,25 @@ void LitPreviewPanel::createGui()
     }
     // LP4.3 (D90, K8): the host's status adds the document's unsaved changes and its
     // file's time, which the bake's stale notice reads
-    const auto text = session  ? QString::fromStdString(lit::sessionStatusLine(
-                                  m_host->status(), session->programReport()))
+    const auto status = session ? m_host->status() : lit::SessionStatus{};
+    const auto programs =
+      session ? session->programReport() : std::vector<lit::ProgramReport>{};
+    const auto text = session
+                        ? QString::fromStdString(lit::sessionStatusLine(status, programs))
                       : m_host ? tr("starting")
                                : QString{};
+    // LP3.4 (D158, P3.25): the tooltip the whole line, and the unshadowed lights' names
+    // on a second line
+    const auto tooltip =
+      session ? QString::fromStdString(lit::sessionStatusTooltip(status, programs))
+              : text;
     if (text != statusLabel->text())
     {
       statusLabel->setText(text);
-      statusLabel->setToolTip(text);
+    }
+    if (tooltip != statusLabel->toolTip())
+    {
+      statusLabel->setToolTip(tooltip);
     }
   });
 

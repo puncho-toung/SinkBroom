@@ -99,6 +99,11 @@ struct SessionStatus
   std::size_t lightsVisible = 0;
   std::size_t lightsDrawn = 0;
   std::size_t lightsOverflowed = 0;
+  // LP3.4 (D158, P3.25, Q40): the casting lights the shadow atlas left without a tile
+  // (unshadowed: LitFrameStats::lightsUnplaced) and their "name" keys in viewLights
+  // order (unplacedLights)
+  std::size_t lightsUnshadowed = 0;
+  std::vector<std::string> unshadowedLights;
   // the lit and tonemap passes' draws, the draws skipped, the pipelines pending
   std::size_t draws = 0;
   std::size_t skippedDraws = 0;
@@ -199,7 +204,9 @@ enum class DebugView
 
 /**
  * D9 (LP2.3): the panel's status line: "starting" before the first frame, then "settled"
- * or "drawing", the lights drawn of those visible (and overflowed), the draws (skipped),
+ * or "drawing", the lights drawn of those visible (and overflowed; LP3.4, D158: and ", N
+ * unshadowed (atlas full)" for the casting lights the atlas left without a tile), the
+ * draws (skipped),
  * the pipelines pending and the VRAM, and while a tree exists (D90, LP4.1) "area A, F of
  * N areas" (the view's area, -1 outside the world, the areas flowed and the tree's);
  * LP4.3 (D90, K8, K29) once the bake is known "bake: none", "proc", "bproc" or
@@ -210,6 +217,14 @@ enum class DebugView
  * the ambient pass's (LP4.2a: the pass draws nothing without it). Pure; any thread.
  */
 std::string sessionStatusLine(
+  const SessionStatus& status, const std::vector<ProgramReport>& programs);
+
+/**
+ * LP3.4 (D158, P3.25, Q40): the status line's tooltip: the line, then, when the atlas
+ * left lights unshadowed, a second line "unshadowed: " and their names (the line itself
+ * says ", N unshadowed (atlas full)" after the lights drawn). Pure; any thread.
+ */
+std::string sessionStatusTooltip(
   const SessionStatus& status, const std::vector<ProgramReport>& programs);
 
 // A copy of the 3D view's camera (§3.2); never a pointer to it.

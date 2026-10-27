@@ -2247,6 +2247,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         status.lightsVisible = litStats.lightsVisible;
         status.lightsDrawn = litStats.lightsDrawn;
         status.lightsOverflowed = litStats.lightsOverflowed;
+        // LP3.4 (D158): the lights the atlas left unshadowed, by name
+        status.lightsUnshadowed = litStats.lightsUnplaced;
+        status.unshadowedLights = litStats.unplacedLights;
         status.draws = litStats.prepassDraws + litStats.ambientDraws
                        + litStats.interactionDraws + litStats.stageDraws
                        + litStats.fogDraws + litStats.blendDraws + tonemap.draws;
