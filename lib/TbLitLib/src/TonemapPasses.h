@@ -195,6 +195,9 @@ struct TonemapFrameInputs
   nvrhi::ITimerQuery* blitTimer = nullptr;
   // a pass boundary: a stop or a park was asked for
   std::function<bool()> stopRequested;
+  // LP3.4 (D158): called with ldrFBO after the tonemap pass and before the blit (the
+  // debug views draw there); none: nothing
+  std::function<void(nvrhi::IFramebuffer*)> beforeBlit;
 };
 
 // C16's columns of the tonemap passes, per frame

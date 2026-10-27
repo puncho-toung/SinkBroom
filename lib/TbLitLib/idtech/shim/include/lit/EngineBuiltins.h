@@ -1498,6 +1498,16 @@ inline constexpr int EngineBuiltinDepth = 63;
 // "builtin/fog/blendlight" (BLENDLIGHT), and BUILTIN_FOG, "builtin/fog/fog" (FOG)
 inline constexpr int EngineBuiltinBlendLight = 65;
 inline constexpr int EngineBuiltinFog = 67;
+// LP3.4 (D158): BUILTIN_DEBUG_SHADOWMAP (RenderProgs.h:530), which no engine pass draws
+// at 285ea4d1 (BindShader_DebugShadowMap is never called) and which cannot draw on
+// Vulkan: its .vs writes its clip position to POSITION, not SV_Position
+// (debug_shadowmap.vs.hlsl: 44-47), so the SPIR-V has no gl_Position and a vec4 varying
+// at location 0 where the .ps reads a vec2 (VUID-RuntimeSpirv-maintenance4-06817; nothing
+// rasterized: E-LIT-15); and BUILTIN_TEXTURED (RenderProgs.h:417, "builtin/texture",
+// BINDING_LAYOUT_TEXTURE), the engine's plain textured program (BindShader_Texture,
+// RenderBackend.cpp:2331), which the shadow atlas debug view draws with instead
+inline constexpr int EngineBuiltinDebugShadowMap = 107;
+inline constexpr int EngineBuiltinTextured = 14;
 inline constexpr int EngineBuiltinBlit = 108;
 inline constexpr int EngineBuiltinRect = 109;
 inline constexpr int EngineBuiltinTonemapping = 111;

@@ -433,6 +433,8 @@ private:
   std::atomic<bool> m_skipInteractionsForTesting = false;
   // LP5.0 (D118): r_skipAmbient's stand-in (setSkipShaderPasses), not read by a pass yet
   std::atomic<bool> m_skipShaderPassesForTesting = false;
+  // LP3.4 (D158): the debug view the panel selected (setDebugView)
+  std::atomic<DebugView> m_debugView = DebugView::None;
   // the bytes the frame being recorded has uploaded
   std::uint64_t m_frameUploadBytes = 0;
   // §3.10: what a frame uploads at most (UploadBytesPerFrame; tests set less)
@@ -677,6 +679,10 @@ public:
   // pass will read; no frame is triggered while nothing reads it
   void setSkipShaderPasses(bool skip);
   bool skipShaderPasses() const;
+  // LP3.4 (D158), any thread: the debug view the frames draw after the tonemap pass (a
+  // change triggers a frame)
+  void setDebugView(DebugView view);
+  DebugView debugView() const;
   // DX.5, GUI thread, phase B, once the frame resources exist and before start: the
   // pipelines the first lit frames ask for (litStartPipelineKeys, the tonemap pass's and
   // the blit's against this session's targets)

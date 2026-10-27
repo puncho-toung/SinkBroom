@@ -1046,6 +1046,25 @@ bool RenderThread::skipShaderPasses() const
   return m_skipShaderPassesForTesting.load();
 }
 
+void RenderThread::setDebugView(const DebugView view)
+{
+  if (m_debugView.exchange(view) == view)
+  {
+    return;
+  }
+  // a frame shows it (or takes it away)
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    m_pacer.trigger();
+  }
+  m_wake.notify_all();
+}
+
+DebugView RenderThread::debugView() const
+{
+  return m_debugView.load();
+}
+
 void RenderThread::setSkipInteractions(const bool skip)
 {
   m_skipInteractionsForTesting = skip;
@@ -1288,6 +1307,29 @@ void RenderThread::recordTonemap(
   inputs.tonemapTimer = m_timers.query(slot, TimedPass::Tonemap);
   inputs.blitTimer = m_timers.query(slot, TimedPass::Blit);
   inputs.stopRequested = [this] { return stopOrParkRequested(); };
+  // LP3.4 (D158): the selected debug view into the LDR target, after the tonemap pass and
+  // before the blit, with what the lit passes bind with
+  const auto debugView = m_debugView.load();
+  if (debugView != DebugView::None)
+  {
+    inputs.beforeBlit = [&](nvrhi::IFramebuffer* ldr) {
+      auto lit = LitFrameInputs{};
+      lit.device = &m_device.device();
+      lit.commandList = &commandList;
+      lit.frameIndex = m_frameIndex;
+      lit.frame = &m_frameResources;
+      lit.arenas = &m_arenas;
+      lit.pipelines = &m_pipelines;
+      lit.images = &m_images;
+      lit.bindingSets = &m_bindingSets;
+      lit.samplers = &m_samplers;
+      m_passes.recordDebugView(
+        lit,
+        ldr,
+        FramebufferFormats{nvrhi::Format::RGBA8_UNORM, m_frameResources.depthFormat()},
+        debugView);
+    };
+  }
   const auto stats = m_tonemap.record(inputs);
   if (stats.tonemapTimed)
   {
@@ -1956,6 +1998,15 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       // LP2.2b: the tonemap passes into the LDR target and its blit into the frame's
       // target, which replace LP0's clear of it
       recordTonemap(commandList, texture, targetFramebuffer, hdrDrawn);
+      // LP3.4 (D158): a debug view's draw skipped for a pending pipeline keeps the frame
+      // unconverged (the compile thread's onReady triggers the next)
+      if (!hdrClear && m_debugView.load() != DebugView::None)
+      {
+        const auto& after = m_passes.lastStats();
+        litStats.pendingPipelines = after.pendingPipelines;
+        litStats.skippedDraws = after.skippedDraws;
+        litStats.debugViewDraws = after.debugViewDraws;
+      }
       // D77: what the frame waits for, whether it is settled, whether it re-triggers
       converge(litStats, m_materials ? m_materials->table()->version : std::uint64_t{0});
       // C29: a settled frame's LDR target for the readbacks asked for

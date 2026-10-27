@@ -19,6 +19,7 @@
 
 #include "ui/LitPreviewPanel.h"
 
+#include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPointer>
@@ -72,6 +73,9 @@ constexpr auto StatusInterval = 250ms;
 // the status line's widget and its timer, children of the panel found by name
 constexpr auto StatusLabelName = "LitPreviewPanel_Status";
 constexpr auto StatusTimerName = "LitPreviewPanel_StatusTimer";
+// LP3.4 (D158): the debug-view choice beside the status line, its items in
+// lit::DebugView's order
+constexpr auto DebugViewName = "LitPreviewPanel_DebugView";
 
 /**
  * D29: the panel that runs the process's one session, GUI thread only. Every change
@@ -416,12 +420,44 @@ void LitPreviewPanel::createGui()
   statusLabel->setFixedHeight(
     statusLabel->fontMetrics().height() + 2 * LayoutConstants::NarrowVMargin);
   statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-  surfacePageLayout->addWidget(statusLabel);
+  // LP3.4 (D158, R5.15): the shadow debug views, a combo box beside the line, of the
+  // line's height (the line's own height unchanged): no view by default, the atlas, or
+  // the atlas with its tiles tinted by age; the session takes the choice at once and the
+  // status timer hands it to a session started later
+  auto* debugView = new QComboBox{};
+  debugView->setObjectName(DebugViewName);
+  debugView->addItem(tr("No debug view"));
+  debugView->addItem(tr("Shadow atlas"));
+  debugView->addItem(tr("Shadow tiles by age"));
+  debugView->setCurrentIndex(0);
+  debugView->setToolTip(tr("Draw a shadow debug view over the lit preview"));
+  debugView->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+  debugView->setFixedHeight(statusLabel->maximumHeight());
+  const auto chosenView = [debugView] {
+    return lit::DebugView(std::clamp(debugView->currentIndex(), 0, 2));
+  };
+  connect(debugView, &QComboBox::currentIndexChanged, this, [this, chosenView] {
+    if (auto* session = m_host ? m_host->session() : nullptr)
+    {
+      session->setDebugView(chosenView());
+    }
+  });
+  auto* statusLayout = new QHBoxLayout{};
+  statusLayout->setContentsMargins(0, 0, 0, 0);
+  statusLayout->setSpacing(0);
+  statusLayout->addWidget(statusLabel, 1);
+  statusLayout->addWidget(debugView);
+  surfacePageLayout->addLayout(statusLayout);
   auto* statusTimer = new QTimer{this};
   statusTimer->setObjectName(StatusTimerName);
   statusTimer->setInterval(StatusInterval);
-  connect(statusTimer, &QTimer::timeout, this, [this, statusLabel] {
+  connect(statusTimer, &QTimer::timeout, this, [this, statusLabel, chosenView] {
     auto* session = m_host ? m_host->session() : nullptr;
+    // LP3.4 (D158): a session started after the choice draws it too
+    if (session && session->debugView() != chosenView())
+    {
+      session->setDebugView(chosenView());
+    }
     // LP4.3 (D90, K8): the host's status adds the document's unsaved changes and its
     // file's time, which the bake's stale notice reads
     const auto text = session  ? QString::fromStdString(lit::sessionStatusLine(

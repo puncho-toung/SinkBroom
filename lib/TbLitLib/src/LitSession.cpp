@@ -759,6 +759,16 @@ bool LitSession::shaderPassesSkippedForTesting() const
   return m_renderThread->skipShaderPasses();
 }
 
+void LitSession::setDebugView(const DebugView view)
+{
+  m_renderThread->setDebugView(view);
+}
+
+DebugView LitSession::debugView() const
+{
+  return m_renderThread->debugView();
+}
+
 void LitSession::failHostAllocationsForTesting(const bool fail)
 {
   tb::lit::failHostAllocationsForTesting(fail);

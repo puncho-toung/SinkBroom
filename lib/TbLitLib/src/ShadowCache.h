@@ -310,6 +310,8 @@ struct ShadowTileRecord
   // the casters' depth draws it was drawn with, and the frame that drew it
   std::size_t draws = 0;
   std::uint64_t drawnFrame = 0;
+  // LP3.4 (D158): the frame that last relocated it (0: none), the tile-age view's
+  std::uint64_t relocatedFrame = 0;
   // LP3.4 (D156, K53): drawn with a perforated caster's stage image not complete, or its
   // material or registers pending: provisional (not valid either, so drawn again; this
   // flag tells it from LP3.3's other reasons: a skipped draw or clear, a budget drop, a

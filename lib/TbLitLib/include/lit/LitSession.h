@@ -181,6 +181,23 @@ struct CompileTimings
 };
 
 /**
+ * LP3.4 (D158, R5.15): the shadow debug views the Lit panel selects, drawn after the lit
+ * passes into the frame's LDR target (over the tonemapped picture, before its blit into
+ * the frame's target) and only while one is selected: None (the default, which
+ * [.][parity] and [.][measure] never change); ShadowAtlas, the whole 8192² atlas by
+ * builtin/debug/debug_shadowmap's (107) contract through the engine's builtin/texture
+ * (14; 107 itself draws nothing on Vulkan, E-LIT-15), fitted to the view; TileAge, that
+ * picture with every placed tile's rect tinted by its state and age through the engine's
+ * builtin/color (1).
+ */
+enum class DebugView
+{
+  None,
+  ShadowAtlas,
+  TileAge,
+};
+
+/**
  * D9 (LP2.3): the panel's status line: "starting" before the first frame, then "settled"
  * or "drawing", the lights drawn of those visible (and overflowed), the draws (skipped),
  * the pipelines pending and the VRAM, and while a tree exists (D90, LP4.1) "area A, F of
@@ -711,6 +728,10 @@ public:
   void skipShaderPassesForTesting(bool skip);
   // LP5.0, any thread: the switch as skipShaderPassesForTesting last set it
   bool shaderPassesSkippedForTesting() const;
+  // LP3.4 (D158), any thread: the debug view the frames draw from the next one on (a
+  // change triggers a frame), and the one set last
+  void setDebugView(DebugView view);
+  DebugView debugView() const;
   /**
    * U2.3, any thread: while set, every device memory allocation in a type that is
    * host-visible and not device-local fails as a driver's out-of-memory would (NVRHI's

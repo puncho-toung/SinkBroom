@@ -476,6 +476,12 @@ TonemapFrameStats TonemapPasses::record(const TonemapFrameInputs& inputs)
     return m_stats;
   }
 
+  // LP3.4 (D158): a debug view over the tonemapped picture
+  if (inputs.beforeBlit)
+  {
+    inputs.beforeBlit(ldrFramebuffer);
+  }
+
   // the blit into the frame's target (RenderBackend.cpp:6329-6333, BlitTexture)
   if (inputs.blitTimer)
   {

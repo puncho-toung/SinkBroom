@@ -357,6 +357,9 @@ struct LitFrameStats
   std::size_t shadowCastersCulled = 0;
   std::size_t perforatedCastersSkipped = 0;
   std::size_t perforatedShadowDraws = 0;
+  // LP3.4 (D158): the debug view's draws after the tonemap pass (the atlas's quad, the
+  // tile-age view's rects); 0 without a view
+  std::size_t debugViewDraws = 0;
   // the pass ran (its timer begun and ended), its CPU record time, and whether a failed
   // pipeline or the atlas's creation disabled it (every light then unplaced, D9)
   bool shadowAtlasTimed = false;
@@ -678,6 +681,8 @@ private:
   bool m_overflowWarned = false;
   bool m_drawOverflowWarned = false;
   bool m_logDraws = false;
+  // LP3.4 (D158): the TEXGEN layout's set 1 is the shadow atlas (debug_shadowmap's draw)
+  bool m_debugAtlasBinding = false;
   // V2.2's measurement: the static interaction cull applies (the engine's behaviour)
   bool m_lightTriangleCull = true;
   // C38 (LP4.2b): the interactions are not recorded (r_skipInteractions 1)
@@ -786,6 +791,32 @@ public:
   // LP3.3 (D146, A49), render thread: the relocation scratch's bytes once it is made
   // (2048² × 4, 16 MB), 0 before
   std::uint64_t shadowScratchBytes() const;
+  /**
+   * LP3.4 (D158, R5.15), render thread: a debug view into framebuffer (ldrFBO, of
+   * formats) over the tonemapped picture, with inputs' device, pipelines, slots, binding
+   * sets and samplers; nothing for None or before the atlas is made. ShadowAtlas: the
+   * engine has no drawer for BUILTIN_DEBUG_SHADOWMAP at 285ea4d1, so the shaders' own
+   * contract (its .vs: the position by rpMVPmatrixX..W, TEXCOORD0 by TEXGEN_0 when
+   * rpTexGen0Enabled.x > 0; its .ps: t_t1 at set 1 t0, LinearSampler at set 2 s0,
+   * SampleLevel( tc.xy, rpScreenCorrectionFactor.x ), the mip level): D147's clip-space
+   * square through the identity MVP, texcoords 0..1 from its positions (TEXGEN_0_S ( 0.5,
+   * 0, 0, 0.5 ), _T ( 0, -0.5, 0, 0.5 ): the atlas's first row at the top), level 0, the
+   * atlas at t0 and the common
+   * linear-clamp sampler, into the largest centred square of the view (the 8192²
+   * fitted), DEPTHFUNC_ALWAYS, no depth write, both sides: each texel's depth in red (the
+   * far clear 1.0); drawn with the engine's builtin/texture (14: the same .vs, its .ps
+   * tex.Sample( samp0 ) times rpColor 1 under the TEXTURE layout's same sets), because
+   * debug_shadowmap's .vs writes no SV_Position and draws nothing on Vulkan (E-LIT-15).
+   * TileAge: that, then every placed tile's rect of the kept records through
+   * builtin/color (1) blended at alpha 0.5: provisional magenta, relocated this frame
+   * blue, drawn this frame green, cached by age a = frames since it was drawn from yellow
+   * (a 1) to red (a 64 and more), ( 1, 1 - t, 0 ) with t = log2( a ) / 6.
+   */
+  void recordDebugView(
+    const LitFrameInputs& inputs,
+    nvrhi::IFramebuffer* framebuffer,
+    const FramebufferFormats& formats,
+    DebugView view);
 
   // teardown step 2: every handle
   void releaseAll();

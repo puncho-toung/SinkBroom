@@ -2647,6 +2647,126 @@ bool LitPasses::ensureShadowAtlas(Frame& frame)
   return true;
 }
 
+void LitPasses::recordDebugView(
+  const LitFrameInputs& inputs,
+  nvrhi::IFramebuffer* framebuffer,
+  const FramebufferFormats& formats,
+  const DebugView view)
+{
+  if (view == DebugView::None || !m_atlas || !framebuffer || !inputs.device)
+  {
+    return;
+  }
+  auto frame = Frame{};
+  frame.inputs = &inputs;
+  frame.framebuffer = framebuffer;
+  frame.formats = formats;
+  // the 8192² atlas fitted to the view: its largest centred square
+  const auto& desc = framebuffer->getFramebufferInfo();
+  const auto width = int(desc.width);
+  const auto height = int(desc.height);
+  const auto side = std::min(width, height);
+  const auto x0 = (width - side) / 2;
+  const auto y0 = (height - side) / 2;
+  frame.viewport =
+    nvrhi::Viewport{float(x0), float(x0 + side), float(y0), float(y0 + side), 0.0f, 1.0f};
+  m_scissor = nvrhi::Rect{x0, x0 + side, y0, y0 + side};
+  // the tonemap pass set its own state since the lit passes' last draw
+  m_state.valid = false;
+  m_currentSpace.reset();
+  const auto geometry = clearQuadGeometry(frame);
+  if (!geometry)
+  {
+    return;
+  }
+  const auto counted = [&](const DrawOutcome outcome) {
+    if (outcome == DrawOutcome::Drawn)
+    {
+      ++m_stats.debugViewDraws;
+    }
+  };
+
+  // ShadowAtlas: the atlas over the square, texcoords 0..1 by TEXGEN_0 from the quad's
+  // clip-space positions, mip level 0 in rpScreenCorrectionFactor.x (debug_shadowmap's
+  // contract), drawn with builtin/texture (14), whose .vs is the same and whose .ps
+  // samples tex at set 1 t0 with samp0 at set 2 s0 times rpColor (1): debug_shadowmap
+  // (107) cannot draw on Vulkan (EngineBuiltinDebugShadowMap, E-LIT-15)
+  setMvp(m_parms, engineIdentityMatrix());
+  m_parms.set(RenderParm::Color, Vec4{1.0f, 1.0f, 1.0f, 1.0f});
+  m_parms.set(RenderParm::TexGen0Enabled, Vec4{1.0f, 1.0f, 1.0f, 1.0f});
+  // the atlas's first row at the top: NVRHI's viewport puts clip y +1 at the top on
+  // Vulkan as on D3D (the engine's own convention)
+  m_parms.set(RenderParm::TexGen0S, Vec4{0.5f, 0.0f, 0.0f, 0.5f});
+  m_parms.set(RenderParm::TexGen0T, Vec4{0.0f, -0.5f, 0.0f, 0.5f});
+  m_parms.set(RenderParm::TextureMatrixS, Vec4{1.0f, 0.0f, 0.0f, 0.0f});
+  m_parms.set(RenderParm::TextureMatrixT, Vec4{0.0f, 1.0f, 0.0f, 0.0f});
+  m_parms.set(RenderParm::ScreenCorrectionFactor, Vec4{0.0f, 0.0f, 0.0f, 0.0f});
+  constexpr auto quadState = gls::DepthFuncAlways | gls::DepthMask | gls::CullTwoSided;
+  m_debugAtlasBinding = true;
+  counted(drawGeometry(
+    frame, EngineBuiltinTextured, *geometry, quadState, 0.0f, 0.0f, nullptr));
+  m_debugAtlasBinding = false;
+  if (view != DebugView::TileAge)
+  {
+    return;
+  }
+
+  // TileAge: every placed tile's rect over it, builtin/color blended at alpha 0.5, the
+  // unit quad mapped to the rect in the square's clip space (atlas u, v to 2u - 1, 1 -
+  // 2v: the texgen's inverse)
+  constexpr auto tintState = gls::DepthFuncAlways | gls::DepthMask | gls::CullTwoSided
+                             | gls::SrcBlendSrcAlpha | gls::DstBlendOneMinusSrcAlpha;
+  const auto atlasSize = float(EngineFrame.shadowMapAtlasSize);
+  const auto frameIndex = inputs.frameIndex;
+  for (const auto& [light, record] : m_shadowCache.records())
+  {
+    for (const auto& tile : record.tiles)
+    {
+      if (!tile.placed)
+      {
+        continue;
+      }
+      auto colour = Vec4{0.0f, 0.0f, 0.0f, 0.5f};
+      if (tile.provisional)
+      {
+        colour = Vec4{1.0f, 0.0f, 1.0f, 0.5f};
+      }
+      else if (tile.relocatedFrame == frameIndex && frameIndex != 0)
+      {
+        colour = Vec4{0.0f, 0.5f, 1.0f, 0.5f};
+      }
+      else if (tile.drawnFrame == frameIndex)
+      {
+        colour = Vec4{0.0f, 1.0f, 0.0f, 0.5f};
+      }
+      else
+      {
+        const auto age = double(frameIndex - std::min(frameIndex, tile.drawnFrame));
+        const auto t = float(std::clamp(std::log2(std::max(age, 1.0)) / 6.0, 0.0, 1.0));
+        colour = Vec4{1.0f, 1.0f - t, 0.0f, 0.5f};
+      }
+      const auto u0 = float(tile.rect.x) / atlasSize;
+      const auto u1 = float(tile.rect.x + tile.rect.size) / atlasSize;
+      const auto v0 = float(tile.rect.y) / atlasSize;
+      const auto v1 = float(tile.rect.y + tile.rect.size) / atlasSize;
+      auto mvp = engineIdentityMatrix();
+      mvp[0 * 4 + 0] = u1 - u0;
+      mvp[0 * 4 + 3] = u0 + u1 - 1.0f;
+      mvp[1 * 4 + 1] = v0 - v1;
+      mvp[1 * 4 + 3] = 1.0f - v0 - v1;
+      setMvp(m_parms, mvp);
+      m_parms.set(RenderParm::Color, colour);
+      const auto outcome = drawGeometry(
+        frame, EngineBuiltinColor, *geometry, tintState, 0.0f, 0.0f, nullptr);
+      if (outcome == DrawOutcome::Disabled)
+      {
+        return;
+      }
+      counted(outcome);
+    }
+  }
+}
+
 void LitPasses::relocateTiles(
   Frame& frame,
   const ShadowRelocationPlan& plan,
@@ -2670,6 +2790,12 @@ void LitPasses::relocateTiles(
     commandList.copyTexture(
       m_atlas, slice(copy.atlas), m_relocationScratch, slice(copy.scratch));
     ++m_stats.tilesRelocated;
+    // LP3.4 (D158): the tile-age view's "relocated this frame"
+    if (auto* kept = m_shadowCache.find(moved[copy.move].first))
+    {
+      kept->tiles[std::size_t(std::max(0, moved[copy.move].second))].relocatedFrame =
+        frame.inputs->frameIndex;
+    }
     m_stats.atlasBytesWritten +=
       std::uint64_t(copy.atlas.size) * std::uint64_t(copy.atlas.size) * sizeof(float);
     if (m_logDraws)
@@ -4022,6 +4148,52 @@ bool LitPasses::bindingSets(
   case EngineBindingLayout::Texgen:
   case EngineBindingLayout::Default:
   case EngineBindingLayout::Legacy: {
+    if (
+      (layout == EngineBindingLayout::Texture || layout == EngineBindingLayout::Texgen)
+      && m_debugAtlasBinding)
+    {
+      // LP3.4 (D158): the atlas debug view's texture (set 1 t0: builtin/texture's tex,
+      // debug_shadowmap's t_t1) the shadow atlas, which no slot holds (the same texture
+      // for the session, as DRAW_INTERACTION_SM's t5), and its sampler (set 2 s0) the
+      // common linear clamp
+      auto* atlas = m_atlas.Get();
+      const auto* common =
+        inputs.samplers->common(device)
+        | kdl::value_or(static_cast<const SamplerSet::Common*>(nullptr));
+      if (!atlas || !common)
+      {
+        return false;
+      }
+      auto atlasKey = BindingSetKey{};
+      atlasKey.layout = layouts[1].Get();
+      atlasKey.resources = {atlas};
+      sets[1] =
+        cache
+          .get(
+            atlasKey,
+            frameIndex,
+            [&] {
+              return device.createBindingSet(
+                nvrhi::BindingSetDesc{}.addItem(Item::Texture_SRV(0, atlas)), layouts[1]);
+            })
+          .Get();
+      auto samplerKey = BindingSetKey{};
+      samplerKey.layout = layouts[2].Get();
+      samplerKey.samplers = 2;
+      samplerKey.resources = {common->linearClamp.Get()};
+      sets[2] =
+        cache
+          .get(
+            samplerKey,
+            frameIndex,
+            [&] {
+              return device.createBindingSet(
+                nvrhi::BindingSetDesc{}.addItem(Item::Sampler(0, common->linearClamp)),
+                layouts[2]);
+            })
+          .Get();
+      return sets[1] != nullptr && sets[2] != nullptr;
+    }
     // TEXTURE: t0 the unit 0 image, s0 its own sampler (SC238, SC269); LP5.2a: TEXGEN
     // the same, LP5.2b: DEFAULT and LEGACY too (RenderBackend_NVRHI.cpp:586-623), whose
     // unit 0 is a cube: a cube image's repeat is TR_CLAMP from its load on

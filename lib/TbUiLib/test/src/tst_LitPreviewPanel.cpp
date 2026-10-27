@@ -18,6 +18,7 @@
  */
 
 #include <QApplication>
+#include <QComboBox>
 #include <QDockWidget>
 #include <QEvent>
 #include <QGuiApplication>
@@ -194,6 +195,24 @@ TEST_CASE("LitPreviewPanel")
     // a click on Start or Stop leaves the keyboard with the 3D view (review L3.12)
     CHECK(findButton(panel, "Start").focusPolicy() == Qt::TabFocus);
     CHECK(findButton(panel, "Stop").focusPolicy() == Qt::TabFocus);
+
+    // LP3.4 (D158): the shadow debug views beside the status line, none by default, of
+    // the line's height (the line's own fixed)
+    auto* debugView = panel.findChild<QComboBox*>("LitPreviewPanel_DebugView");
+    REQUIRE(debugView != nullptr);
+    CHECK(debugView->count() == 3);
+    CHECK(debugView->currentIndex() == 0);
+    CHECK(debugView->itemText(0) == "No debug view");
+    CHECK(debugView->itemText(1) == "Shadow atlas");
+    CHECK(debugView->itemText(2) == "Shadow tiles by age");
+    auto* status = panel.findChild<QLabel*>("LitPreviewPanel_Status");
+    REQUIRE(status != nullptr);
+    CHECK(status->minimumHeight() == status->maximumHeight());
+    CHECK(debugView->maximumHeight() == status->maximumHeight());
+    // no session: choosing a view starts nothing
+    debugView->setCurrentIndex(1);
+    CHECK(!sessionRunning(panel));
+    debugView->setCurrentIndex(0);
   }
 
 #ifdef _WIN32

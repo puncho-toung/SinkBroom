@@ -3972,7 +3972,7 @@ namespace
 // only) into a test game root; LP4.2a: and the ambient pass's probe path; LP3.1 (C60):
 // and the shadow-atlas interactions (one pair of blob files for the six), which the cases
 // that run with shadows draw with
-constexpr auto Lp2Programs = std::array<int, 21>{
+constexpr auto Lp2Programs = std::array<int, 22>{
   EngineBuiltinColor,
   EngineBuiltinTextureVertexColor,
   EngineBuiltinInteraction,
@@ -3995,7 +3995,9 @@ constexpr auto Lp2Programs = std::array<int, 21>{
   EngineBuiltinInteractionShadowAtlasParallel,
   EngineBuiltinPbrInteractionShadowAtlasSpot,
   EngineBuiltinPbrInteractionShadowAtlasPoint,
-  EngineBuiltinPbrInteractionShadowAtlasParallel};
+  EngineBuiltinPbrInteractionShadowAtlasParallel,
+  // LP3.4 (D158): the shadow atlas debug view's (builtin/texture)
+  EngineBuiltinTextured};
 
 // the light stand-ins (a white light of no falloff: the default light shaders the
 // fixture map's lights reach) and a lit translucent material, written into the root
@@ -17359,6 +17361,268 @@ GrateTile grateTileOf(const ShadowFrame& frame, const ShadowLightRecord& record)
   return result;
 }
 
+// LP3.4 (D158): a frame's LDR target (RGBA8, after its tonemap pass: a debug view drawn
+// over it), its stats, its index and its kept tiles
+struct LdrShot
+{
+  LdrImage ldr;
+  LitFrameStats stats;
+  std::uint64_t frameIndex = 0;
+  std::vector<ShadowTileRecord> tiles;
+};
+
+/**
+ * The first frame drawn after trigger (called once per try) whose stats wanted accepts,
+ * read back from its LDR target after the tonemap pass; nullopt at the deadline.
+ */
+std::optional<LdrShot> ldrShot(
+  LitSession& session,
+  const std::function<bool(const LitFrameStats&)>& wanted,
+  const std::function<void()>& trigger,
+  const std::chrono::milliseconds timeout = 30000ms)
+{
+  struct State
+  {
+    LdrShot shot;
+    bool taken = false;
+    nvrhi::StagingTextureHandle staging;
+  };
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    auto state = std::make_shared<State>();
+    auto done = std::make_shared<std::promise<void>>();
+    auto future = done->get_future();
+    session.runAfterTonemapForTesting([state, done, wanted](RenderFrameAccess& access) {
+      const auto& stats = access.passes.lastStats();
+      if (wanted(stats))
+      {
+        state->taken = true;
+        state->shot.stats = stats;
+        state->shot.frameIndex = access.frameIndex;
+        for (const auto& [light, record] : access.passes.shadowCache().records())
+        {
+          for (const auto& tile : record.tiles)
+          {
+            if (tile.placed)
+            {
+              state->shot.tiles.push_back(tile);
+            }
+          }
+        }
+        auto* ldr = access.frame.find(frame_resource::CurrentRenderLdr)->texture;
+        const auto& desc = ldr->getDesc();
+        state->staging = access.device.createStagingTexture(
+          nvrhi::TextureDesc{}
+            .setWidth(desc.width)
+            .setHeight(desc.height)
+            .setFormat(desc.format),
+          nvrhi::CpuAccessMode::Read);
+        access.commandList.copyTexture(
+          state->staging, nvrhi::TextureSlice{}, ldr, nvrhi::TextureSlice{});
+      }
+      done->set_value();
+    });
+    trigger();
+    if (future.wait_for(10000ms) != std::future_status::ready)
+    {
+      return std::nullopt;
+    }
+    if (!state->taken)
+    {
+      std::this_thread::sleep_for(50ms);
+      continue;
+    }
+    const auto read = inFrame(session, [state](RenderFrameAccess& access) {
+      access.device.waitForIdle();
+      const auto& desc = state->staging->getDesc();
+      auto& image = state->shot.ldr;
+      image.width = desc.width;
+      image.height = desc.height;
+      image.rgba.resize(std::size_t(desc.width) * desc.height * 4);
+      auto pitch = std::size_t{0};
+      const auto* bytes =
+        static_cast<const std::uint8_t*>(access.device.mapStagingTexture(
+          state->staging, nvrhi::TextureSlice{}, nvrhi::CpuAccessMode::Read, &pitch));
+      for (std::uint32_t y = 0; y < desc.height; ++y)
+      {
+        std::memcpy(
+          image.rgba.data() + std::size_t(y) * desc.width * 4,
+          bytes + y * pitch,
+          std::size_t(desc.width) * 4);
+      }
+      access.device.unmapStagingTexture(state->staging);
+      state->staging = nullptr;
+    });
+    if (!read)
+    {
+      return std::nullopt;
+    }
+    return std::move(state->shot);
+  }
+  return std::nullopt;
+}
+
+// an LDR shot as an RGB PNG under TB_LIT_PNG_OUT
+void saveLdrPng(const LdrImage& ldr, const std::string& name)
+{
+  const auto folder = pngFolder();
+  if (!folder || ldr.rgba.empty())
+  {
+    return;
+  }
+  auto rgb = std::vector<std::uint8_t>{};
+  rgb.reserve(std::size_t(ldr.width) * ldr.height * 3);
+  for (std::size_t i = 0; i < ldr.rgba.size(); ++i)
+  {
+    if (i % 4 != 3)
+    {
+      rgb.push_back(ldr.rgba[i]);
+    }
+  }
+  const auto path = *folder / (name + ".png");
+  CHECK(writePng(path, ldr.width, ldr.height, 3, rgb));
+  std::cout << fmt::format("LP3.4 {}: picture -> {}\n", name, path.string());
+}
+
+// the debug views' square (the atlas fitted to the view): its left, top and side
+struct DebugSquare
+{
+  int x0 = 0;
+  int y0 = 0;
+  int side = 0;
+};
+
+DebugSquare debugSquareOf(const LdrImage& ldr)
+{
+  const auto side = int(std::min(ldr.width, ldr.height));
+  return DebugSquare{(int(ldr.width) - side) / 2, (int(ldr.height) - side) / 2, side};
+}
+
+// the tile-age view's tint of a kept tile in the frame frameIndex (LitPasses::
+// recordDebugView's rule), RGB 0..1
+std::array<float, 3> tileTintOf(
+  const ShadowTileRecord& tile, const std::uint64_t frameIndex)
+{
+  if (tile.provisional)
+  {
+    return {1.0f, 0.0f, 1.0f};
+  }
+  if (tile.relocatedFrame == frameIndex && frameIndex != 0)
+  {
+    return {0.0f, 0.5f, 1.0f};
+  }
+  if (tile.drawnFrame == frameIndex)
+  {
+    return {0.0f, 1.0f, 0.0f};
+  }
+  const auto age = double(frameIndex - std::min(frameIndex, tile.drawnFrame));
+  const auto t = float(std::clamp(std::log2(std::max(age, 1.0)) / 6.0, 0.0, 1.0));
+  return {1.0f, 1.0f - t, 0.0f};
+}
+
+/**
+ * The debug view's check over an atlas read-back: each pixel of the square whose atlas
+ * texel (its centre's, the square fitted to 8192²) lies in the read-back region with an
+ * even neighbourhood (17 x 17 texels within 1e-6: the bilinear tap reads that depth) is
+ * the atlas's depth in red, (255 d, 0, 0), or under a tile with tint, 0.5 tint + 0.5
+ * that; returns the pixels checked, those off by more than 2, and those checked below 250
+ * red.
+ */
+struct DebugViewCheck
+{
+  std::size_t checked = 0;
+  std::size_t wrong = 0;
+  std::size_t nearer = 0;
+  std::size_t tinted = 0;
+};
+
+DebugViewCheck checkDebugView(
+  const LdrShot& shot, const DepthReadback& atlas, const bool tinted)
+{
+  auto result = DebugViewCheck{};
+  const auto square = debugSquareOf(shot.ldr);
+  for (auto py = square.y0; py < square.y0 + square.side; py += 3)
+  {
+    for (auto px = square.x0; px < square.x0 + square.side; px += 3)
+    {
+      const auto u = (float(px - square.x0) + 0.5f) / float(square.side);
+      const auto v = (float(py - square.y0) + 0.5f) / float(square.side);
+      const auto tx = int(u * 8192.0f);
+      const auto ty = int(v * 8192.0f);
+      if (
+        tx - 8 < int(atlas.x) || ty - 8 < int(atlas.y)
+        || tx + 8 >= int(atlas.x + atlas.width) || ty + 8 >= int(atlas.y + atlas.height))
+      {
+        continue;
+      }
+      auto lo = 2.0f;
+      auto hi = -1.0f;
+      for (auto dy = -8; dy <= 8; ++dy)
+      {
+        for (auto dx = -8; dx <= 8; ++dx)
+        {
+          const auto d = atlas.at(std::uint32_t(tx + dx), std::uint32_t(ty + dy));
+          lo = std::min(lo, d);
+          hi = std::max(hi, d);
+        }
+      }
+      if (hi - lo > 1e-6f)
+      {
+        continue;
+      }
+      auto expected = std::array<float, 3>{255.0f * lo, 0.0f, 0.0f};
+      if (tinted)
+      {
+        // the tiles' rects that hold the texel, and the tint of the last one drawn
+        for (const auto& tile : shot.tiles)
+        {
+          if (
+            tx >= tile.rect.x && tx < tile.rect.x + tile.rect.size && ty >= tile.rect.y
+            && ty < tile.rect.y + tile.rect.size)
+          {
+            const auto tint = tileTintOf(tile, shot.frameIndex);
+            for (std::size_t c = 0; c < 3; ++c)
+            {
+              expected[c] = 0.5f * 255.0f * tint[c] + 0.5f * expected[c];
+            }
+            ++result.tinted;
+          }
+        }
+      }
+      const auto* pixel =
+        &shot.ldr.rgba[(std::size_t(py) * shot.ldr.width + std::size_t(px)) * 4];
+      ++result.checked;
+      auto off = false;
+      for (std::size_t c = 0; c < 3; ++c)
+      {
+        off = off || std::abs(float(pixel[c]) - expected[c]) > 2.0f;
+      }
+      if (off && result.wrong < 4)
+      {
+        std::cout << fmt::format(
+          "LP3.4 debug view off at ({}, {}) texel ({}, {}) depth {}: expected {:.1f} "
+          "{:.1f} "
+          "{:.1f}, got {} {} {}\n",
+          px,
+          py,
+          tx,
+          ty,
+          lo,
+          expected[0],
+          expected[1],
+          expected[2],
+          pixel[0],
+          pixel[1],
+          pixel[2]);
+      }
+      result.wrong += off ? 1 : 0;
+      result.nearer += lo < 250.0f / 255.0f ? 1 : 0;
+    }
+  }
+  return result;
+}
+
 // the clears of a light's side in the draw log (its tile drawn again)
 std::size_t sideClearsOf(
   const std::vector<LitDrawRecord>& log, const PreviewId light, const int side)
@@ -17635,11 +17899,235 @@ TEST_CASE("LitSession perforated shadows on a GPU (LP3.4)", "[.][litgpu2]")
     saveAtlasPng(settled->atlas, "lp34_n_complete");
   }
 
+  // ---------------------------------------------------------------------------------
+  SECTION("(o) the debug views: the atlas where its tiles are, the tiles' tints")
+  {
+    // a view large enough for the square to show the tiles (the atlas 8192² in 480)
+    session->resizeHeadlessForTesting(640, 480);
+    offer(lp3MapText("lp3_point.map"));
+    const auto settled = settledShadowFrame(*session, camera, 1, true);
+    REQUIRE(settled);
+    REQUIRE(settled->records.size() == 1u);
+    CHECK(session->debugView() == DebugView::None);
+    // no view: no debug draw
+    CHECK(settled->stats.debugViewDraws == 0u);
+
+    // ShadowAtlas: one quad, every even pixel the atlas's depth in red
+    session->setDebugView(DebugView::ShadowAtlas);
+    CHECK(session->debugView() == DebugView::ShadowAtlas);
+    const auto atlasShot = ldrShot(
+      *session,
+      [](const LitFrameStats& stats) { return stats.debugViewDraws == 1u; },
+      [&] { session->tableChanged(); });
+    REQUIRE(atlasShot);
+    const auto atlasCheck = checkDebugView(*atlasShot, settled->atlas, false);
+    std::cout << fmt::format(
+      "LP3.4 (o) atlas view: {} pixels checked against the read-back, {} off by more "
+      "than 2, {} of a caster's depth (red below 250)\n",
+      atlasCheck.checked,
+      atlasCheck.wrong,
+      atlasCheck.nearer);
+    CHECK(atlasCheck.checked > 1000u);
+    CHECK(atlasCheck.wrong == 0u);
+    CHECK(atlasCheck.nearer > 0u);
+    saveLdrPng(atlasShot->ldr, "lp34_o_atlas");
+
+    // TileAge: the quad and the six tiles' rects; a frame that drew every tile (green),
+    // then a cached one (yellow towards red by age)
+    session->setDebugView(DebugView::TileAge);
+    const auto freshShot = ldrShot(
+      *session,
+      [](const LitFrameStats& stats) {
+        return stats.tilesDrawn == 6u && stats.debugViewDraws == 7u;
+      },
+      [&] {
+        REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+          access.passes.invalidateShadowTilesForTesting();
+        }));
+      });
+    REQUIRE(freshShot);
+    const auto freshCheck = checkDebugView(*freshShot, settled->atlas, true);
+    const auto cachedShot = ldrShot(
+      *session,
+      [](const LitFrameStats& stats) {
+        return stats.tilesDrawn == 0u && stats.tilesCached == 6u
+               && stats.debugViewDraws == 7u;
+      },
+      [&] { session->tableChanged(); });
+    REQUIRE(cachedShot);
+    const auto cachedCheck = checkDebugView(*cachedShot, settled->atlas, true);
+    auto ages = std::vector<std::uint64_t>{};
+    for (const auto& tile : cachedShot->tiles)
+    {
+      ages.push_back(cachedShot->frameIndex - tile.drawnFrame);
+    }
+    std::cout << fmt::format(
+      "LP3.4 (o) tile-age view: fresh frame {} pixels checked ({} under a tile), {} off; "
+      "cached frame {} checked ({} under a tile), {} off, the tiles' ages {}\n",
+      freshCheck.checked,
+      freshCheck.tinted,
+      freshCheck.wrong,
+      cachedCheck.checked,
+      cachedCheck.tinted,
+      cachedCheck.wrong,
+      fmt::join(ages, " "));
+    CHECK(freshCheck.tinted > 100u);
+    CHECK(freshCheck.wrong == 0u);
+    CHECK(cachedCheck.tinted > 100u);
+    CHECK(cachedCheck.wrong == 0u);
+    CHECK(std::ranges::all_of(ages, [](const auto age) { return age >= 1u; }));
+    saveLdrPng(freshShot->ldr, "lp34_o_tileage_fresh");
+    saveLdrPng(cachedShot->ldr, "lp34_o_tileage_cached");
+
+    session->setDebugView(DebugView::None);
+    const auto plainShot = ldrShot(
+      *session,
+      [](const LitFrameStats& stats) { return stats.debugViewDraws == 0u; },
+      [&] { session->tableChanged(); });
+    REQUIRE(plainShot);
+    CHECK(plainShot->stats.debugViewDraws == 0u);
+  }
+
   std::cout << fmt::format(
     "LP3.4 perforated shadows on a GPU: {:.1f} s\n",
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
   teardown(*session, std::nullopt);
   messages.print("LP3.4 perforated shadows, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+}
+
+// LP3.4 (D158, §4's exit): the debug views on the shadows map's rooms H01 and H11, as
+// PNGs under TB_LIT_PNG_OUT for the director: a copy of the parity preview root (read
+// only; the debug view's builtin/texture blobs added from the game folder), H01's and
+// H11's cameras of its rows.json, each room's plain picture and both views. Hidden: it
+// needs a GPU, the game's blobs and the root of a parity.py run.
+TEST_CASE("LitSession shadow debug views on the shadows map (LP3.4)", "[.][litgpu2]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  const auto* parityValue = std::getenv("TB_LIT_PARITY_ROOT");
+  if (!gamePathValue || !*gamePathValue || !parityValue || !*parityValue)
+  {
+    SKIP("TB_LIT_GAME_PATH or TB_LIT_PARITY_ROOT is not set");
+  }
+  const auto started = std::chrono::steady_clock::now();
+  const auto parity = std::filesystem::path{parityValue};
+  const auto gamePath = std::filesystem::path{gamePathValue};
+  const auto root = std::filesystem::temp_directory_path() / "TbLitLibTest-lp34-views";
+  std::filesystem::remove_all(root);
+  std::filesystem::create_directories(root);
+  std::filesystem::copy(
+    parity / "base", root / "base", std::filesystem::copy_options::recursive);
+  {
+    const auto* builtin = engineBuiltin(EngineBuiltinTextured);
+    REQUIRE(builtin);
+    for (const auto stage : {ShaderStage::Vertex, ShaderStage::Pixel})
+    {
+      const auto relative = shaderBlobPath(builtin->name, stage);
+      std::filesystem::create_directories((root / "base" / relative).parent_path());
+      std::filesystem::copy_file(
+        gamePath / "base" / relative,
+        root / "base" / relative,
+        std::filesystem::copy_options::overwrite_existing);
+    }
+  }
+  const auto rowsText = readTextFile(parity / "parity" / "rows.json");
+  const auto record = JsonReader{rowsText}.value();
+  REQUIRE(record);
+  const auto* rows = record->find("rows");
+  REQUIRE(rows);
+
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto service = rootService(root);
+    auto events = Events{};
+    auto options = SessionOptions{};
+    options.validation = true;
+    options.gamePath = root;
+    auto session = LitSession::create(
+                     instance.handles(),
+                     VK_NULL_HANDLE,
+                     1280,
+                     720,
+                     options,
+                     events.sink(),
+                     7,
+                     service.get())
+                   | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+    auto offered = false;
+    for (const auto* id : {"H01", "H11"})
+    {
+      CAPTURE(id);
+      const auto* row = static_cast<const JsonValue*>(nullptr);
+      for (const auto& candidate : rows->array)
+      {
+        if (candidate.text("id") == id)
+        {
+          row = &candidate;
+        }
+      }
+      REQUIRE(row);
+      if (!offered)
+      {
+        REQUIRE(session->offerSnapshot(paritySnapshot(root, row->text("map"), 1)));
+        offered = true;
+      }
+      session->skipShaderPassesForTesting(row->numberOr("skip_ambient", 1.0) == 1.0);
+      const auto parsed = parityCameraOfLine(row->text("camera"));
+      REQUIRE(parsed);
+      auto camera = parsed->camera;
+      camera.viewportWidth = 1280;
+      camera.viewportHeight = 720;
+      const auto lights = std::string{id} == "H11" ? std::size_t{43} : std::size_t{1};
+      session->setDebugView(DebugView::None);
+      const auto settled = settledShadowFrame(*session, camera, lights, false);
+      REQUIRE(settled);
+      const auto lower = std::string{id} == "H11" ? "h11" : "h01";
+      const auto plain = ldrShot(
+        *session,
+        [](const LitFrameStats& stats) { return stats.debugViewDraws == 0u; },
+        [&] { session->tableChanged(); });
+      REQUIRE(plain);
+      saveLdrPng(plain->ldr, fmt::format("lp34_{}_none", lower));
+      session->setDebugView(DebugView::ShadowAtlas);
+      const auto atlas = ldrShot(
+        *session,
+        [](const LitFrameStats& stats) { return stats.debugViewDraws == 1u; },
+        [&] { session->tableChanged(); });
+      REQUIRE(atlas);
+      saveLdrPng(atlas->ldr, fmt::format("lp34_{}_atlas", lower));
+      session->setDebugView(DebugView::TileAge);
+      const auto tiles = ldrShot(
+        *session,
+        [](const LitFrameStats& stats) { return stats.debugViewDraws > 1u; },
+        [&] { session->tableChanged(); });
+      REQUIRE(tiles);
+      saveLdrPng(tiles->ldr, fmt::format("lp34_{}_tileage", lower));
+      std::cout << fmt::format(
+        "LP3.4 {} views: lights placed {}, unplaced {}, layout tiles {}, the tile-age "
+        "view's draws {} (the atlas quad and a rect per tile)\n",
+        id,
+        settled->stats.lightsPlaced,
+        settled->stats.lightsUnplaced,
+        settled->stats.layoutTiles,
+        tiles->stats.debugViewDraws);
+      CHECK(tiles->stats.debugViewDraws == 1u + tiles->tiles.size());
+      session->setDebugView(DebugView::None);
+    }
+    teardown(*session, std::nullopt);
+  }
+  std::filesystem::remove_all(root);
+  std::cout << fmt::format(
+    "LP3.4 debug views on the shadows map: {:.1f} s\n",
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+  messages.print("LP3.4 debug views, validation");
   CHECK(messages.errors == 0);
   CHECK(messages.warnings == 0);
 }
