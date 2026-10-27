@@ -29,10 +29,11 @@
 
 // LP3.0 (C59, D145, D160): the facade of lit/EngineShadowAtlas.h.
 
-#include "lit/EngineShadowAtlas.h"
-
-#include "idlib/TileMap.h"
+// clang-format off: precompiled.h comes first in every shim file
 #include "precompiled.h"
+#include "lit/EngineShadowAtlas.h"
+#include "idlib/TileMap.h"
+// clang-format on
 
 namespace tb::lit
 {

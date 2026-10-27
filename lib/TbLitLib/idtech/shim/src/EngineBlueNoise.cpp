@@ -36,10 +36,12 @@
 // The generator's own buffer is a function-local static it writes on every call, so the
 // generator runs on the parse thread alone (C20), as intrinsicImage does.
 
+// clang-format off: precompiled.h comes first in every shim file
+#include "precompiled.h"
 #include "lit/EngineImageData.h"
 #include "lit/EngineImageEnums.h"
-#include "precompiled.h"
 #include "renderer/Image_blueNoiseVC_2.h"
+// clang-format on
 
 #include <cstring>
 
