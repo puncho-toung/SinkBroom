@@ -45,8 +45,8 @@ constexpr auto StillTimerDelay = std::chrono::milliseconds{200};
 /**
  * LP3.0 (A49): the reasons a frame is started, §3.10's list as the pacer sees them: a
  * trigger (a camera change, requestFrame, an arrival, an unconverged pass), or the still
- * timer's firing (D151). The pacer records the last; nothing reads it before LP3.3, and
- * the still timer never fires before it (no settle is wanted).
+ * timer's firing (D151). LP3.3: the still timer's frame is a settling one
+ * (cameraMoving).
  */
 enum class FrameDrawReason
 {
@@ -82,24 +82,30 @@ public:
   // at the next slot the limiter grants, or after the next trigger
   void frameSkipped();
 
-  // ----- LP3.0 (D151, C62, P3.13): the still timer, inert until LP3.3 -----
+  // ----- LP3.0 (D151, C62, P3.13): the still timer; LP3.3 wants it -----
 
   // the camera moved at this time: the still timer counts from it again
   void cameraMoved(FrameClock::time_point at);
   /**
-   * whether a settle wants the still timer: some light's held LOD differs from its exact
-   * LOD, or a cascade budget is pending (C62's scope); LP3.3 sets it from the frame's
-   * shadows, nothing before (LitFrameStats::shadowSettleWanted is false), so the timer
-   * never fires and no frame count changes
+   * whether a settle wants the still timer (LitFrameStats::shadowSettleWanted, after each
+   * frame): some light's held LOD differs from its exact LOD, a cascade budget is
+   * pending (C62's scope), or the held layout is not the engine's packing (LP3.3's term,
+   * D145)
    */
   void setSettleWanted(bool wanted);
   bool settleWanted() const;
   /**
    * When the still timer fires: StillTimerDelay after the last camera move, while a
-   * settle is wanted and the timer has not fired since that move; empty otherwise
-   * (always, before LP3.3).
+   * settle is wanted and the timer has not fired since that move; empty otherwise.
    */
   std::optional<FrameClock::time_point> stillTimerTime() const;
+  /**
+   * LP3.3 (C62, D152): whether a frame started at now is drawn while the camera moves:
+   * the last camera move is younger than StillTimerDelay (a camera trigger's frame always
+   * is) and the frame is not the still timer's; such a frame's pass 6 holds the layout
+   * and the LODs, any other settles them.
+   */
+  bool cameraMoving(FrameClock::time_point now) const;
   // the still timer fired: a frame trigger whose reason is StillTimer, spent until the
   // camera moves again
   void stillTimerFired();

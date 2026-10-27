@@ -210,9 +210,12 @@ struct LitFrameStats
   std::size_t casters = 0;
   double casterMs = 0.0;
   std::size_t lightTriangleEntries = 0;
-  // LP3.0 (D151, C62): the shadows' convergence term and the still timer's scope: some
-  // tile not settled, and some light's held LOD differing from its exact LOD or a cascade
-  // budget pending; LP3.3 fills both, false before
+  // LP3.0 (D151, C62, A49), LP3.3: the shadows' convergence term, a placed tile not
+  // drawn whole against its light's current record at the exact LOD (shadowLodHeld), a
+  // provisional tile, a cascade budget pending (cascadesStale), a caster's light
+  // triangles unknown, or (LP3.3, D145) the held layout not the engine's packing
+  // (shadowLayoutDrift); and the still timer's scope: a held LOD, a pending cascade
+  // budget, or the held layout not the engine's
   bool shadowsPending = false;
   bool shadowSettleWanted = false;
   // LP7.3 (C54): the dress surfaces the frame draws (FrontendLists::dressSurfaces: the

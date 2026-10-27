@@ -45,7 +45,8 @@ TEST_CASE("FramePacer")
   SECTION("the still timer is inert without a settle wanted (LP3.0, D151, P3.13)")
   {
     CHECK(StillTimerDelay == 200ms);
-    // a camera that moved and stopped: no settle wanted (LP3.0: never), so no firing
+    // a camera that moved and stopped: no settle wanted (LP3.3: no held LOD, no pending
+    // cascade budget, the layout the engine's), so no firing
     pacer.trigger();
     pacer.cameraMoved(t0);
     pacer.frameStarted(t0);
@@ -82,6 +83,34 @@ TEST_CASE("FramePacer")
     // no settle wanted: no timer
     pacer.setSettleWanted(false);
     CHECK_FALSE(pacer.stillTimerTime());
+  }
+
+  SECTION(
+    "a frame is moving while the last camera move is younger than the delay (LP3.3)")
+  {
+    // C62, D152: none before the first move
+    CHECK_FALSE(pacer.cameraMoving(t0));
+    pacer.trigger();
+    pacer.cameraMoved(t0);
+    CHECK(pacer.cameraMoving(t0));
+    CHECK(pacer.cameraMoving(t0 + 199ms));
+    CHECK_FALSE(pacer.cameraMoving(t0 + StillTimerDelay));
+    CHECK_FALSE(pacer.cameraMoving(t0 + 1s));
+    pacer.frameStarted(t0);
+    // a frame of another trigger soon after the move is moving too; past the delay, not
+    pacer.trigger();
+    CHECK(pacer.cameraMoving(t0 + 50ms));
+    CHECK_FALSE(pacer.cameraMoving(t0 + 250ms));
+    // the still timer's frame settles
+    pacer.setSettleWanted(true);
+    pacer.stillTimerFired();
+    CHECK(pacer.drawReason() == FrameDrawReason::StillTimer);
+    CHECK_FALSE(pacer.cameraMoving(t0 + StillTimerDelay));
+    CHECK_FALSE(pacer.cameraMoving(t0 + 100ms));
+    // a camera trigger after it moves again
+    pacer.trigger();
+    pacer.cameraMoved(t0 + 1s);
+    CHECK(pacer.cameraMoving(t0 + 1s + 10ms));
   }
 
   SECTION("a trigger draws at once after idle")

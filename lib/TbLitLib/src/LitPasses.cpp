@@ -2326,12 +2326,20 @@ void LitPasses::recordShadowAtlas(Frame& frame)
         }
         record.shadowV[slice] = tile.shadowV;
         record.shadowP[slice] = tile.shadowP;
+        // a tile not drawn whole (a skipped draw, a pending caster): drawn again
+        m_stats.shadowsPending = m_stats.shadowsPending || !tile.valid;
         ++m_stats.layoutTiles;
         m_stats.layoutShadowDraws += tile.draws;
         m_stats.layoutAtlasBytes +=
           std::uint64_t(tile.rect.size) * std::uint64_t(tile.rect.size) * sizeof(float);
       }
     }
+    // LP3.3 (C62, D151, A49): the frame's shadows settled, and the still timer's scope
+    m_stats.shadowSettleWanted =
+      m_stats.shadowLodHeld || m_stats.cascadesStale > 0 || m_stats.shadowLayoutDrift;
+    m_stats.shadowsPending = m_stats.shadowsPending || m_stats.shadowSettleWanted
+                             || m_stats.tilesProvisional > 0
+                             || std::ranges::any_of(castersPending, std::identity{});
     // A46: a light none of whose sides has a tile is not in the layout
     for (const auto& record : m_shadowRecords)
     {

@@ -201,8 +201,9 @@ struct FrameConvergence
   bool passesDisabled = false;
   // LP3.0 (D151, C62): the frame's shadows are not settled (a tile not drawn against its
   // light's record at the exact LOD, a provisional tile, a cascade budget pending, a
-  // caster's light triangles unknown); LP3.3 fills it (LitFrameStats::shadowsPending),
-  // false before: shadows are always converged
+  // caster's light triangles unknown, LP3.3: a held layout not the engine's packing):
+  // LitFrameStats::shadowsPending. Not a re-trigger: the still timer, the pipeline's
+  // onReady and the light triangles' job are the triggers
   bool shadowsPending = false;
 
   bool settled() const;
@@ -453,6 +454,9 @@ private:
   std::uint64_t m_frameIndex = 0;
   // the started frame's FramePacer::frameStarted stamp (RenderFrameAccess::frameStart)
   FrameClock::time_point m_frameStart;
+  // LP3.3 (C62, D152): the started frame is drawn while the camera moves
+  // (FramePacer::cameraMoving at its start): pass 6 holds the layout and the LODs
+  bool m_frameShadowsMoving = false;
   // D35: the frames known to have finished on the GPU (frames 0 to m_completedFrames - 1)
   std::uint64_t m_completedFrames = 0;
   std::uint64_t m_framesSkipped = 0;

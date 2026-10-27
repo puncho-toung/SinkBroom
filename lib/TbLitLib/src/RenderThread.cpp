@@ -697,7 +697,7 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
   convergence.drawsOverflowed = lit.lightsOverflowed > 0 || lit.overflowedDraws > 0;
   // DX.2
   convergence.lightTrianglesPending = lit.lightTrianglesPending;
-  // LP3.0 (D151): the shadows' term, false until LP3.3
+  // LP3.0 (D151), LP3.3 (C62): the shadows' term
   convergence.shadowsPending = lit.shadowsPending;
   // LP4.2a (D88)
   convergence.probeImagesPending = lit.probeImagesPending;
@@ -1362,6 +1362,8 @@ bool RenderThread::recordLitPasses(
   inputs.shadowTimer = m_timers.query(slot, TimedPass::Shadows);
   // LP3.3 (D146, P3.4a): relocated tiles are copied when the device copies D32 images
   inputs.depthCopy = m_device.gpu().depthCopySupported;
+  // LP3.3 (C62, D152)
+  inputs.shadowsMoving = m_frameShadowsMoving;
   inputs.gamePath = m_options.gamePath;
   inputs.afterPrepass = [this] { runDebugHook(DebugHook::AfterPrepass); };
   // C38 (LP4.2b): r_skipInteractions 1's stand-in, a test's switch
@@ -1617,6 +1619,8 @@ void RenderThread::runLoop()
     const auto next = m_pacer.nextFrameTime(canDraw());
     if (next && *next <= now)
     {
+      // LP3.3 (C62): the frame's pass 6 holds or settles (the still timer's settles)
+      m_frameShadowsMoving = m_pacer.cameraMoving(now);
       m_pacer.frameStarted(now);
       m_frameStart = now;
       const auto frameCamera = m_camera;
@@ -1654,8 +1658,8 @@ void RenderThread::runLoop()
         // D77: an unconverged pass is a frame trigger
         m_pacer.trigger();
       }
-      // LP3.0 (D151, C62): whether a settle wants the still timer (LP3.3's held LOD or
-      // pending cascade budget; never before)
+      // LP3.0 (D151, C62): whether a settle wants the still timer (LP3.3: a held LOD, a
+      // pending cascade budget, a held layout that is not the engine's)
       m_pacer.setSettleWanted(m_passes.lastStats().shadowSettleWanted);
       continue;
     }
@@ -1663,7 +1667,7 @@ void RenderThread::runLoop()
     auto deadline = next.value_or(FrameClock::time_point::max());
 
     // LP3.0 (D151, C62, P3.13): the still timer, a frame trigger once the camera has been
-    // still for StillTimerDelay while a settle is wanted; inert before LP3.3
+    // still for StillTimerDelay while a settle is wanted (LP3.3); its frame settles
     if (const auto still = m_pacer.stillTimerTime(); still && canDraw())
     {
       if (*still <= now)

@@ -160,7 +160,8 @@ TEST_CASE(
          {&FrameConvergence::probesInFlight, false},
          // LP7.2 (D124): the table that answers is the trigger
          {&FrameConvergence::modelsPending, false},
-         // LP3.0 (D151, C62): the shadows' term, false until LP3.3
+         // LP3.0 (D151, C62): the shadows' term (LP3.3's), whose triggers are the still
+         // timer, the pipeline's onReady and the light triangles' job
          {&FrameConvergence::shadowsPending, false}})
   {
     auto convergence = FrameConvergence{};
@@ -172,8 +173,7 @@ TEST_CASE(
   auto disabled = FrameConvergence{};
   disabled.passesDisabled = true;
   CHECK(disabled.settled());
-  // LP3.0 (D151): the shadows are converged before LP3.3, and no settle wants the still
-  // timer: the frame stats leave both terms false
+  // LP3.0 (D151), LP3.3: a frame without shadows leaves both terms false
   CHECK_FALSE(FrameConvergence{}.shadowsPending);
   CHECK_FALSE(LitFrameStats{}.shadowsPending);
   CHECK_FALSE(LitFrameStats{}.shadowSettleWanted);
@@ -571,11 +571,25 @@ std::vector<std::vector<std::string>> readCsv(const std::filesystem::path& path)
 // how long a stop may take (as in TbUiLibTest's panel tests)
 constexpr auto StopBound = 2000ms;
 
-void teardown(LitSession& session)
+/**
+ * LP3.3 (D151, C62, A49): stillTimerFirings, the still timer's firings the case expects:
+ * 0 on every fixture whose lights cast nothing or whose camera never leaves a held LOD, a
+ * pending cascade budget or a held layout behind it (no case's frame counts move); none
+ * (not checked, printed) for the shadow cases that move their camera on purpose
+ */
+void teardown(
+  LitSession& session,
+  const std::optional<std::uint64_t> stillTimerFirings = std::uint64_t{0})
 {
-  // LP3.0 (D151): the still timer never fires on these fixtures (no settle is wanted
-  // before LP3.3), so no case's frame counts move
-  CHECK(session.stillTimerFiringsForTesting() == 0u);
+  if (stillTimerFirings)
+  {
+    CHECK(session.stillTimerFiringsForTesting() == *stillTimerFirings);
+  }
+  else
+  {
+    std::cout << "the still timer fired " << session.stillTimerFiringsForTesting()
+              << " times\n";
+  }
   // a stop the render thread misses fails the check instead of hanging the join
   // (plans/lit-preview/19-LITGPU-HANG.md); stopRenderThread requests it again
   session.requestStop();
@@ -5519,8 +5533,8 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
       std::this_thread::sleep_for(1000ms);
       CHECK(session->framesPresented() == idleFrames + 1);
       CHECK(session->lastFrameSettledForTesting());
-      // LP3.0 (D151): the still timer, 200 ms after that change, did not fire (no settle
-      // is wanted before LP3.3)
+      // LP3.0 (D151), LP3.3: the still timer, 200 ms after that change, did not fire (the
+      // root's lights draw no shadow here: skipShadowsForTesting, so no settle is wanted)
       CHECK(session->stillTimerFiringsForTesting() == 0u);
       std::cout << "LP2.2b idle: " << idleFrames << " frames before 3 s of idling, "
                 << session->framesPresented() << " after it and one camera change\n";
@@ -16046,10 +16060,17 @@ TEST_CASE("LitSession shadows on a GPU (LP3.1)", "[.][litgpu2]")
       }
       CHECK(mismatches == 0);
     }
-    // the unplaced lights draw the plain interaction, the others the atlas's (K26, C60)
+    // the unplaced lights draw the plain interaction, the others the atlas's (K26, C60);
+    // LP3.3: in a settled frame of the scene (the lights may have entered the held layout
+    // over several moving frames before the settle placed them as the engine does)
+    REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+      access.passes.setDrawLogForTesting(true);
+    }));
+    const auto again = settledShadowFrame(*session, camera, 43, false);
+    REQUIRE(again);
     auto plainOf = std::set<PreviewId>{};
     auto atlasOf = std::set<PreviewId>{};
-    for (const auto& draw : frame.drawLog)
+    for (const auto& draw : again->drawLog)
     {
       if (draw.pass != LitDrawRecord::Pass::Interaction)
       {
@@ -16207,7 +16228,9 @@ TEST_CASE("LitSession shadows on a GPU (LP3.1)", "[.][litgpu2]")
   std::cout << fmt::format(
     "LP3.1 shadows on a GPU: {:.1f} s\n",
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
-  teardown(*session);
+  // LP3.3: case (f) turns its camera, leaving light A's tiles where the two-light packing
+  // put them: the still timer's frame settles them (it fires once there, never elsewhere)
+  teardown(*session, std::nullopt);
   messages.print("LP3.1 shadows, validation");
   CHECK(messages.errors == 0);
   CHECK(messages.warnings == 0);
@@ -16895,10 +16918,93 @@ TEST_CASE("LitSession shadow records on a GPU (LP3.3)", "[.][litgpu2]")
     setMoving(std::nullopt);
   }
 
+  // ---------------------------------------------------------------------------------
+  SECTION("(k) settled: the still timer's frame settles a held layout (D151, C62, A49)")
+  {
+    const auto ahead = litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1});
+    const auto behind = litCamera({-200, 0, 128}, {-1, 0, 0}, {0, 0, 1});
+    offer(lp3MapText("lp3_vacated.map"), "lp3_vacated.map");
+    const auto both = settledShadowFrame(*session, ahead, 2, false);
+    REQUIRE(both);
+    REQUIRE(both->records.size() == 2u);
+    std::this_thread::sleep_for(300ms);
+    const auto firings = session->stillTimerFiringsForTesting();
+    // every frame's stats and records, read at the start of the next frame
+    struct Seen
+    {
+      LitFrameStats stats;
+      std::vector<ShadowLightRecord> records;
+    };
+    auto seen = std::make_shared<std::vector<Seen>>();
+    auto seenMutex = std::make_shared<std::mutex>();
+    session->setEveryFrameHookForTesting([seen, seenMutex](RenderFrameAccess& access) {
+      const auto lock = std::scoped_lock{*seenMutex};
+      seen->push_back(Seen{access.passes.lastStats(), access.passes.shadowLights()});
+    });
+    // turned round: light B's volume behind the view leaves the layout, A's tiles stay
+    // where the two lights' packing put them while the camera moves; then no trigger
+    // but the still timer's, 200 ms after the turn
+    session->setCamera(behind);
+    REQUIRE(inFrame(*session, [](RenderFrameAccess&) {}));
+    std::this_thread::sleep_for(600ms);
+    REQUIRE(inFrame(*session, [](RenderFrameAccess&) {}));
+    session->setEveryFrameHookForTesting({});
+    auto frames = std::vector<Seen>{};
+    {
+      const auto lock = std::scoped_lock{*seenMutex};
+      for (const auto& frame : *seen)
+      {
+        if (frame.stats.camera == behind)
+        {
+          frames.push_back(frame);
+        }
+      }
+    }
+    REQUIRE(frames.size() >= 2u);
+    const auto& first = frames.front();
+    const auto& last = frames.back();
+    REQUIRE(first.records.size() == 1u);
+    CHECK(first.stats.shadowsMoving);
+    CHECK(first.stats.shadowLayoutDrift);
+    CHECK(first.stats.shadowSettleWanted);
+    CHECK(first.stats.shadowsPending);
+    CHECK(session->stillTimerFiringsForTesting() == firings + 1);
+    // the still timer's frame: settled, A at the engine's packing of its sides alone
+    CHECK_FALSE(last.stats.shadowsMoving);
+    CHECK_FALSE(last.stats.shadowLayoutDrift);
+    CHECK_FALSE(last.stats.shadowSettleWanted);
+    REQUIRE(last.records.size() == 1u);
+    const auto alone = packedAlone(6, 512);
+    auto engine = true;
+    for (std::size_t s = 0; s < 6; ++s)
+    {
+      engine = engine && last.records[0].placements[s].x == alone[s].x
+               && last.records[0].placements[s].y == alone[s].y;
+    }
+    CHECK(engine);
+    std::cout << fmt::format(
+      "LP3.3 (k) turned round: {} frames, the first moving {} with drift {} (settle "
+      "wanted "
+      "{}), the still timer fired {} time(s), the last frame moving {} relocated {} "
+      "drawn {}, A at the engine's placements {}\n",
+      frames.size(),
+      first.stats.shadowsMoving,
+      first.stats.shadowLayoutDrift,
+      first.stats.shadowSettleWanted,
+      session->stillTimerFiringsForTesting() - firings,
+      last.stats.shadowsMoving,
+      last.stats.tilesRelocated,
+      last.stats.tilesDrawn,
+      engine);
+    const auto settled = settledShadowFrame(*session, behind, 1, false);
+    REQUIRE(settled);
+    CHECK_FALSE(settled->stats.shadowsPending);
+  }
+
   std::cout << fmt::format(
     "LP3.3 shadow records on a GPU: {:.1f} s\n",
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
-  teardown(*session);
+  teardown(*session, std::nullopt);
   messages.print("LP3.3 shadow records, validation");
   CHECK(messages.errors == 0);
   CHECK(messages.warnings == 0);

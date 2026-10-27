@@ -95,6 +95,12 @@ void FramePacer::stillTimerFired()
   m_drawReason = FrameDrawReason::StillTimer;
 }
 
+bool FramePacer::cameraMoving(const FrameClock::time_point now) const
+{
+  return m_drawReason != FrameDrawReason::StillTimer && m_lastCameraMove
+         && now - *m_lastCameraMove < StillTimerDelay;
+}
+
 std::uint64_t FramePacer::stillTimerFirings() const
 {
   return m_stillTimerFirings;
