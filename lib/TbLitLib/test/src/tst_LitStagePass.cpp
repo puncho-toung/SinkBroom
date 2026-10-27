@@ -994,4 +994,264 @@ TEST_CASE("LitStagePass: the fog cube is R_MakeZeroOneCubeTris (LP5.3, C49, D122
     CHECK(n[0] * centre[0] + n[1] * centre[1] + n[2] * centre[2] < 0.0f);
   }
 }
+
+namespace
+{
+
+// LP3.4: the shadows map's two grates (materials/lp3_parity.mtr, H04 and H08) and the
+// perforated shadow pass's cases, through the copied parser
+const char* const PerforatedMaterials =
+  "textures/lp3p/grate\n"
+  "{\n"
+  "  qer_editorimage textures/lp3p/grate.tga\n"
+  "  bumpmap textures/lp2/floor_local.tga\n"
+  "  { blend diffusemap map textures/lp3p/grate.tga alphaTest 0.5 nopicmip }\n"
+  "}\n"
+  "textures/lp3p/grate_noshadows\n"
+  "{\n"
+  "  qer_editorimage textures/lp3p/grate.tga\n"
+  "  noShadows\n"
+  "  bumpmap textures/lp2/floor_local.tga\n"
+  "  { blend diffusemap map textures/lp3p/grate.tga alphaTest 0.5 nopicmip }\n"
+  "}\n"
+  "textures/lp34/cond\n"
+  "{ { if parm4 blend diffusemap map textures/lp3p/grate.tga alphaTest 0.5 } }\n"
+  "textures/lp34/clear\n"
+  "{ { blend diffusemap map textures/lp3p/grate.tga alphaTest 0.5 alpha 0 } }\n"
+  "textures/lp34/parms\n"
+  "{ { blend diffusemap map textures/lp3p/grate.tga alphaTest parm5 alpha parm3 } }\n"
+  "textures/lp34/offset\n"
+  "{ polygonOffset 1 { blend diffusemap map textures/lp3p/grate.tga alphaTest 0.5 } }\n"
+  "textures/lp34/offset_cond\n"
+  "{\n"
+  "  polygonOffset 1\n"
+  "  { if parm4 blend diffusemap map textures/lp3p/grate.tga alphaTest 0.5 }\n"
+  "}\n"
+  "textures/lp34/private\n"
+  "{\n"
+  "  { blend diffusemap map textures/lp3p/grate.tga alphaTest 0.5 privatePolygonOffset 2 "
+  "}\n"
+  "}\n"
+  "textures/lp34/two\n"
+  "{\n"
+  "  { blend diffusemap map textures/lp3p/grate.tga alphaTest 0.5 }\n"
+  "  { map textures/lp34/bars.tga alphaTest 0.25 }\n"
+  "}\n"
+  "textures/lp34/mixed\n"
+  "{\n"
+  "  { map textures/lp34/glow.tga }\n"
+  "  { map textures/lp3p/grate.tga alphaTest 0.5 }\n"
+  "}\n";
+
+} // namespace
+
+// LP3.4 (D155, K52, E-LIT-12; SC723): ShadowMapPassPerforated's draws of one surface
+// (RenderBackend.cpp:3272-3385), with the state a side's call carries from surface to
+// surface
+TEST_CASE("LitStagePass: the perforated shadow pass's stage draws (LP3.4, D155, K52)")
+{
+  auto source =
+    MemoryDeclSource{{DeclFile{"materials/lp34.mtr", PerforatedMaterials, 0}}};
+  auto decls = MaterialDecls{source};
+  REQUIRE(decls.constructionError().empty());
+  const auto opening = enginePerforatedShadowOpening();
+  // the call opens with the fast pass's state (:3191-3222): GLS_POLYGON_OFFSET, the
+  // occluder facing 2's TWOSIDED, GL_PolygonOffset( 2, 1 ) (Vulkan)
+  CHECK(opening.state == (gls::PolygonOffset | gls::CullTwoSided));
+  CHECK(opening.slopeBias == 2.0f);
+  CHECK(opening.depthBias == 1.0f);
+  const auto drawsOf = [&](
+                         const std::string& name,
+                         const std::array<float, MaterialDecls::ShaderParmCount>& parms,
+                         PerforatedShadowState& carried) {
+    const auto material = parsed(decls, name);
+    CHECK(material->coverage == em::CoveragePerforated);
+    return enginePerforatedShadowDraws(
+      *material, registersOf(decls, *material, parms), carried);
+  };
+
+  SECTION("H04's grate: one texture_color draw under state 0, ALPHA_TEST 0.5")
+  {
+    auto carried = opening;
+    const auto draws = drawsOf("textures/lp3p/grate", WhiteParms, carried);
+    // the bump and the diffuse stage have no alpha test: ignored; the coverage stage the
+    // parse made of the alpha-tested diffuse map drawn (Material.cpp:2297-2330: its alpha
+    // test moved there, its image TD_COVERAGE), in the stage order the engine walks
+    REQUIRE(draws.size() == 1u);
+    const auto& draw = draws[0];
+    CHECK(draw.program == PrepassProgram::TextureColor);
+    const auto grate = parsed(decls, "textures/lp3p/grate");
+    REQUIRE(draw.stage >= 0);
+    REQUIRE(std::size_t(draw.stage) < grate->stages.size());
+    CHECK(grate->stages[std::size_t(draw.stage)].hasAlphaTest);
+    CHECK(grate->stages[std::size_t(draw.stage)].lighting == em::LightingCoverage);
+    CHECK(
+      std::ranges::count_if(grate->stages, &MaterialStage::hasAlphaTest)
+      == std::ptrdiff_t{1});
+    // GL_State( stageGLState ) with no MF_POLYGONOFFSET: 0 (E-LIT-12: FRONTSIDED, no
+    // shadow offset), the key's offsets 0
+    CHECK(draw.state == 0u);
+    CHECK(draw.slopeBias == 0.0f);
+    CHECK(draw.depthBias == 0.0f);
+    // GL_Color( 0, 0, 0, the alpha register: 1 )
+    CHECK(draw.color == Vec4{0.0f, 0.0f, 0.0f, 1.0f});
+    CHECK(draw.alphaTest == Vec4{0.5f, 0.5f, 0.5f, 0.5f});
+    // PrepareStageTexturing: the identity matrix, no texgen
+    CHECK(draw.textureMatrix[0] == Vec4{1.0f, 0.0f, 0.0f, 0.0f});
+    CHECK(draw.textureMatrix[1] == Vec4{0.0f, 1.0f, 0.0f, 0.0f});
+    CHECK(draw.texGenEnabled == Vec4{0.0f, 0.0f, 0.0f, 0.0f});
+    CHECK_FALSE(draw.screenTexgen);
+    // the call's state is the stage's now; its offset untouched
+    CHECK(carried.state == 0u);
+    CHECK(carried.slopeBias == 2.0f);
+    CHECK(carried.depthBias == 1.0f);
+
+    // H08's: noShadows changes nothing of the draws (C57: it casts)
+    auto carriedB = opening;
+    const auto noShadows = drawsOf("textures/lp3p/grate_noshadows", WhiteParms, carriedB);
+    REQUIRE(noShadows.size() == 1u);
+    CHECK(noShadows[0].program == draw.program);
+    CHECK(noShadows[0].stage == draw.stage);
+    CHECK(noShadows[0].state == draw.state);
+    CHECK(noShadows[0].color == draw.color);
+    CHECK(noShadows[0].alphaTest == draw.alphaTest);
+    CHECK(noShadows[0].textureMatrix == draw.textureMatrix);
+    CHECK(carriedB == carried);
+  }
+
+  SECTION("the colour alpha and ALPHA_TEST from their registers")
+  {
+    auto parms = WhiteParms;
+    parms[3] = 0.75f;
+    parms[5] = 0.25f;
+    auto carried = opening;
+    const auto draws = drawsOf("textures/lp34/parms", parms, carried);
+    REQUIRE(draws.size() == 1u);
+    CHECK(draws[0].color == Vec4{0.0f, 0.0f, 0.0f, 0.75f});
+    CHECK(draws[0].alphaTest == Vec4{0.25f, 0.25f, 0.25f, 0.25f});
+  }
+
+  SECTION("a stage whose condition register is 0: the fallback depth draw")
+  {
+    // first in the call: under the opening state (the opaque casters')
+    auto carried = opening;
+    const auto draws = drawsOf("textures/lp34/cond", WhiteParms, carried);
+    REQUIRE(draws.size() == 1u);
+    CHECK(draws[0].program == PrepassProgram::Depth);
+    CHECK(draws[0].state == (gls::PolygonOffset | gls::CullTwoSided));
+    CHECK(draws[0].slopeBias == 2.0f);
+    CHECK(draws[0].depthBias == 1.0f);
+    // no GL_Color, no ALPHA_TEST
+    CHECK_FALSE(draws[0].color);
+    CHECK_FALSE(draws[0].alphaTest);
+    CHECK(carried == opening);
+
+    // K52, E-LIT-12: after a grate's stage the fallback inherits its state 0
+    auto chain = opening;
+    drawsOf("textures/lp3p/grate", WhiteParms, chain);
+    const auto after = drawsOf("textures/lp34/cond", WhiteParms, chain);
+    REQUIRE(after.size() == 1u);
+    CHECK(after[0].program == PrepassProgram::Depth);
+    CHECK(after[0].state == 0u);
+    CHECK(after[0].slopeBias == 0.0f);
+    CHECK(after[0].depthBias == 0.0f);
+
+    // the condition on: the stage's draw
+    auto parms = WhiteParms;
+    parms[4] = 1.0f;
+    auto on = opening;
+    const auto drawn = drawsOf("textures/lp34/cond", parms, on);
+    REQUIRE(drawn.size() == 1u);
+    CHECK(drawn[0].program == PrepassProgram::TextureColor);
+  }
+
+  SECTION("an alpha of 0: the stage tried (didDraw), no draw at all")
+  {
+    auto carried = opening;
+    CHECK(drawsOf("textures/lp34/clear", WhiteParms, carried).empty());
+    // GL_State was not called
+    CHECK(carried == opening);
+  }
+
+  SECTION("MF_POLYGONOFFSET: GLS_POLYGON_OFFSET with r_offsetUnits -600 x polygonOffset")
+  {
+    auto carried = opening;
+    const auto draws = drawsOf("textures/lp34/offset", WhiteParms, carried);
+    REQUIRE(draws.size() == 1u);
+    CHECK(draws[0].program == PrepassProgram::TextureColor);
+    CHECK(draws[0].state == gls::PolygonOffset);
+    CHECK(draws[0].slopeBias == 0.0f);
+    CHECK(draws[0].depthBias == -600.0f);
+    CHECK(carried.state == gls::PolygonOffset);
+    CHECK(carried.depthBias == -600.0f);
+
+    // its fallback: the call's state bits with the surface's own offset (set at the
+    // surface's start, :3285-3289)
+    auto fallback = opening;
+    const auto solid = drawsOf("textures/lp34/offset_cond", WhiteParms, fallback);
+    REQUIRE(solid.size() == 1u);
+    CHECK(solid[0].program == PrepassProgram::Depth);
+    CHECK(solid[0].state == (gls::PolygonOffset | gls::CullTwoSided));
+    CHECK(solid[0].slopeBias == 0.0f);
+    CHECK(solid[0].depthBias == -600.0f);
+  }
+
+  SECTION("privatePolygonOffset: the stage's offset, then the surface's again")
+  {
+    auto carried = opening;
+    const auto draws = drawsOf("textures/lp34/private", WhiteParms, carried);
+    REQUIRE(draws.size() == 1u);
+    CHECK(draws[0].state == gls::PolygonOffset);
+    CHECK(draws[0].slopeBias == 0.0f);
+    CHECK(draws[0].depthBias == -1200.0f);
+    // GL_State( stageGLState ) kept; GL_PolygonOffset( 0, -600 x 0 ) after the stage
+    CHECK(carried.state == gls::PolygonOffset);
+    CHECK(carried.slopeBias == 0.0f);
+    CHECK(carried.depthBias == 0.0f);
+  }
+
+  SECTION("two alpha-tested stages: two draws in stage order")
+  {
+    auto carried = opening;
+    const auto draws = drawsOf("textures/lp34/two", WhiteParms, carried);
+    REQUIRE(draws.size() == 2u);
+    // the parsed material's order (the diffuse map's coverage stage the parse makes, and
+    // the ambient one): each draw its stage's, the first stage first
+    const auto two = parsed(decls, "textures/lp34/two");
+    auto tested = std::vector<int>{};
+    for (std::size_t s = 0; s < two->stages.size(); ++s)
+    {
+      if (two->stages[s].hasAlphaTest)
+      {
+        tested.push_back(int(s));
+      }
+    }
+    REQUIRE(tested.size() == 2u);
+    CHECK(draws[0].stage == tested[0]);
+    CHECK(draws[1].stage == tested[1]);
+    CHECK(draws[0].stage < draws[1].stage);
+    const auto registers = registersOf(decls, *two, WhiteParms);
+    for (const auto& draw : draws)
+    {
+      CAPTURE(draw.stage);
+      const auto alpha =
+        engineRegister(registers, two->stages[std::size_t(draw.stage)].alphaTestRegister);
+      CHECK(draw.alphaTest == Vec4{alpha, alpha, alpha, alpha});
+      CHECK(draw.program == PrepassProgram::TextureColor);
+    }
+    CHECK(draws[0].alphaTest != draws[1].alphaTest);
+  }
+
+  SECTION("a stage without an alpha test is ignored")
+  {
+    auto carried = opening;
+    const auto draws = drawsOf("textures/lp34/mixed", WhiteParms, carried);
+    REQUIRE(draws.size() == 1u);
+    const auto mixed = parsed(decls, "textures/lp34/mixed");
+    REQUIRE(mixed->stages.size() == 2u);
+    CHECK_FALSE(mixed->stages[0].hasAlphaTest);
+    CHECK(draws[0].stage == 1);
+    CHECK(draws[0].program == PrepassProgram::TextureColor);
+  }
+}
 } // namespace tb::lit

@@ -374,6 +374,57 @@ bool engineStageProgramSamplesCube(const StageProgram program)
   return false;
 }
 
+namespace
+{
+
+/**
+ * PrepareStageTexturing (RenderBackend.cpp:352-638) for an alpha-tested stage's draw of
+ * the generic depth path or the perforated shadow pass (both call it after ALPHA_TEST):
+ * the texture matrix and the texgens; LP5.2b (C48, SC528): the program replaced for the
+ * cube and sky texgens. False for a TG_REFLECT_CUBE2 stage, which is not drawn (:393-525:
+ * BUMPY_ENVIRONMENT2, LP6's inputs, with a bump stage; texture_color sampling the cube as
+ * a Texture2D without one: M-STAGE-DIFF-05).
+ */
+bool prepareAlphaTestedStage(
+  PrepassDraw& draw,
+  const MaterialEntry& material,
+  const std::span<const float> registers,
+  const MaterialStage& stage)
+{
+  draw.textureMatrix = engineLoadShaderTextureMatrix(registers, stage);
+  switch (stage.texgen)
+  {
+  case em::TexgenScreen:
+  case em::TexgenScreen2:
+    draw.texGenEnabled = Vec4{1.0f, 1.0f, 1.0f, 1.0f};
+    draw.screenTexgen = true;
+    break;
+  case em::TexgenReflectCube:
+    // LP5.2b (C48, SC528): the program replaced after ALPHA_TEST was set (:360-392):
+    // environment, or bumpyenvironment with the bump stage's image at unit 1
+    draw.bumpStage = engineBumpStage(material);
+    draw.program = draw.bumpStage >= 0 ? PrepassProgram::BumpyEnvironment
+                                       : PrepassProgram::Environment;
+    break;
+  case em::TexgenReflectCube2:
+    return false;
+  case em::TexgenSkyboxCube:
+    // :526-529
+    draw.program = PrepassProgram::SkyBox;
+    break;
+  case em::TexgenWobbleskyCube:
+    // :530-586, at the preview's material time 0 (K5)
+    draw.program = PrepassProgram::WobbleSky;
+    draw.wobbleSky = engineStageWobbleSky(material, registers);
+    break;
+  default:
+    break;
+  }
+  return true;
+}
+
+} // namespace
+
 std::vector<PrepassDraw> engineGenericDepthDraws(
   const MaterialEntry& material, const std::span<const float> registers)
 {
@@ -478,37 +529,10 @@ std::vector<PrepassDraw> engineGenericDepthDraws(
       draw.stage = int(s);
 
       // PrepareStageTexturing (RenderBackend.cpp:352-638): the texture matrix and the
-      // texgens
-      draw.textureMatrix = engineLoadShaderTextureMatrix(registers, stage);
-      switch (stage.texgen)
+      // texgens (a TG_REFLECT_CUBE2 stage not drawn: M-STAGE-DIFF-05)
+      if (!prepareAlphaTestedStage(draw, material, registers, stage))
       {
-      case em::TexgenScreen:
-      case em::TexgenScreen2:
-        draw.texGenEnabled = Vec4{1.0f, 1.0f, 1.0f, 1.0f};
-        draw.screenTexgen = true;
-        break;
-      case em::TexgenReflectCube:
-        // LP5.2b (C48, SC528): the program replaced after ALPHA_TEST was set (:360-392):
-        // environment, or bumpyenvironment with the bump stage's image at unit 1
-        draw.bumpStage = engineBumpStage(material);
-        draw.program = draw.bumpStage >= 0 ? PrepassProgram::BumpyEnvironment
-                                           : PrepassProgram::Environment;
-        break;
-      case em::TexgenReflectCube2:
-        // :393-525: BUMPY_ENVIRONMENT2 (LP6's inputs) with a bump stage, texture_color
-        // sampling the cube as a Texture2D without one: not drawn (M-STAGE-DIFF-05)
         continue;
-      case em::TexgenSkyboxCube:
-        // :526-529
-        draw.program = PrepassProgram::SkyBox;
-        break;
-      case em::TexgenWobbleskyCube:
-        // :530-586, at the preview's material time 0 (K5)
-        draw.program = PrepassProgram::WobbleSky;
-        draw.wobbleSky = engineStageWobbleSky(material, registers);
-        break;
-      default:
-        break;
       }
       draws.push_back(draw);
     }
@@ -537,6 +561,142 @@ std::vector<PrepassDraw> engineGenericDepthDraws(
       draw.program = PrepassProgram::Depth;
       draw.state = surfState | engine_gls::AlphaMask;
     }
+    draws.push_back(draw);
+  }
+  return draws;
+}
+
+PerforatedShadowState enginePerforatedShadowOpening()
+{
+  // GL_State( glState | GLS_POLYGON_OFFSET ) with glState 0, then the occluder facing's
+  // cull and offset (RenderBackend.cpp:3191-3222)
+  auto opening = PerforatedShadowState{};
+  opening.state = engine_gls::PolygonOffset;
+  opening.slopeBias = EngineFrame.shadowMapPolygonFactor;
+  opening.depthBias = EngineFrame.vkShadowMapPolygonOffset;
+  switch (EngineFrame.shadowMapOccluderFacing)
+  {
+  case 0:
+    opening.state |= engine_gls::CullFrontSided;
+    break;
+  case 1:
+    opening.state |= engine_gls::CullBackSided;
+    opening.slopeBias = -opening.slopeBias;
+    opening.depthBias = -opening.depthBias;
+    break;
+  default:
+    opening.state |= engine_gls::CullTwoSided;
+    break;
+  }
+  return opening;
+}
+
+std::vector<PrepassDraw> enginePerforatedShadowDraws(
+  const MaterialEntry& material,
+  const std::span<const float> registers,
+  PerforatedShadowState& carried)
+{
+  // ShadowMapPassPerforated's surface loop (RenderBackend.cpp:3272-3385) for one surface
+  auto draws = std::vector<PrepassDraw>{};
+  // the offset a draw's pipeline key reads: GL_PolygonOffset's, under GLS_POLYGON_OFFSET
+  // alone (M-PASS-DIFF-01)
+  const auto keyed = [](PrepassDraw& draw, const float slope, const float bias) {
+    if (draw.state & engine_gls::PolygonOffset)
+    {
+      draw.slopeBias = slope;
+      draw.depthBias = bias;
+    }
+  };
+
+  auto didDraw = false;
+  // get the expressions for conditionals / color / texcoords
+  auto color = Vec4{0.0f, 0.0f, 0.0f, 1.0f};
+  auto surfState = std::uint64_t{0};
+
+  // set polygon offset if necessary
+  if (material.materialFlags & em::FlagPolygonOffset)
+  {
+    surfState |= engine_gls::PolygonOffset;
+    carried.slopeBias = EngineFrame.offsetFactor;
+    carried.depthBias = EngineFrame.offsetUnits * material.polygonOffset;
+  }
+
+  if (material.coverage == em::CoveragePerforated)
+  {
+    // perforated surfaces may have multiple alpha tested stages
+    for (std::size_t s = 0; s < material.stages.size(); ++s)
+    {
+      const auto& stage = material.stages[s];
+      if (!stage.hasAlphaTest)
+      {
+        continue;
+      }
+      // check the stage enable condition
+      if (engineRegister(registers, stage.conditionRegister) == 0.0f)
+      {
+        continue;
+      }
+
+      // if we at least tried to draw an alpha tested stage, we won't draw the opaque
+      // surface
+      didDraw = true;
+
+      // set the alpha modulate
+      color[3] = engineRegister(registers, stage.colorRegisters[3]);
+
+      // skip the entire stage if alpha would be black
+      if (color[3] <= 0.0f)
+      {
+        continue;
+      }
+
+      auto stageState = surfState;
+      auto slope = carried.slopeBias;
+      auto bias = carried.depthBias;
+
+      // set privatePolygonOffset if necessary
+      if (stage.privatePolygonOffset != 0.0f)
+      {
+        slope = EngineFrame.offsetFactor;
+        bias = EngineFrame.offsetUnits * stage.privatePolygonOffset;
+        stageState |= engine_gls::PolygonOffset;
+      }
+
+      // GL_Color( color ), GL_State( stageGLState ) (E-LIT-12: the pass's offset and its
+      // two-sided cull gone), ALPHA_TEST, BindShader_TextureVertexColor, SVC_IGNORE, unit
+      // 0 the stage's image
+      auto draw = PrepassDraw{};
+      draw.program = PrepassProgram::TextureColor;
+      draw.state = stageState;
+      keyed(draw, slope, bias);
+      draw.color = engineClampedColor(color);
+      const auto alpha = engineRegister(registers, stage.alphaTestRegister);
+      draw.alphaTest = Vec4{alpha, alpha, alpha, alpha};
+      draw.stage = int(s);
+      carried.state = stageState;
+
+      // set texture matrix and texGens, then draw it
+      if (prepareAlphaTestedStage(draw, material, registers, stage))
+      {
+        draws.push_back(draw);
+      }
+
+      // unset privatePolygonOffset if necessary: the surface's offset again
+      if (stage.privatePolygonOffset != 0.0f)
+      {
+        carried.slopeBias = EngineFrame.offsetFactor;
+        carried.depthBias = EngineFrame.offsetUnits * material.polygonOffset;
+      }
+    }
+  }
+
+  if (!didDraw)
+  {
+    // BindShader_Depth, the surface drawn under the state the call left (K52)
+    auto draw = PrepassDraw{};
+    draw.program = PrepassProgram::Depth;
+    draw.state = carried.state;
+    keyed(draw, carried.slopeBias, carried.depthBias);
     draws.push_back(draw);
   }
   return draws;

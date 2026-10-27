@@ -235,6 +235,59 @@ std::array<Vec4, 3> engineStageWobbleSky(
 std::vector<PrepassDraw> engineGenericDepthDraws(
   const MaterialEntry& material, std::span<const float> registers);
 
+// ----- LP3.4: the perforated shadow pass (SC723) -----
+
+/**
+ * LP3.4 (D155, K52, E-LIT-12): what one call of ShadowMapPassPerforated
+ * (RenderBackend.cpp:3171-3388, one light's side) carries from one perforated surface to
+ * the next: the bits of its last GL_State and its last GL_PolygonOffset's (slope, bias),
+ * under which a surface's !didDraw fallback draws (:3372-3384).
+ */
+struct PerforatedShadowState
+{
+  std::uint64_t state = 0;
+  float slopeBias = 0.0f;
+  float depthBias = 0.0f;
+
+  bool operator==(const PerforatedShadowState&) const = default;
+};
+
+/**
+ * LP3.4 (D155): the state a call of ShadowMapPassPerforated opens with (:3191-3222), as
+ * ShadowMapPassFast's does (:3418-3449) for the opaque casters: GL_State(
+ * GLS_POLYGON_OFFSET ), then r_shadowMapOccluderFacing's cull (2 TWOSIDED, 0 FRONTSIDED,
+ * 1 BACKSIDED) with GL_PolygonOffset( r_shadowMapPolygonFactor,
+ * r_vkShadowMapPolygonOffset
+ * ), negated for 1 (D159: the Vulkan offset). Pure.
+ */
+PerforatedShadowState enginePerforatedShadowOpening();
+
+/**
+ * LP3.4 (D155, K52, E-LIT-12; SC723, SC737): the draws ShadowMapPassPerforated makes of
+ * one perforated surface (:3280-3384) of a material whose registers are given, carried
+ * the state its side's call left, updated as the engine's GL_State and GL_PolygonOffset
+ * calls leave it. The surface state is 0 (no shadow polygon offset, FRONTSIDED, LESS,
+ * depth written: E-LIT-12), MF_POLYGONOFFSET adding GLS_POLYGON_OFFSET with
+ * GL_PolygonOffset( r_offsetFactor, r_offsetUnits · polygonOffset ) set at the surface's
+ * start; per stage, hasAlphaTest alone: a condition register of 0 skips it; once one is
+ * tried didDraw is set; the colour is ( 0, 0, 0, the alpha register ), an alpha ≤ 0
+ * skipping the stage's draw; privatePolygonOffset sets the offset ( r_offsetFactor,
+ * r_offsetUnits · it ) and the bit for the stage, then the surface's offset again; one
+ * TextureColor draw (BUILTIN_ TEXTURE_VERTEXCOLOR 15, never the skinned 17: P3.24e;
+ * SVC_IGNORE; unit 0 the stage's image) with ALPHA_TEST and PrepareStageTexturing's
+ * texture matrix and texgen, whose cube and sky texgens replace the program as in the
+ * prepass (LP5.2b's rule: none of those programs clips, so the stage writes the whole
+ * surface's depth) and whose TG_REFLECT_ CUBE2 stage is not drawn (M-STAGE-DIFF-05); when
+ * no alpha-tested stage was tried, one Depth draw (BUILTIN_DEPTH) under carried: the
+ * previous surface's state, in the order the caller draws its surfaces (K52;
+ * enginePerforatedShadowOpening() for the first). A draw's slope and bias are what its
+ * pipeline key reads: the offset in force under GLS_POLYGON_OFFSET, else 0. Pure.
+ */
+std::vector<PrepassDraw> enginePerforatedShadowDraws(
+  const MaterialEntry& material,
+  std::span<const float> registers,
+  PerforatedShadowState& carried);
+
 // ----- the interactions (SC221-SC233) -----
 
 // the program DrawSingleInteraction picks (K26: the unshadowed one always)
