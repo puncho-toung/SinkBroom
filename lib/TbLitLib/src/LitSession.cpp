@@ -766,7 +766,25 @@ void LitSession::failHostAllocationsForTesting(const bool fail)
 
 std::vector<ProgramReport> LitSession::programReport() const
 {
-  return m_compiler ? m_compiler->programs() : std::vector<ProgramReport>{};
+  auto reports = m_compiler ? m_compiler->programs() : std::vector<ProgramReport>{};
+  // LP3.3 (D146, P3.4a): no D32 copy on the device: the shadow atlas's relocation falls
+  // back to drawing the moved tiles again (builtin/depth draws them)
+  if (m_device && !m_device->gpu().depthCopySupported)
+  {
+    auto report = ProgramReport{};
+    report.program = EngineBuiltinDepth;
+    report.name = "shadow atlas relocation";
+    report.enabled = false;
+    report.reason =
+      "the device cannot copy D32 images: tiles moved at settle are drawn again";
+    reports.push_back(std::move(report));
+  }
+  return reports;
+}
+
+bool LitSession::shadowDepthCopyForTesting() const
+{
+  return m_device && m_device->gpu().depthCopySupported;
 }
 
 SessionStatus LitSession::status() const

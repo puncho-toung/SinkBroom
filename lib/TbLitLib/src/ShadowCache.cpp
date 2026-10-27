@@ -143,6 +143,369 @@ std::uint64_t shadowCasterTerm(
   return mix(hash);
 }
 
+std::int64_t atlasOverlap(const AtlasRect& a, const AtlasRect& b)
+{
+  const auto x0 = std::max(a.x, b.x);
+  const auto y0 = std::max(a.y, b.y);
+  const auto x1 = std::min(a.x + a.size, b.x + b.size);
+  const auto y1 = std::min(a.y + a.size, b.y + b.size);
+  return x1 > x0 && y1 > y0 ? std::int64_t(x1 - x0) * std::int64_t(y1 - y0) : 0;
+}
+
+ShadowTileAllocator::ShadowTileAllocator(const int mapSize, const int minSize)
+  : m_minSize{minSize}
+{
+  build(AtlasRect{0, 0, mapSize}, -1);
+}
+
+int ShadowTileAllocator::build(const AtlasRect& rect, const int parent)
+{
+  const auto index = int(m_nodes.size());
+  auto node = Node{};
+  node.rect = rect;
+  node.parent = parent;
+  m_nodes.push_back(node);
+  if (rect.size / 2 >= m_minSize)
+  {
+    const auto c = rect.size / 2;
+    // BuildTree's offsets ( -s, s ), ( -s, -s ), ( s, -s ), ( s, s ) (TileMap.cpp:93-104)
+    const auto corners = std::array<std::array<int, 2>, 4>{{
+      {rect.x, rect.y + c},
+      {rect.x, rect.y},
+      {rect.x + c, rect.y},
+      {rect.x + c, rect.y + c},
+    }};
+    for (std::size_t i = 0; i < 4; ++i)
+    {
+      const auto child = build(AtlasRect{corners[i][0], corners[i][1], c}, index);
+      m_nodes[std::size_t(index)].children[i] = child;
+    }
+  }
+  return index;
+}
+
+std::optional<AtlasRect> ShadowTileAllocator::allocate(const int size)
+{
+  // GetTile: the level of the next power of two at or above size
+  auto side = m_minSize;
+  while (side < size)
+  {
+    side *= 2;
+  }
+  if (side >= m_nodes.front().rect.size)
+  {
+    return std::nullopt;
+  }
+  // FindNode: depth first in child order from the root's children; a taken node and its
+  // subtree are passed over, as a node of the level with a taken node below it
+  auto stack = std::vector<int>{};
+  const auto push = [&](const Node& node) {
+    for (auto i = std::size_t{4}; i-- > 0;)
+    {
+      if (node.children[i] >= 0)
+      {
+        stack.push_back(node.children[i]);
+      }
+    }
+  };
+  push(m_nodes.front());
+  while (!stack.empty())
+  {
+    const auto index = stack.back();
+    stack.pop_back();
+    const auto& node = m_nodes[std::size_t(index)];
+    if (node.taken)
+    {
+      continue;
+    }
+    if (node.rect.size == side)
+    {
+      if (node.takenBelow == 0)
+      {
+        take(index);
+        return node.rect;
+      }
+      continue;
+    }
+    push(node);
+  }
+  return std::nullopt;
+}
+
+int ShadowTileAllocator::nodeOf(const AtlasRect& rect) const
+{
+  auto index = 0;
+  while (index >= 0)
+  {
+    const auto& node = m_nodes[std::size_t(index)];
+    if (node.rect == rect)
+    {
+      return index;
+    }
+    if (node.rect.size <= rect.size)
+    {
+      return -1;
+    }
+    auto next = -1;
+    for (const auto child : node.children)
+    {
+      if (child < 0)
+      {
+        continue;
+      }
+      const auto& r = m_nodes[std::size_t(child)].rect;
+      if (
+        rect.x >= r.x && rect.x < r.x + r.size && rect.y >= r.y && rect.y < r.y + r.size)
+      {
+        next = child;
+        break;
+      }
+    }
+    index = next;
+  }
+  return -1;
+}
+
+void ShadowTileAllocator::take(const int node)
+{
+  m_nodes[std::size_t(node)].taken = true;
+  ++m_taken;
+  for (auto up = m_nodes[std::size_t(node)].parent; up >= 0;
+       up = m_nodes[std::size_t(up)].parent)
+  {
+    ++m_nodes[std::size_t(up)].takenBelow;
+  }
+}
+
+bool ShadowTileAllocator::reserve(const AtlasRect& rect)
+{
+  const auto index = nodeOf(rect);
+  if (index < 0)
+  {
+    return false;
+  }
+  const auto& node = m_nodes[std::size_t(index)];
+  if (node.taken || node.takenBelow != 0)
+  {
+    return false;
+  }
+  for (auto up = node.parent; up >= 0; up = m_nodes[std::size_t(up)].parent)
+  {
+    if (m_nodes[std::size_t(up)].taken)
+    {
+      return false;
+    }
+  }
+  take(index);
+  return true;
+}
+
+void ShadowTileAllocator::release(const AtlasRect& rect)
+{
+  const auto index = nodeOf(rect);
+  if (index < 0 || !m_nodes[std::size_t(index)].taken)
+  {
+    return;
+  }
+  m_nodes[std::size_t(index)].taken = false;
+  --m_taken;
+  for (auto up = m_nodes[std::size_t(index)].parent; up >= 0;
+       up = m_nodes[std::size_t(up)].parent)
+  {
+    --m_nodes[std::size_t(up)].takenBelow;
+  }
+}
+
+void ShadowTileAllocator::clear()
+{
+  for (auto& node : m_nodes)
+  {
+    node.taken = false;
+    node.takenBelow = 0;
+  }
+  m_taken = 0;
+}
+
+std::size_t ShadowTileAllocator::taken() const
+{
+  return m_taken;
+}
+
+std::vector<AtlasRect> uncoveredRects(
+  const AtlasRect& rect, const std::span<const AtlasRect> covering, const int minSize)
+{
+  auto overlapped = false;
+  for (const auto& other : covering)
+  {
+    const auto shared = atlasOverlap(rect, other);
+    if (shared == std::int64_t(rect.size) * std::int64_t(rect.size))
+    {
+      return {};
+    }
+    overlapped = overlapped || shared > 0;
+  }
+  if (!overlapped || rect.size / 2 < minSize)
+  {
+    return {rect};
+  }
+  auto parts = std::vector<AtlasRect>{};
+  const auto c = rect.size / 2;
+  for (const auto& part :
+       {AtlasRect{rect.x, rect.y, c},
+        AtlasRect{rect.x + c, rect.y, c},
+        AtlasRect{rect.x, rect.y + c, c},
+        AtlasRect{rect.x + c, rect.y + c, c}})
+  {
+    const auto uncovered = uncoveredRects(part, covering, minSize);
+    parts.insert(parts.end(), uncovered.begin(), uncovered.end());
+  }
+  return parts;
+}
+
+ShadowRelocationPlan planShadowRelocation(
+  const std::span<const ShadowMove> moves, const int scratchSize, const int minSize)
+{
+  auto plan = ShadowRelocationPlan{};
+  if (moves.empty())
+  {
+    return plan;
+  }
+  auto scratch = ShadowTileAllocator{scratchSize, minSize};
+  const auto save = [&](const std::size_t move, const AtlasRect& slot) {
+    plan.copies.push_back(ShadowCopy{true, moves[move].from, slot, move});
+  };
+  const auto restore = [&](const std::size_t move, const AtlasRect& slot) {
+    plan.copies.push_back(ShadowCopy{false, moves[move].to, slot, move});
+  };
+
+  // every source first when they all fit
+  {
+    auto slots = std::vector<AtlasRect>{};
+    for (const auto& move : moves)
+    {
+      const auto slot = scratch.allocate(move.from.size);
+      if (!slot)
+      {
+        break;
+      }
+      slots.push_back(*slot);
+    }
+    if (slots.size() == moves.size())
+    {
+      for (std::size_t m = 0; m < moves.size(); ++m)
+      {
+        save(m, slots[m]);
+      }
+      for (std::size_t m = 0; m < moves.size(); ++m)
+      {
+        restore(m, slots[m]);
+      }
+      return plan;
+    }
+    scratch.clear();
+  }
+
+  // in batches
+  auto remaining = std::vector<std::size_t>(moves.size());
+  for (std::size_t m = 0; m < moves.size(); ++m)
+  {
+    remaining[m] = m;
+  }
+  // the moves whose source sits in the scratch, by their slot
+  auto saved = std::vector<std::optional<AtlasRect>>(moves.size());
+  const auto blocked = [&](const std::size_t m, const std::vector<bool>& inBatch) {
+    for (const auto other : remaining)
+    {
+      if (
+        other != m && !saved[other] && !inBatch[other]
+        && atlasOverlap(moves[m].to, moves[other].from) > 0)
+      {
+        return true;
+      }
+    }
+    return false;
+  };
+  while (!remaining.empty())
+  {
+    auto inBatch = std::vector<bool>(moves.size(), false);
+    auto batch = std::vector<std::size_t>{};
+    auto toSave = std::vector<std::pair<std::size_t, AtlasRect>>{};
+    for (auto grew = true; grew;)
+    {
+      grew = false;
+      for (const auto m : remaining)
+      {
+        if (inBatch[m] || blocked(m, inBatch))
+        {
+          continue;
+        }
+        if (!saved[m])
+        {
+          const auto slot = scratch.allocate(moves[m].from.size);
+          if (!slot)
+          {
+            continue;
+          }
+          toSave.emplace_back(m, *slot);
+        }
+        inBatch[m] = true;
+        batch.push_back(m);
+        grew = true;
+      }
+    }
+    if (batch.empty())
+    {
+      // a cycle: one move's source saved into one slot and parked
+      auto parked = false;
+      for (const auto m : remaining)
+      {
+        if (saved[m])
+        {
+          continue;
+        }
+        if (const auto slot = scratch.allocate(moves[m].from.size))
+        {
+          save(m, *slot);
+          saved[m] = slot;
+          parked = true;
+          break;
+        }
+      }
+      if (!parked)
+      {
+        // the scratch cannot hold what the cycles need: the rest is drawn again
+        for (const auto m : remaining)
+        {
+          if (saved[m])
+          {
+            scratch.release(*saved[m]);
+          }
+          plan.redraw.push_back(m);
+        }
+        // a parked source's slot is not restored: its move is drawn again
+        std::erase_if(plan.copies, [&](const ShadowCopy& copy) {
+          return std::ranges::find(plan.redraw, copy.move) != plan.redraw.end();
+        });
+        return plan;
+      }
+      continue;
+    }
+    for (const auto& [m, slot] : toSave)
+    {
+      save(m, slot);
+      saved[m] = slot;
+    }
+    for (const auto m : batch)
+    {
+      restore(m, *saved[m]);
+      scratch.release(*saved[m]);
+      saved[m].reset();
+    }
+    std::erase_if(remaining, [&](const std::size_t m) { return inBatch[m]; });
+  }
+  return plan;
+}
+
 void ShadowCache::beginFrame(const std::span<const PreviewId> casting)
 {
   std::erase_if(m_records, [&](const auto& entry) {

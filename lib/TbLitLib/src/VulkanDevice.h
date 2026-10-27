@@ -56,6 +56,10 @@ struct GpuChoice
   // DeviceManager_VK.cpp:1056-1064: whether D24S8 can be a depth-stencil attachment; the
   // depth target is D32S8 otherwise (Image_NVRHI.cpp:404-414)
   bool d24s8Supported = false;
+  // LP3.3 (D146, P3.4a): whether D32 images can be a copy's source and destination
+  // (optimal tiling's TRANSFER_SRC and TRANSFER_DST): the shadow atlas's relocated tiles
+  // are copied through the scratch; else they are drawn again (no engine counterpart)
+  bool depthCopySupported = false;
   // the other devices whose queries failed, one line each, for the log
   std::vector<std::string> skippedDevices;
 };

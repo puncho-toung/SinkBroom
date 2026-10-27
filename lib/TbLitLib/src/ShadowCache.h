@@ -28,6 +28,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -153,6 +154,115 @@ std::uint64_t shadowCasterTerm(
   const EngineGlMatrix& modelMatrix,
   CastClass castClass,
   const AreaSurface& surface);
+
+// the pixels a and b share
+std::int64_t atlasOverlap(const AtlasRect& a, const AtlasRect& b);
+
+/**
+ * LP3.3 (D146, D152; C62's "first fit"): the free space of a square map of tiles, the
+ * shape of the copied TileMap (TM:45-117): a quad tree of nodes down to minSize, a node's
+ * children in TileMap's order (BuildTree's offsets ( -s, s ), ( -s, -s ), ( s, -s ), ( s,
+ * s ): as top-left pixels ( x, y + c ), ( x, y ), ( x + c, y ), ( x + c, y + c ) for
+ * children of side c), so that a node's rect is the one ShadowAtlasPass computes for it
+ * (iPos = ( pos · 0.5 + 0.5 ) · size - side / 2, SC719). Unlike TileMap, which can only
+ * be cleared and filled largest first, a tile can be freed and any size asked for:
+ * allocate takes the first free node of the size's level (13 - ceil( log2( size ) ) on
+ * 8192) depth first in child order, free meaning neither taken, nor under a taken node,
+ * nor over one, so that over an empty map, asked in engineSortAtlasSizes' order (largest
+ * first), it gives the engine's packing (the test says so). reserve takes a given node (a
+ * placement of the engine's packing), release gives one back. Pure; its owner's thread.
+ */
+class ShadowTileAllocator
+{
+private:
+  struct Node
+  {
+    AtlasRect rect;
+    int parent = -1;
+    std::array<int, 4> children = {-1, -1, -1, -1};
+    bool taken = false;
+    // the taken nodes below it
+    std::size_t takenBelow = 0;
+  };
+
+  std::vector<Node> m_nodes;
+  int m_minSize = 0;
+  std::size_t m_taken = 0;
+
+public:
+  ShadowTileAllocator(int mapSize, int minSize);
+
+  // a free rect of size (a power of two from minSize to half the map; another size takes
+  // the next level's, as GetTile does), or none
+  std::optional<AtlasRect> allocate(int size);
+  // takes rect's node when it is one and free
+  bool reserve(const AtlasRect& rect);
+  // gives rect's node back when it is taken
+  void release(const AtlasRect& rect);
+  void clear();
+  // the tiles taken
+  std::size_t taken() const;
+
+private:
+  int build(const AtlasRect& rect, int parent);
+  int nodeOf(const AtlasRect& rect) const;
+  void take(int node);
+};
+
+/**
+ * LP3.3 (D147, P3.3): the parts of rect that none of covering covers, as squares of the
+ * quad tree (rect split in four until a part is uncovered or wholly covered, down to
+ * minSize): the vacated clears' rects, which leave every tile of the frame untouched.
+ * Rects are the atlas's nodes (aligned powers of two). Pure.
+ */
+std::vector<AtlasRect> uncoveredRects(
+  const AtlasRect& rect, std::span<const AtlasRect> covering, int minSize);
+
+// LP3.3 (D146, C61, P3.4): a tile moved from one rect to another of its size
+struct ShadowMove
+{
+  AtlasRect from;
+  AtlasRect to;
+
+  bool operator==(const ShadowMove&) const = default;
+};
+
+// one copy of a relocation: save (the atlas rect into the scratch rect) or restore (the
+// scratch rect into the atlas rect)
+struct ShadowCopy
+{
+  bool save = true;
+  AtlasRect atlas;
+  AtlasRect scratch;
+  // the move it serves
+  std::size_t move = 0;
+
+  bool operator==(const ShadowCopy&) const = default;
+};
+
+struct ShadowRelocationPlan
+{
+  // in execution order; the copies of one kind in a row are a phase (NVRHI's barriers
+  // fall between the phases: the atlas and the scratch change state there)
+  std::vector<ShadowCopy> copies;
+  // the moves the scratch cannot schedule: their tiles are drawn again instead
+  std::vector<std::size_t> redraw;
+};
+
+/**
+ * LP3.3 (D146, C61, P3.4b): the order of the copies that relocate moves through a
+ * scratch of scratchSize² (2048²: sixteen 512 tiles, four 1024): every source rect is
+ * copied to the scratch before any destination is written (all of them first when they
+ * fit: one save phase, one restore phase); when they do not, in batches, each saving its
+ * moves' sources and then writing their destinations, a move joining a batch only when
+ * every unsaved source its destination overlaps belongs to the batch too (so a batch
+ * never overwrites a source that has not been saved, and chains are moved from their free
+ * end), and a cycle, where no move can join, through one saved slot (one move's source
+ * saved and parked until its destination is free). A move the scratch cannot hold then
+ * goes to redraw. Pure.
+ */
+ShadowRelocationPlan planShadowRelocation(
+  std::span<const ShadowMove> moves, int scratchSize, int minSize);
 
 // LP3.3 (C61): one side's tile of a light's record
 struct ShadowTileRecord

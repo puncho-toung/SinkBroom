@@ -722,6 +722,9 @@ public:
    * with the field that disabled it; the session's report of its passes.
    */
   std::vector<ProgramReport> programReport() const;
+  // LP3.3 (D146, P3.4a), any thread: whether the device copies D32 images (the shadow
+  // atlas's relocated tiles are copied; else drawn again, and programReport says so)
+  bool shadowDepthCopyForTesting() const;
   /**
    * LP2.3 (D9), any thread: the last frame shown, for the panel's status line
    * (sessionStatusLine); a default status before the first frame and after teardown

@@ -260,6 +260,12 @@ Inspection inspect(const vk::PhysicalDevice device, const vk::SurfaceKHR surface
       vk::ImageCreateFlags{},
       &imageFormatProperties)
     == vk::Result::eSuccess;
+  // LP3.3 (D146, P3.4a): copyTexture D32 -> D32 (vkCmdCopyImage of the depth aspect)
+  const auto depthFormat = device.getFormatProperties(vk::Format::eD32Sfloat);
+  const auto copyFeatures = vk::FormatFeatureFlags{
+    vk::FormatFeatureFlagBits::eTransferSrc | vk::FormatFeatureFlagBits::eTransferDst};
+  choice.depthCopySupported =
+    (depthFormat.optimalTilingFeatures & copyFeatures) == copyFeatures;
 
   // swapchain format and FIFO (:701-747), asked only of a device that presents to the
   // surface, as the specification requires (the engine asks every device)

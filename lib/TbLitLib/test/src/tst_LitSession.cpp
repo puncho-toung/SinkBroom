@@ -16493,6 +16493,199 @@ TEST_CASE("LitSession shadow records on a GPU (LP3.3)", "[.][litgpu2]")
     saveHdrPng(on->hdr, "lp33_h_cache");
   }
 
+  // ---------------------------------------------------------------------------------
+  SECTION("(i) relocation at settle: a third light enters, the moved tiles copied")
+  {
+    // H01's room with a second point light and a parallel light, both around the camera;
+    // the parallel light cast-enabled or not
+    const auto camera = litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1});
+    const auto scene = [](const std::string& sunShadows) {
+      return lp3MapText("lp3_point.map")
+             + "// entity 4\n{\n\"classname\" \"light\"\n\"name\" \"lp3_point_b\"\n"
+               "\"origin\" \"-60 40 160\"\n\"light_radius\" \"400 400 400\"\n"
+               "\"_color\" \"1 1 1\"\n\"noshadows\" \"0\"\n}\n"
+             + fmt::format(
+               "// entity 5\n{{\n\"classname\" \"light\"\n\"name\" \"lp3_sun\"\n"
+               "\"origin\" \"-100 0 120\"\n\"light_radius\" \"220 220 110\"\n"
+               "\"light_center\" \"-60 20 200\"\n\"parallel\" \"1\"\n"
+               "\"_color\" \"1 1 1\"\n\"noshadows\" \"{}\"\n}}\n",
+               sunShadows);
+    };
+    const auto tilesOf = [](const ShadowFrame& frame) {
+      auto rects = std::map<std::pair<PreviewId, int>, AtlasRect>{};
+      for (const auto& record : frame.records)
+      {
+        const auto first = record.type == ShadowLightType::Spot ? -1 : 0;
+        for (auto side = first; side < first + record.sides; ++side)
+        {
+          if (record.placements[std::size_t(std::max(0, side))].placed)
+          {
+            rects[{record.light, side}] = tileOf(record, side);
+          }
+        }
+      }
+      return rects;
+    };
+    const auto sameTexels = [](
+                              const ShadowFrame& a,
+                              const AtlasRect& ra,
+                              const ShadowFrame& b,
+                              const AtlasRect& rb) {
+      REQUIRE(ra.size == rb.size);
+      auto differ = std::size_t{0};
+      for (auto y = 0; y < ra.size; ++y)
+      {
+        for (auto x = 0; x < ra.size; ++x)
+        {
+          differ += a.atlas.at(std::uint32_t(ra.x + x), std::uint32_t(ra.y + y))
+                    != b.atlas.at(std::uint32_t(rb.x + x), std::uint32_t(rb.y + y));
+        }
+      }
+      return differ;
+    };
+    const auto movesOf = [](const std::vector<LitDrawRecord>& log) {
+      return std::size_t(std::ranges::count_if(log, [](const LitDrawRecord& record) {
+        return record.pass == LitDrawRecord::Pass::ShadowMove;
+      }));
+    };
+
+    offer(scene("1"), "lp3_point.map");
+    const auto two = settledShadowFrame(*session, camera, 3, true);
+    REQUIRE(two);
+    REQUIRE(two->records.size() == 2u);
+    const auto before = tilesOf(*two);
+    CHECK(before.size() == 12u);
+
+    // the camera still past the still timer's delay: the next frames settle (C62)
+    std::this_thread::sleep_for(300ms);
+    offer(scene("0"), "lp3_point.map");
+    auto oldRects = std::vector<AtlasRect>{};
+    for (const auto& [side, rect] : before)
+    {
+      oldRects.push_back(rect);
+    }
+    const auto three = settledShadowFrame(*session, camera, 3, true, oldRects);
+    REQUIRE(three);
+    REQUIRE(three->records.size() == 3u);
+    // the layout is the engine's packing of the frame's sides (D145, D160: the copied
+    // code's tie orders, the parallel light's 1024 cascades first)
+    {
+      auto sizes = std::vector<EngineAtlasSize>{};
+      for (const auto& record : three->records)
+      {
+        for (auto s = 0; s < record.sides; ++s)
+        {
+          sizes.push_back(EngineAtlasSize{
+            EngineShadowMapResolutions[std::size_t(record.lod)],
+            EngineShadowMapResolutions[std::size_t(record.lod)]});
+        }
+      }
+      auto map = EngineTileMap{};
+      REQUIRE(map.init(8192, 1024, 8));
+      const auto expected = engineShadowAtlasLayout(map, sizes, 8192);
+      auto index = std::size_t{0};
+      auto mismatches = 0;
+      for (const auto& record : three->records)
+      {
+        for (auto s = 0; s < record.sides; ++s, ++index)
+        {
+          const auto& got = record.placements[std::size_t(s)];
+          mismatches += got.placed != expected[index].placed || got.x != expected[index].x
+                        || got.y != expected[index].y;
+        }
+      }
+      CHECK(mismatches == 0);
+    }
+    const auto after = tilesOf(*three);
+    auto moved = std::vector<std::pair<PreviewId, int>>{};
+    for (const auto& [side, rect] : before)
+    {
+      REQUIRE(after.contains(side));
+      if (after.at(side) != rect)
+      {
+        moved.push_back(side);
+      }
+    }
+    CHECK(moved.size() > 0u);
+    // the path the device takes (P3.4a): the copies, or the fallback's redraws
+    const auto copies = session->shadowDepthCopyForTesting();
+    auto pointLights = std::set<PreviewId>{};
+    for (const auto& [side, rect] : before)
+    {
+      pointLights.insert(side.first);
+    }
+    auto pointClears = std::size_t{0};
+    for (const auto light : pointLights)
+    {
+      pointClears += tileClearsOf(three->drawLog, light);
+    }
+    if (copies)
+    {
+      CHECK(movesOf(three->drawLog) == moved.size());
+      CHECK(pointClears == 0u);
+    }
+    else
+    {
+      CHECK(movesOf(three->drawLog) == 0u);
+      CHECK(pointClears > 0u);
+      CHECK(std::ranges::any_of(session->programReport(), [](const ProgramReport& r) {
+        return r.name == "shadow atlas relocation" && !r.enabled;
+      }));
+    }
+    // bytes equal after a move (D160)
+    auto differing = std::size_t{0};
+    for (const auto& side : moved)
+    {
+      differing += sameTexels(*two, before.at(side), *three, after.at(side));
+    }
+    CHECK(differing == 0u);
+    std::cout << fmt::format(
+      "LP3.3 (i) relocation: {} of 12 tiles moved when the parallel light entered, the "
+      "device copies D32 {}, {} moves logged, {} point-light tile clears, {} texels "
+      "differing\n",
+      moved.size(),
+      copies,
+      movesOf(three->drawLog),
+      pointClears,
+      differing);
+    saveAtlasPng(three->atlas, "lp33_i_relocated");
+    saveHdrPng(three->hdr, "lp33_i_relocated");
+
+    // the fallback (P3.4a) on this device: the copy off, the parallel light leaving moves
+    // the point lights' tiles back, drawn again; their texels as at first
+    REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+      access.passes.setShadowDepthCopyForTesting(false);
+    }));
+    std::this_thread::sleep_for(300ms);
+    offer(scene("1"), "lp3_point.map");
+    const auto back = settledShadowFrame(*session, camera, 3, true);
+    REQUIRE(back);
+    REQUIRE(back->records.size() == 2u);
+    const auto again = tilesOf(*back);
+    CHECK(again == before);
+    CHECK(movesOf(back->drawLog) == 0u);
+    auto redrawn = std::size_t{0};
+    for (const auto light : pointLights)
+    {
+      redrawn += tileClearsOf(back->drawLog, light);
+    }
+    CHECK(redrawn >= moved.size());
+    auto differingBack = std::size_t{0};
+    for (const auto& [side, rect] : before)
+    {
+      differingBack += sameTexels(*two, rect, *back, again.at(side));
+    }
+    CHECK(differingBack == 0u);
+    std::cout << fmt::format(
+      "LP3.3 (i) fallback: {} point-light tile clears with the copy off, {} texels "
+      "differing from the first layout's\n",
+      redrawn,
+      differingBack);
+    REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+      access.passes.setShadowDepthCopyForTesting(true);
+    }));
+  }
+
   std::cout << fmt::format(
     "LP3.3 shadow records on a GPU: {:.1f} s\n",
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());

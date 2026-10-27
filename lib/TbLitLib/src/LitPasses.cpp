@@ -1818,6 +1818,10 @@ namespace
 // LP3.1 (C59): the atlas's format and its framebuffer's (FBN:136-138: depth only)
 constexpr auto AtlasFormat = nvrhi::Format::D32;
 constexpr auto AtlasFormats = FramebufferFormats{nvrhi::Format::UNKNOWN, AtlasFormat};
+// LP3.3 (D146, P3.4): the relocation scratch's side, and the atlas's smallest node (the
+// tile map's eighth level: 8192 / 128)
+constexpr auto ShadowScratchSize = 2048;
+constexpr auto AtlasMinTile = 64;
 // NUM_QUAD_TREE_LEVELS (RenderBackend_NVRHI.cpp:207-215)
 constexpr auto AtlasQuadTreeLevels = 8u;
 
@@ -1880,16 +1884,6 @@ EngineShadowLight shadowLightOf(const ViewLight& light)
   shadowLight.parallel = record.light.parms.parallel;
   shadowLight.lightCenter = record.light.parms.lightCenter;
   return shadowLight;
-}
-
-// the pixels a and b share
-std::int64_t overlapArea(const AtlasRect& a, const AtlasRect& b)
-{
-  const auto x0 = std::max(a.x, b.x);
-  const auto y0 = std::max(a.y, b.y);
-  const auto x1 = std::min(a.x + a.size, b.x + b.size);
-  const auto y1 = std::min(a.y + a.size, b.y + b.size);
-  return x1 > x0 && y1 > y0 ? std::int64_t(x1 - x0) * std::int64_t(y1 - y0) : 0;
 }
 
 } // namespace
@@ -2010,7 +2004,13 @@ void LitPasses::recordShadowAtlas(Frame& frame)
     AtlasRect rect;
     bool draw = true;
     EngineShadowSideMatrices matrices;
+    // LP3.3 (D146, C61): relocated from this rect (its record and matrices unchanged)
+    std::optional<AtlasRect> from;
   };
+  // LP3.3 (D146, P3.4a): tiles are copied when the device copies D32 images and the
+  // scratch was made (else a moved tile is drawn again: programReport() says so)
+  const auto canCopy =
+    frame.inputs->depthCopy && !m_depthCopyOff && m_relocationScratch != nullptr;
   auto tiles = std::vector<TileWork>{};
   auto current = std::vector<AtlasRect>{};
   {
@@ -2052,10 +2052,16 @@ void LitPasses::recordShadowAtlas(Frame& frame)
         work.rect = rect;
         work.matrices = engineShadowMapMatrices(
           shadowLightOf(m_lists.lights[record.index]), side, shadowView, m_splitFrustums);
-        work.draw =
-          !(sameKey && tile.placed && tile.valid && tile.rect == rect
-            && tile.shadowV == work.matrices.shadowV
-            && tile.shadowP == work.matrices.shadowP);
+        const auto unchanged = sameKey && tile.placed && tile.valid
+                               && tile.shadowV == work.matrices.shadowV
+                               && tile.shadowP == work.matrices.shadowP;
+        work.draw = !unchanged || (tile.rect != rect && !canCopy);
+        if (!work.draw && tile.rect != rect)
+        {
+          // D146: its record and matrices unchanged, its position not: copied at settle
+          work.from = tile.rect;
+          tile.rect = rect;
+        }
         if (work.draw)
         {
           tile = ShadowTileRecord{};
@@ -2072,20 +2078,43 @@ void LitPasses::recordShadowAtlas(Frame& frame)
     }
   }
 
-  // P3.3: the rects last run's tiles occupied that this run's tiles do not cover (a
-  // cached tile's rect was its own last run, so none of them is inside one)
+  // LP3.3 (D146, C61, P3.4): the relocations, through the scratch in the permutation
+  // order; a move the scratch cannot schedule is drawn again
+  auto moves = std::vector<ShadowMove>{};
+  auto moved = std::vector<std::pair<PreviewId, int>>{};
+  auto moveOf = std::vector<std::size_t>{};
+  for (std::size_t t = 0; t < tiles.size(); ++t)
+  {
+    if (tiles[t].from)
+    {
+      moves.push_back(ShadowMove{*tiles[t].from, tiles[t].rect});
+      moved.emplace_back(m_shadowRecords[tiles[t].record].light, tiles[t].side);
+      moveOf.push_back(t);
+    }
+  }
+  const auto relocation = planShadowRelocation(moves, ShadowScratchSize, AtlasMinTile);
+  for (const auto m : relocation.redraw)
+  {
+    auto& work = tiles[moveOf[m]];
+    work.draw = true;
+    work.from.reset();
+    auto& tile = m_shadowCache.record(m_shadowRecords[work.record].light)
+                   .tiles[std::size_t(std::max(0, work.side))];
+    tile = ShadowTileRecord{};
+    tile.placed = true;
+    tile.rect = work.rect;
+  }
+
+  // P3.3: the parts of the rects last run's tiles occupied that this run's tiles do not
+  // cover (LP3.3: never a part of this run's tiles, the moved ones' among them, which are
+  // written before the clears: D146's order)
   auto vacated = std::vector<AtlasRect>{};
+  auto vacatedRects = std::size_t{0};
   for (const auto& rect : m_atlasOccupied)
   {
-    auto covered = std::int64_t{0};
-    for (const auto& tile : current)
-    {
-      covered += overlapArea(rect, tile);
-    }
-    if (covered < std::int64_t(rect.size) * std::int64_t(rect.size))
-    {
-      vacated.push_back(rect);
-    }
+    const auto parts = uncoveredRects(rect, current, AtlasMinTile);
+    vacatedRects += parts.empty() ? 0 : 1;
+    vacated.insert(vacated.end(), parts.begin(), parts.end());
   }
   // the perforated casters a light that takes tiles leaves out until LP3.4 (D155);
   // LP3.3 (C61): the lights with a caster whose light triangles are not known yet (it is
@@ -2163,7 +2192,7 @@ void LitPasses::recordShadowAtlas(Frame& frame)
     m_shadowCache.clear();
   };
   const auto anyDrawn = std::ranges::any_of(tiles, &TileWork::draw);
-  if (!anyDrawn && vacated.empty())
+  if (!anyDrawn && vacated.empty() && relocation.copies.empty())
   {
     // nothing to record: every tile cached (or none placed)
     m_stats.tilesCached = tiles.size();
@@ -2188,7 +2217,13 @@ void LitPasses::recordShadowAtlas(Frame& frame)
   m_currentSpace.reset();
   auto disabled = false;
 
-  // D147, P3.3: the vacated rects first, each by a far-plane quad
+  // LP3.3 (D146, P3.4): the order of work: the moves, then the vacated clears, then the
+  // redraws
+  if (!relocation.copies.empty())
+  {
+    relocateTiles(frame, relocation, moved);
+  }
+  // D147, P3.3: the vacated rects, each part by a far-plane quad
   for (const auto& rect : vacated)
   {
     if (!clearAtlasRect(atlasFrame, rect, NoPreviewId, -1))
@@ -2196,8 +2231,8 @@ void LitPasses::recordShadowAtlas(Frame& frame)
       disabled = true;
       break;
     }
-    ++m_stats.tilesVacated;
   }
+  m_stats.tilesVacated = vacatedRects;
 
   // then each placed side, in loop 2's order: a cached one is left as it is; another gets
   // its far-plane clear, then its draws
@@ -2208,7 +2243,10 @@ void LitPasses::recordShadowAtlas(Frame& frame)
     const auto slice = std::size_t(std::max(0, work.side));
     if (!work.draw)
     {
-      ++m_stats.tilesCached;
+      if (!work.from)
+      {
+        ++m_stats.tilesCached;
+      }
       continue;
     }
     if (!clearAtlasRect(atlasFrame, work.rect, record.light, work.side))
@@ -2300,7 +2338,64 @@ bool LitPasses::ensureShadowAtlas(Frame& frame)
   m_atlas = std::move(atlas);
   m_atlasFramebuffer = std::move(framebuffer);
   m_atlasOccupied.clear();
+  // LP3.3 (D146, P3.4): the relocation scratch, 2048² D32 (sixteen 512 tiles, four 1024),
+  // copies only (its initial state CopyDest, kept); none without D32 copies (P3.4a)
+  if (frame.inputs->depthCopy)
+  {
+    auto scratchDesc = nvrhi::TextureDesc{};
+    scratchDesc.width = ShadowScratchSize;
+    scratchDesc.height = ShadowScratchSize;
+    scratchDesc.format = AtlasFormat;
+    scratchDesc.debugName = "Lit preview shadow relocation scratch";
+    scratchDesc.isShaderResource = false;
+    scratchDesc.initialState = nvrhi::ResourceStates::CopyDest;
+    scratchDesc.keepInitialState = true;
+    m_relocationScratch = device.createTexture(scratchDesc);
+  }
   return true;
+}
+
+void LitPasses::relocateTiles(
+  Frame& frame,
+  const ShadowRelocationPlan& plan,
+  const std::span<const std::pair<PreviewId, int>> moved)
+{
+  auto& commandList = *frame.inputs->commandList;
+  const auto slice = [](const AtlasRect& rect) {
+    return nvrhi::TextureSlice{}
+      .setOrigin(std::uint32_t(rect.x), std::uint32_t(rect.y), 0)
+      .setWidth(std::uint32_t(rect.size))
+      .setHeight(std::uint32_t(rect.size));
+  };
+  for (const auto& copy : plan.copies)
+  {
+    if (copy.save)
+    {
+      commandList.copyTexture(
+        m_relocationScratch, slice(copy.scratch), m_atlas, slice(copy.atlas));
+      continue;
+    }
+    commandList.copyTexture(
+      m_atlas, slice(copy.atlas), m_relocationScratch, slice(copy.scratch));
+    ++m_stats.tilesRelocated;
+    m_stats.atlasBytesWritten +=
+      std::uint64_t(copy.atlas.size) * std::uint64_t(copy.atlas.size) * sizeof(float);
+    if (m_logDraws)
+    {
+      auto record = LitDrawRecord{};
+      record.pass = LitDrawRecord::Pass::ShadowMove;
+      record.light = moved[copy.move].first;
+      record.side = moved[copy.move].second;
+      record.scissor = nvrhi::Rect{
+        copy.atlas.x,
+        copy.atlas.x + copy.atlas.size,
+        copy.atlas.y,
+        copy.atlas.y + copy.atlas.size};
+      m_drawLog.push_back(std::move(record));
+    }
+  }
+  // nvrhi rules 6 and 7: the copies end the render pass
+  m_state.valid = false;
 }
 
 void LitPasses::setAtlasViewport(Frame& frame, const AtlasRect& rect)
@@ -4148,6 +4243,16 @@ const ShadowCache& LitPasses::shadowCache() const
   return m_shadowCache;
 }
 
+std::uint64_t LitPasses::shadowScratchBytes() const
+{
+  if (!m_relocationScratch)
+  {
+    return 0;
+  }
+  const auto& desc = m_relocationScratch->getDesc();
+  return std::uint64_t(desc.width) * std::uint64_t(desc.height) * sizeof(float);
+}
+
 nvrhi::ITexture* LitPasses::shadowAtlas() const
 {
   return m_atlas.Get();
@@ -4168,8 +4273,10 @@ void LitPasses::releaseAll()
   m_atlasOccupied.clear();
   m_shadowRecords.clear();
   m_shadowRecordOf.clear();
-  // LP3.3 (C61, A46): the records go with the session (documentWasLoaded stops it, D41)
+  // LP3.3 (C61, A46): the records go with the session (documentWasLoaded stops it, D41),
+  // the relocation scratch with the atlas
   m_shadowCache.clear();
+  m_relocationScratch = nullptr;
   m_bakeTree = nullptr;
   m_bakeAreas = nullptr;
   m_clearQuadVertices = nullptr;
@@ -4224,6 +4331,11 @@ void LitPasses::setSkipShadowsForTesting(const bool on)
 void LitPasses::invalidateShadowTilesForTesting()
 {
   m_shadowCache.invalidateTiles();
+}
+
+void LitPasses::setShadowDepthCopyForTesting(const bool on)
+{
+  m_depthCopyOff = !on;
 }
 
 void LitPasses::setDrawLogForTesting(const bool on)

@@ -124,6 +124,9 @@ struct LitFrameInputs
   nvrhi::ITimerQuery* fogTimer = nullptr;
   // LP3.1 (C59, C16): pass 6's (ShadowAtlasPass), or null
   nvrhi::ITimerQuery* shadowTimer = nullptr;
+  // LP3.3 (D146, P3.4a): the device copies D32 images (GpuChoice::depthCopySupported):
+  // a tile relocated at settle is copied through the scratch; else it is drawn again
+  bool depthCopy = false;
   // LP5.2a (C47, D9): the game folder whose renderprogs2/spirv holds a newStage
   // program's blobs (SessionOptions::gamePath)
   std::filesystem::path gamePath;
@@ -372,6 +375,8 @@ struct LitDrawRecord
     // casters' depth draws
     ShadowClear,
     Shadow,
+    // LP3.3 (D146): a tile relocated (copied to its new rect through the scratch)
+    ShadowMove,
   };
 
   Pass pass = Pass::Prepass;
@@ -692,6 +697,11 @@ private:
   // count moved whenever the scene's tree or AreaData pointer changes (a bake arriving,
   // changing or going)
   ShadowCache m_shadowCache;
+  // LP3.3 (D146, P3.4, §3.10's render-target line): the 2048² D32 scratch tiles are
+  // relocated through, made with the atlas when the device copies D32 images and released
+  // with it; the copy switched off (a test's: the fallback's redraw)
+  nvrhi::TextureHandle m_relocationScratch;
+  bool m_depthCopyOff = false;
   std::uint64_t m_bakeGeneration = 0;
   const void* m_bakeTree = nullptr;
   const void* m_bakeAreas = nullptr;
@@ -738,6 +748,9 @@ public:
   nvrhi::ITexture* shadowAtlas() const;
   // LP3.3 (C61), render thread: the records kept across frames (tests)
   const ShadowCache& shadowCache() const;
+  // LP3.3 (D146, A49), render thread: the relocation scratch's bytes once it is made
+  // (2048² × 4, 16 MB), 0 before
+  std::uint64_t shadowScratchBytes() const;
 
   // teardown step 2: every handle
   void releaseAll();
@@ -767,6 +780,9 @@ public:
   // LP3.3 (C61, D160's cached-vs-fresh test): every kept tile is drawn again at the next
   // frame that runs pass 6, as if its light's record had changed
   void invalidateShadowTilesForTesting();
+  // LP3.3 (D146, P3.4a): off, a tile relocated at settle is drawn again instead of copied
+  // (the fallback of a device that cannot copy D32 images)
+  void setShadowDepthCopyForTesting(bool on);
   const std::vector<LitDrawRecord>& drawLogForTesting() const;
   // the pipeline keys the draws asked for while the log was on, also those of skipped
   // draws (a pending pipeline)
@@ -803,8 +819,18 @@ private:
   // LP3.1: the atlas and its framebuffer, made at the first call and cleared whole into
   // the frame's command list (Image_intrinsic.cpp:672-675: TD_DEPTH at 8192², a render
   // target; IN:556-566: initial state DepthWrite, clear value 1); false when it cannot be
-  // made (said once)
+  // made (said once). LP3.3 (D146): and the relocation scratch, when the device copies
+  // D32 images (no scratch: moved tiles are drawn again)
   bool ensureShadowAtlas(Frame& frame);
+  /**
+   * LP3.3 (D146, C61, P3.4): the copies of plan through the scratch, in its order (its
+   * saves atlas → scratch, its restores scratch → atlas: copyTexture D32 → D32, NVRHI's
+   * barriers between the phases), each move logged with its light and side.
+   */
+  void relocateTiles(
+    Frame& frame,
+    const ShadowRelocationPlan& plan,
+    std::span<const std::pair<PreviewId, int>> moved);
   // LP3.1 (D147): a far-plane quad over rect of the atlas, under builtin/depth with the
   // identity MVP, DEPTHFUNC_ALWAYS | CULL_TWOSIDED and no offset: depth 1.0 under the
   // rect's viewport and scissor; false when the pass is disabled

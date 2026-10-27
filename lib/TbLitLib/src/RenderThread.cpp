@@ -188,9 +188,10 @@ GpuMemoryAccount accountGpuMemory(
   auto account = GpuMemoryAccount{};
   account.arenaBytes = arenas.capacityBytes();
   account.textureBytes = images.textureBytes();
-  // LP3.1 (A49): the shadow atlas on the render-target line once it is made (256 MB)
-  account.renderTargetBytes =
-    frame.renderTargetBytes() + frame.bufferBytes() + passes.shadowAtlasBytes();
+  // LP3.1 (A49): the shadow atlas on the render-target line once it is made (256 MB);
+  // LP3.3 (D146): and its relocation scratch (16 MB)
+  account.renderTargetBytes = frame.renderTargetBytes() + frame.bufferBytes()
+                              + passes.shadowAtlasBytes() + passes.shadowScratchBytes();
   account.releasedBytes = frame.retiredBytes() + images.retiredBytes();
   // U2.6: the volatile buffers are host-visible (NVRHI allocates them for CPU writes);
   // the rest of the host-visible bytes is the upload pool and a readback's staging
@@ -1359,6 +1360,8 @@ bool RenderThread::recordLitPasses(
   inputs.fogTimer = m_timers.query(slot, TimedPass::Fog);
   // LP3.1 (D157): pass 6's
   inputs.shadowTimer = m_timers.query(slot, TimedPass::Shadows);
+  // LP3.3 (D146, P3.4a): relocated tiles are copied when the device copies D32 images
+  inputs.depthCopy = m_device.gpu().depthCopySupported;
   inputs.gamePath = m_options.gamePath;
   inputs.afterPrepass = [this] { runDebugHook(DebugHook::AfterPrepass); };
   // C38 (LP4.2b): r_skipInteractions 1's stand-in, a test's switch
