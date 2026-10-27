@@ -23,7 +23,8 @@
 // wrote (SC249), and every permutation the preview may load, pushed or not, reflects
 // equal to the mirrored tables (D9, C26). LP4.2a (C35) adds the ambient pass's four
 // programs (4 and 6 the probe path, 8 and 10 the light grid's) and set 9; LP5.0 the
-// programs of passes 7-9 and the cube and sky texgens, with sets 5, 7, 8 and 12.
+// programs of passes 7-9 and the cube and sky texgens, with sets 5, 7, 8 and 12; LP3.0
+// (C60) the six non-skinned shadow-atlas interactionSM programs and set 11.
 
 #include "lit/EngineTables.h"
 #include "lit/ShaderBlobs.h"
@@ -653,6 +654,104 @@ TEST_CASE("Retail shaders: the material programs and set 8 (LP5.0)", "[.][retail
   // C47 said every one but vornoipattern; fogwithlights' HLSL declares t_CurrentRender
   // (fogwithlights.ps.hlsl:35) and never samples it, so its blobs do not bind it
   CHECK(readers.size() == 10u);
+}
+
+TEST_CASE(
+  "Retail shaders: the shadow-atlas interactionSM programs and set 11 (LP3.0)",
+  "[.][retail]")
+{
+  const auto gamePath = retailGamePath();
+  if (!gamePath)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the shader test needs the game folder");
+  }
+
+  // C60, D9 (P3.24e: no skinned set): the rows LP3.1 selects, _atlas_{spot|point|
+  // parallel}[_PBR] (RenderProgs.cpp:851-867), each with USE_PUSH_CONSTANTS 0 only: set
+  // 11's 1088 bytes pass no desktop budget (pcEnabled false, C30), so the engine never
+  // loads the pushed permutation; both stages reflect equal to DRAW_INTERACTION_SM's
+  // table (descriptor names' sets and bindings, the constant buffer's members by name and
+  // offset and its size), and every item of the table is declared by a stage
+  using L = EngineBindingLayout;
+  const auto table = engineParmSetBlock(11);
+  REQUIRE(table.members.size() == 68u);
+  REQUIRE(table.size == 1088u);
+  REQUIRE_FALSE(enginePushConstantsEnabled(
+    L::DrawInteractionSm, enginePushConstantLimit(4096), 0x10DE));
+
+  auto checked = 0;
+  auto blocks = 0;
+  for (const auto index : {39, 41, 43, 45, 47, 49})
+  {
+    const auto& builtin = *engineBuiltin(index);
+    CAPTURE(builtin.name, builtin.nameOutSuffix);
+    REQUIRE(builtin.bindingLayout == L::DrawInteractionSm);
+    REQUIRE_FALSE(builtin.requireGPUSkinningSupport);
+    REQUIRE(engineParmSetOfLayout(builtin.bindingLayout) == 11);
+
+    auto stages = std::vector<ShaderReflection>{};
+    for (const auto stage : stagesOf(builtin))
+    {
+      CAPTURE(shaderStageSuffix(stage));
+      const auto blob = readShaderBlob(*gamePath, builtin.name, stage);
+      REQUIRE(blob.is_success());
+      // C2: the keys on disk name the row's defines in its order
+      auto names = std::vector<std::string>{};
+      for (const auto& define : engineBuiltinDefines(builtin, false))
+      {
+        names.push_back(define.name);
+      }
+      for (const auto& key : shaderBlobKeys(blob.value()))
+      {
+        CHECK(keyNames(key) == names);
+      }
+      const auto code =
+        findShaderPermutation(blob.value(), engineBuiltinDefines(builtin, false));
+      REQUIRE(code.is_success());
+      const auto reflection = reflectSpirv(code.value());
+      REQUIRE(reflection.is_success());
+      const auto expected = engineExpectedLayout(builtin, false);
+      REQUIRE(expected);
+      const auto difference = compareReflection(reflection.value(), *expected);
+      CHECK_FALSE(difference);
+      if (difference)
+      {
+        std::cout << builtin.name << builtin.nameOutSuffix << "."
+                  << shaderStageSuffix(stage) << ": " << *difference << "\n";
+      }
+      CHECK_FALSE(reflection.value().pushConstants);
+      for (const auto& binding : reflection.value().bindings)
+      {
+        if (binding.set == 0 && binding.binding == 256 && binding.block)
+        {
+          const auto& uniforms = *binding.block;
+          REQUIRE(uniforms.members.size() == table.members.size());
+          for (std::size_t i = 0; i < table.members.size(); ++i)
+          {
+            CHECK(uniforms.members[i].name == table.members[i].name);
+            CHECK(uniforms.members[i].offset == table.members[i].offset);
+          }
+          CHECK(uniforms.size == 1088u);
+          ++blocks;
+        }
+      }
+      stages.push_back(reflection.value());
+      ++checked;
+    }
+    const auto expected = engineExpectedLayout(builtin, false);
+    REQUIRE(expected);
+    const auto uncovered = compareLayoutCoverage(stages, *expected);
+    CHECK_FALSE(uncovered);
+    if (uncovered)
+    {
+      std::cout << builtin.name << builtin.nameOutSuffix << ": " << *uncovered << "\n";
+    }
+  }
+  std::cout << "LP3.0: reflected and compared " << checked
+            << " interactionSM permutations, " << blocks << " set 11 blocks\n";
+  // six programs of two stages, not pushed: the twelve blobs' permutations
+  CHECK(checked == 12);
+  CHECK(blocks > 0);
 }
 
 } // namespace tb::lit

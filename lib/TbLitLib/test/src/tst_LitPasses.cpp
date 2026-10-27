@@ -194,7 +194,8 @@ TEST_CASE("LitPasses: RenderParms mirror SetUniformValue and SelectUniforms (SC2
            {EngineBindingLayout::ConstantBufferOnly, 0},
            {EngineBindingLayout::Texture, 4},
            {EngineBindingLayout::AmbientLightingIbl, 9},
-           {EngineBindingLayout::DrawInteraction, 10}})
+           {EngineBindingLayout::DrawInteraction, 10},
+           {EngineBindingLayout::DrawInteractionSm, 11}})
     {
       CAPTURE(set);
       auto out = std::array<float, MaxParmSetFloat4s * 4>{};

@@ -191,6 +191,9 @@ TEST_CASE("EngineTables")
     }
     CHECK(engineParmSetMembers(6).empty());
     CHECK(engineParmSetMembers(14).empty());
+    // LP3.0 (C60): set 11, rpMaximalSet11's 68
+    CHECK(engineParmSetMembers(11).size() == std::size_t(EngineParmSetSizes[11]));
+    CHECK(engineParmSetMembers(11).size() == 68u);
 
     CHECK(engineParmSetBlock(0).size == 128u);
     CHECK(engineParmSetBlock(4).size == 256u);
@@ -204,7 +207,7 @@ TEST_CASE("EngineTables")
     CHECK(engineParmSetBlock(8).size == 208u);
     CHECK(engineParmSetBlock(12).size == 256u);
 
-    for (const auto set : {0, 4, 5, 7, 8, 9, 10, 12})
+    for (const auto set : {0, 4, 5, 7, 8, 9, 10, 11, 12})
     {
       CAPTURE(set);
       const auto block = engineParmSetBlock(set);
@@ -428,6 +431,113 @@ TEST_CASE("EngineTables")
     CHECK(
       folded("rpBumpMatrixS", "rp") != folded("RENDERPARM_BUMPMATRIX_T", "RENDERPARM_"));
 
+    // LP3.0 (C60, SC730, P3.29): set 11, RenderProgs.h:301 rpMaximalSet11 as the engine
+    // spells it, in renderParmSet11.inc.hlsl:32-87's order; its two arrays' elements are
+    // named rpShadowMatrices[4 · side + row] (RENDERPARM_SHADOW_MATRIX_<side>_<row>) and
+    // rpShadowAtlasOffsets[side], the other members by the folding rule
+    {
+      auto list = std::vector<std::string>{
+        "RENDERPARM_SCREENCORRECTIONFACTOR",
+        "RENDERPARM_DIFFUSEMODIFIER",
+        "RENDERPARM_SPECULARMODIFIER",
+        "RENDERPARM_LOCALLIGHTORIGIN",
+        "RENDERPARM_LOCALVIEWORIGIN",
+        "RENDERPARM_LIGHTPROJECTION_S",
+        "RENDERPARM_LIGHTPROJECTION_T",
+        "RENDERPARM_LIGHTPROJECTION_Q",
+        "RENDERPARM_LIGHTFALLOFF_S",
+        "RENDERPARM_BUMPMATRIX_S",
+        "RENDERPARM_BUMPMATRIX_T",
+        "RENDERPARM_DIFFUSEMATRIX_S",
+        "RENDERPARM_DIFFUSEMATRIX_T",
+        "RENDERPARM_SPECULARMATRIX_S",
+        "RENDERPARM_SPECULARMATRIX_T",
+        "RENDERPARM_VERTEXCOLOR_MODULATE",
+        "RENDERPARM_VERTEXCOLOR_ADD",
+        "RENDERPARM_MVPMATRIX_X",
+        "RENDERPARM_MVPMATRIX_Y",
+        "RENDERPARM_MVPMATRIX_Z",
+        "RENDERPARM_MVPMATRIX_W",
+        "RENDERPARM_MODELMATRIX_X",
+        "RENDERPARM_MODELMATRIX_Y",
+        "RENDERPARM_MODELMATRIX_Z",
+        "RENDERPARM_MODELMATRIX_W",
+        "RENDERPARM_PROJMATRIX_W",
+        "RENDERPARM_MODELVIEWMATRIX_X",
+        "RENDERPARM_MODELVIEWMATRIX_Y",
+        "RENDERPARM_MODELVIEWMATRIX_Z",
+        "RENDERPARM_MODELVIEWMATRIX_W",
+        "RENDERPARM_GLOBALLIGHTORIGIN",
+        "RENDERPARM_JITTERTEXSCALE",
+        "RENDERPARM_JITTERTEXOFFSET",
+        "RENDERPARM_PSX_DISTORTIONS",
+        "RENDERPARM_CASCADEDISTANCES",
+      };
+      for (auto side = 0; side < 6; ++side)
+      {
+        for (const auto* row : {"X", "Y", "Z", "W"})
+        {
+          list.push_back("RENDERPARM_SHADOW_MATRIX_" + std::to_string(side) + "_" + row);
+        }
+      }
+      for (auto side = 0; side < 6; ++side)
+      {
+        list.push_back("RENDERPARM_SHADOW_ATLAS_OFFSET_" + std::to_string(side));
+      }
+      list.insert(
+        list.end(), {"RENDERPARM_USER0", "RENDERPARM_USER1", "RENDERPARM_USER2"});
+      const auto members = engineParmSetMembers(11);
+      REQUIRE(members.size() == list.size());
+      for (std::size_t i = 0; i < members.size(); ++i)
+      {
+        CAPTURE(i, members[i].shaderName);
+        CHECK(renderParmName(members[i].parm) == list[i]);
+        if (i >= 35 && i < 59)
+        {
+          CHECK(
+            members[i].shaderName == "rpShadowMatrices[" + std::to_string(i - 35) + "]");
+        }
+        else if (i >= 59 && i < 65)
+        {
+          CHECK(
+            members[i].shaderName
+            == "rpShadowAtlasOffsets[" + std::to_string(i - 59) + "]");
+        }
+        else
+        {
+          CHECK(
+            folded(members[i].shaderName, "rp")
+            == folded(renderParmName(members[i].parm), "RENDERPARM_"));
+        }
+      }
+      // the byte offsets of SC730 (P3.29: the matrices end at 943)
+      const auto block = engineParmSetBlock(11);
+      REQUIRE(block.members.size() == 68u);
+      CHECK(block.size == 1088u);
+      CHECK(block.members[0] == EngineConstantMember{"rpScreenCorrectionFactor", 0});
+      CHECK(block.members[31] == EngineConstantMember{"rpJitterTexScale", 496});
+      CHECK(block.members[32] == EngineConstantMember{"rpJitterTexOffset", 512});
+      CHECK(block.members[34] == EngineConstantMember{"rpCascadeDistances", 544});
+      CHECK(block.members[35] == EngineConstantMember{"rpShadowMatrices[0]", 560});
+      CHECK(block.members[58] == EngineConstantMember{"rpShadowMatrices[23]", 928});
+      CHECK(block.members[59] == EngineConstantMember{"rpShadowAtlasOffsets[0]", 944});
+      CHECK(block.members[64] == EngineConstantMember{"rpShadowAtlasOffsets[5]", 1024});
+      CHECK(block.members[65] == EngineConstantMember{"rpUser0", 1040});
+      CHECK(block.members[67] == EngineConstantMember{"rpUser2", 1072});
+      // the shadow rows are contiguous in the enum, as SetVertexParms writes them
+      for (auto i = 0; i < 24; ++i)
+      {
+        CHECK(
+          int(members[std::size_t(35 + i)].parm) == int(RenderParm::ShadowMatrix0X) + i);
+      }
+      for (auto i = 0; i < 6; ++i)
+      {
+        CHECK(
+          int(members[std::size_t(59 + i)].parm)
+          == int(RenderParm::ShadowAtlasOffset0) + i);
+      }
+    }
+
     CHECK(
       engineParmSetBlock(10).members[3] == EngineConstantMember{"rpLocalViewOrigin", 48});
     CHECK(engineParmSetBlock(10).members[24] == EngineConstantMember{"rpUser2", 384});
@@ -574,6 +684,10 @@ TEST_CASE("EngineTables")
     CHECK(setCount(engineBindingLayoutDescs(L::AmbientLightingIblSkinned, true)) == 4u);
     CHECK_FALSE(engineBindingLayoutDescs(L::Debug, false));
     CHECK_FALSE(engineBindingLayoutDescs(L::OctahedronCube, false));
+    // LP3.0 (C60): DRAW_INTERACTION_SM's four sets; no skinned form (P3.24e)
+    CHECK(setCount(engineBindingLayoutDescs(L::DrawInteractionSm, false)) == 4u);
+    CHECK_FALSE(engineBindingLayoutDescs(L::DrawInteractionSmSkinned, false));
+    CHECK_FALSE(engineBindingSetShape(L::DrawInteractionSmSkinned));
 
     // the uniforms item: push constants of the set's size, or a volatile buffer at b0
     const auto pushed = *engineBindingLayoutDescs(L::Texture, true);
@@ -727,6 +841,18 @@ TEST_CASE("EngineTables")
         {V::Pixel, {t(0), t(1), t(2)}},
         {V::Pixel, {t(3), t(4)}},
         {V::Pixel, {s(0, C::AnisotropicWrap), s(1, C::LinearBorder)}}}},
+      // LP3.0 (C60, SC728): :530-550, :1082-1181 (rows 39, 41, 43, 45, 47, 49 and the
+      // non-atlas 27-37); t5 the atlas, t6 _blueNoise256; s2 LinearClampCompare, s3 the
+      // blue noise's PointWrap
+      {L::DrawInteractionSm,
+       {{V::All, {U}},
+        {V::Pixel, {t(0), t(1), t(2)}},
+        {V::Pixel, {t(3), t(4), t(5), t(6)}},
+        {V::Pixel,
+         {s(0, C::AnisotropicWrap),
+          s(1, C::LinearBorder),
+          s(2, C::LinearClampCompare),
+          s(3, C::PointWrap)}}}},
       // the earlier ones, for their binding sets: :432 and :586-623, :521 and :916-996
       {L::Texture, {{V::All, {U}}, {V::Pixel, {t(0)}}, {V::Pixel, {own}}}},
       {L::DrawInteraction,
@@ -749,6 +875,7 @@ TEST_CASE("EngineTables")
       {L::DrawInteractionSkinned, 400},
       {L::Texture, 256},
       {L::DrawInteraction, 400},
+      {L::DrawInteractionSm, 1088},
     };
 
     for (const auto& [layout, wantSets] : transcription)
@@ -861,6 +988,15 @@ TEST_CASE("EngineTables")
     CHECK(linearBorder.addressV == A::Border);
     CHECK(linearBorder.borderColor == nvrhi::Color{0.0f, 0.0f, 0.0f, 1.0f});
     CHECK(linearBorder.reductionType == R::Standard);
+    // LP3.0 (C60, SC728, E-LIT-14): DRAW_INTERACTION_SM's s2, the Border desc (0, 0, 0,
+    // 1) with the Comparison reduction: "Clamp" is the engine's misnomer
+    const auto linearClampCompare = engineCommonSamplerDesc(C::LinearClampCompare);
+    CHECK(linearClampCompare.minFilter);
+    CHECK(linearClampCompare.addressU == A::Border);
+    CHECK(linearClampCompare.addressV == A::Border);
+    CHECK(linearClampCompare.addressW == A::Border);
+    CHECK(linearClampCompare.borderColor == nvrhi::Color{0.0f, 0.0f, 0.0f, 1.0f});
+    CHECK(linearClampCompare.reductionType == R::Comparison);
     const auto linearWrap = engineCommonSamplerDesc(C::LinearWrap);
     CHECK(linearWrap.minFilter);
     CHECK(linearWrap.addressU == A::Wrap);
@@ -1171,6 +1307,11 @@ TEST_CASE("EngineTables")
     CHECK(enginePushConstantsEnabled(L::TaaResolve, desktop, nvidia));
     CHECK_FALSE(enginePushConstantsEnabled(L::Blit, desktop, nvidia));
     CHECK_FALSE(enginePushConstantsEnabled(L::AmbientLightingIbl, desktop, nvidia));
+    // LP3.0 (C60, C30): set 11's 1088 bytes are never pushed on the desktop, on AMD
+    // either
+    CHECK_FALSE(enginePushConstantsEnabled(L::DrawInteractionSm, desktop, nvidia));
+    CHECK_FALSE(
+      enginePushConstantsEnabled(L::DrawInteractionSm, desktop, EngineVendorAmd));
 
     // MoltenVK: 4096 bytes, so the interaction's 400 are pushed (P2.10)
     const auto apple = enginePushConstantLimit(4096, 4096);

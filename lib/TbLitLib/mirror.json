@@ -30504,6 +30504,145 @@
         }
       ],
       "note": "LP7.5 (C56; P7.10), test only: the models map's rooms N13 (k 17: the .glb through the preview's source path, its .bglb never copied to the preview) and N14 (k 18: the same bytes under a second name, its .bglb copied by the row's binary list and its source withheld: the binary-first path), each with its noshadows light, camera (40, 192) yaw 0, control black, exact. Four engine runs on 2026-10-26: 16:10-16:36, whose run-b had every shot of every map at its spawn (setviewpos never took, as on a paused game), stopped before rows.json; 18:14-18:35 and 18:38-18:59, every shot placed in both processes, each with M07's repeat 1 (the same six channel values +-1, run-a and run-b each equal across the two runs, the preview equal to run-b). Its cause, E-LIT-9: the engine interpolates a constant style string through ML_StyleMultiplier (MathLight.cpp:200-220), which in float32 is 1 ulp below 1.0 on one game frame in six at 60 Hz, and game time is not fixed (com_fixedTic 0), so the frame a process lands on is jitter. The fix is the fixture's: lp5_m07_style carries ls_frametime 1 (parity.py, the M07 room), so the engine's value is exactly 1.0 at every time, as the preview's (LightParse.cpp:355, :384-393). The fourth run (19:32-19:53; the bake 126.4 s, run-a 418.5 s, run-b 421.7 s) is on record: rows.json at 184 rows, every repeat 0, M07's engine image equal in both processes and to the third run's run-b bit for bit, the proof listing 21,261 before and after every process. N13 and N14 recorded exact (thresholds.json, LP7.5's reason; lit_min 460,800 each) from the Debug read-backs of the third run. On the fourth run's Debug [.][parity] (184 rows, 28,683 assertions) both max 0 (mean 0, masked 13.585% and 13.618%, masked_max 0, lit 921,600), their expectations held (model_draws 3, at least 2; models_pending 0), CN13 and CN14 black, M07 max 0; compare 182 of 182 gated rows pass, 2 reported"
+    },
+    {
+      "id": "M-SHADOW-TABLE-01",
+      "kind": "table",
+      "engine": [
+        {
+          "file": "neo/shaders/renderParmSet11.inc.hlsl",
+          "lines": [
+            32,
+            87
+          ],
+          "anchor": "renderParmSet11_t",
+          "sha256": "cac7cef3c31b5bbb05300c7e68a7f5c93127b1c5c646af690ccd0e0e015fee47"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            301,
+            303
+          ],
+          "anchor": "rpMaximalSet11, rpMaximalSet11LayoutTypes (DRAW_INTERACTION_SM and its skinned form)",
+          "sha256": "f395c9fa105224aa165cc764040bd534af9acbd9099d1a373b86e6eecaa4b98d"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            159,
+            194
+          ],
+          "anchor": "RENDERPARM_SHADOW_MATRIX_0_X .. RENDERPARM_SHADOW_ATLAS_OFFSET_5",
+          "sha256": "86ecc79cc7157c62eb2269fba44935907cf58d124d1e6af411c613fbac23bdc6"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            342,
+            352
+          ],
+          "anchor": "layoutTypeAttributes for rpMaximalSet11LayoutTypes: renderParmSet11, rpBufSize 68 * 16, cbStatic false",
+          "sha256": "432db4909d95dce25302fe5e3bcbebfa7508821a0c16d0b0eb61d977c2028a5a"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            393,
+            393
+          ],
+          "anchor": "pcEnabled: rpBufSize <= GetMaxPushConstantSize()",
+          "sha256": "78acf3d7d67eb77e8b4f4b38872b4476c3df95d5b961b2542a08245be246765a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineParmSet11"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineParmSetMembers (case 11), engineParmSetBlock, engineParmSetOfLayout, enginePushConstantsEnabled"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderParms.h",
+          "symbol": "RenderParms::select, engineLayoutsOfParm"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_EngineTables.cpp"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_RetailShaders.cpp",
+          "symbol": "Retail shaders: the shadow-atlas interactionSM programs and set 11 (LP3.0)"
+        }
+      ],
+      "note": "LP3.0 step 1 (C60, SC730, P3.29): set 11 (DRAW_INTERACTION_SM), 68 float4 = 1088 bytes, the members in renderParmSet11_t's order, each its renderparm and its HLSL name at 16 * i: ScreenCorrectionFactor 0, DiffuseModifier 16 ... ModelViewMatrixW 464, GlobalLightOrigin 480, JitterTexScale 496, JitterTexOffset 512, PSXDistortions 528, CascadeDistances 544, rpShadowMatrices[0..23] 560-943 (P3.29: the span ends at 943, not 927), rpShadowAtlasOffsets[0..5] 944-1039, rpUser0-2 1040-1072. rpMaximalSet11 (RenderProgs.h:301) names the same 68 parms in the same order (checked member for member; the arrays' elements by index, RENDERPARM_SHADOW_MATRIX_<side>_<row> = rpShadowMatrices[4 * side + row], RENDERPARM_SHADOW_ATLAS_OFFSET_<k> = rpShadowAtlasOffsets[k]); the reflection names the arrays' elements as blockOf does for set 9. 1088 > 256: pcEnabled is false on every desktop budget and on AMD (enginePushConstantsEnabled, C30), so set 0 is the volatile constant buffer and the engine never loads a USE_PUSH_CONSTANTS 1 permutation of interactionSM. Selectable through RenderParms::select since LP3.0; no pass selects it until LP3.1. [.][retail] holds rows 39, 41, 43, 45, 47 and 49 (both stages, not pushed: twelve permutations) to these 68 members, D9's rule"
+    },
+    {
+      "id": "M-SHADOW-TABLE-02",
+      "kind": "table",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            446,
+            452
+          ],
+          "anchor": "defaultMaterialLayout (t0 normal, t1 specular, t2 base colour)",
+          "sha256": "92aeeada269be13b78ae57f07b10bf069395358f89816699269a4f0e92083b68"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            530,
+            554
+          ],
+          "anchor": "interactionSmBindingLayout (t3-t6), samplerFourBindingLayout (s0-s3), bindingLayouts[DRAW_INTERACTION_SM(_SKINNED)]",
+          "sha256": "90d3f6a0055c92dfdfa1bb18c4ae03810c2597c40c22470565a700e6399da4e1"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            1082,
+            1181
+          ],
+          "anchor": "GetCurrentBindingLayout, DRAW_INTERACTION_SM",
+          "sha256": "8bd4bc77663bedbdeba670f74eca81fce089613c17f2b2ee60939340bc7c9efc"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1051,
+            1067
+          ],
+          "anchor": "INTERACTION_TEXUNIT_*: 5 the shadow map, 6 the jitter",
+          "sha256": "7943425100fbe26963da79283688495d1f04ad9109ec92a7700c3f371ff6bcb1"
+        },
+        {
+          "file": "neo/renderer/Passes/CommonPasses.cpp",
+          "lines": [
+            83,
+            88
+          ],
+          "anchor": "m_LinearClampCompareSampler: the Border desc with the Comparison reduction",
+          "sha256": "ea516c1c04b756b707f4703655b8ea8124ae13c547a8244a839db90e7fcdf570"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineBindingLayoutDescs (DrawInteractionSm), engineBindingSetShape (DrawInteractionSm)"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/ShaderReflection.h",
+          "symbol": "engineExpectedLayout"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_EngineTables.cpp",
+          "symbol": "LP5.0's binding layouts and binding sets (the transcription row DrawInteractionSm)"
+        }
+      ],
+      "note": "LP3.0 step 1 (C60, SC728, P3.24b, P3.24e): DRAW_INTERACTION_SM's four sets: set 0 the uniforms item (the 1088-byte volatile constant buffer; PushConstants( 0, 1088 ) only where pcEnabled, never on a desktop), visibility All; set 1 Texture_SRV 0, 1, 2 (normal, specular, base colour) Pixel; set 2 Texture_SRV 3, 4, 5, 6 (falloff, projection, the shadow atlas, _blueNoise256) Pixel; set 3 Sampler 0-3 Pixel. The binding sets per draw: units 0-6 at t0-t6 (INTERACTION_TEXUNIT_SHADOWMAPS 5, INTERACTION_TEXUNIT_JITTER 6), s0 AnisotropicWrap (PointWrap under R_UsePixelatedLook, which r_renderMode 0 never picks, as every other mirrored set), s1 LinearBorder, s2 LinearClampCompare (Border (0, 0, 0, 1) with Comparison: E-LIT-14's misnomer), s3 PointWrap (the blue noise). No DRAW_INTERACTION_SM_SKINNED layout or set is mirrored (P3.24e: no skinned model draws; engineBindingLayoutDescs and engineBindingSetShape answer nullopt for it). Nothing selects these sets before LP3.1, whose atlas binding slot keeps one version for the session (P3.24b)"
     }
   ],
   "retired": [

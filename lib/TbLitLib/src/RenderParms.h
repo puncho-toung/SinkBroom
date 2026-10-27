@@ -61,7 +61,9 @@ inline constexpr std::size_t MaxParmSetFloat4s = 68;
  * selectable; their layouts are the ones LP2 draws with and (LP4.2a, C35) the ambient
  * pass's AMBIENT_LIGHTING_IBL, whose set 9 select writes as SelectUniforms'
  * renderParmSet9 case does (RenderProgs_NVRHI.cpp:471-478): rpMaximalSet9's 45 members in
- * order. Plain data; the render thread.
+ * order. LP5.0 adds sets 5, 7, 8 and 12; LP3.0 (C60) set 11, DRAW_INTERACTION_SM's
+ * rpMaximalSet11, 68 members in order (1088 bytes, MaxParmSetFloat4s: never pushed, C30),
+ * which no pass selects until LP3.1. Plain data; the render thread.
  */
 class RenderParms
 {
@@ -93,7 +95,8 @@ public:
 };
 
 // the layouts whose renderparm set holds parm (renderParmLayoutTypes), as bits of
-// EngineBindingLayout; only the mirrored sets 0, 4, 9 and 10 are known. Pure.
+// EngineBindingLayout; only the mirrored sets are known (0, 4, 9, 10; 5, 7, 8, 12; 11).
+// Pure.
 std::uint64_t engineLayoutsOfParm(RenderParm parm);
 
 } // namespace tb::lit

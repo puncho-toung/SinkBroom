@@ -307,6 +307,8 @@ std::span<const EngineParmSetMember> engineParmSetMembers(const int set)
     return EngineParmSet9;
   case 10:
     return EngineParmSet10;
+  case 11:
+    return EngineParmSet11;
   case 12:
     return EngineParmSet12;
   default:
@@ -555,6 +557,27 @@ std::optional<std::vector<nvrhi::BindingLayoutDesc>> engineBindingLayoutDescs(
       layoutDesc(S::Pixel, {Item::Texture_SRV(3), Item::Texture_SRV(4)}),
       layoutDesc(S::Pixel, {Item::Sampler(0), Item::Sampler(1)}),
     };
+  case L::DrawInteractionSm:
+    // LP3.0 (C60, SC728): :446-452, 530-550: uniforms (set 11, never pushed: C30);
+    // normal, specular, base colour (defaultMaterialLayout); falloff, projection, the
+    // shadow atlas, the blue-noise jitter (interactionSmBindingLayout); the material, the
+    // lighting, the shadow compare and the blue-noise samplers
+    // (samplerFourBindingLayout). DRAW_INTERACTION_SM_SKINNED (:551-554) is not mirrored:
+    // no skinned model draws (P3.24e)
+    return std::vector{
+      uniforms(false),
+      layoutDesc(
+        S::Pixel, {Item::Texture_SRV(0), Item::Texture_SRV(1), Item::Texture_SRV(2)}),
+      layoutDesc(
+        S::Pixel,
+        {Item::Texture_SRV(3),
+         Item::Texture_SRV(4),
+         Item::Texture_SRV(5),
+         Item::Texture_SRV(6)}),
+      layoutDesc(
+        S::Pixel,
+        {Item::Sampler(0), Item::Sampler(1), Item::Sampler(2), Item::Sampler(3)}),
+    };
   case L::Fog:
     // LP5.0 (C49): :556-570: uniforms; t0 t1 (fogBindingLayout); s0 s1
     // (samplerTwoBindingLayout)
@@ -723,6 +746,21 @@ std::optional<std::vector<std::vector<EngineBindingSetItem>>> engineBindingSetSh
       {unit(3), unit(4)},
       {common(0, C::AnisotropicWrap), common(1, C::LinearBorder)}};
   }
+  case L::DrawInteractionSm:
+    // LP3.0 (C60, SC728): :1082-1181: units 0-2 at t0-t2, 3-6 at t3-t6 (the falloff, the
+    // projection, unit 5 the shadow atlas, unit 6 _blueNoise256: RenderBackend.cpp:
+    // 1057-1058, 1968-1981), AnisotropicWrap (PointWrap under the pixelated look, which
+    // r_renderMode 0 never picks), LinearBorder, LinearClampCompare (the Border desc with
+    // the Comparison reduction, CommonPasses.cpp:83-88) and PointWrap (the blue noise's).
+    // No SM_SKINNED set (P3.24e)
+    return Sets{
+      {uniforms},
+      {unit(0), unit(1), unit(2)},
+      {unit(3), unit(4), unit(5), unit(6)},
+      {common(0, C::AnisotropicWrap),
+       common(1, C::LinearBorder),
+       common(2, C::LinearClampCompare),
+       common(3, C::PointWrap)}};
   case L::AmbientLightingIbl:
   case L::AmbientLightingIblSkinned: {
     // :698-788 and :789-883

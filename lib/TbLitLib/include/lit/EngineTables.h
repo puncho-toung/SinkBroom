@@ -306,6 +306,87 @@ inline constexpr auto EngineParmSet10 = std::array<EngineParmSetMember, 25>{{
 }};
 
 /**
+ * LP3.0 (C60, SC730, P3.29): rpMaximalSet11 (RenderProgs.h:301, its layouts :303
+ * DRAW_INTERACTION_SM and its skinned form) and renderParmSet11_t
+ * (renderParmSet11.inc.hlsl:32-87), 68 float4 = 1088 bytes, the two lists in the same
+ * order: the interactionSM programs (builtins 27-50). The struct's arrays float4
+ * rpShadowMatrices[6 * 4] (bytes 560-943) and rpShadowAtlasOffsets[6] (944-1039) are
+ * named element by element as reflection lists them (lit/ShaderReflection.h), each 16
+ * bytes on from the one before; rpUser0-2 follow at 1040, 1056 and 1072. Never pushed:
+ * 1088 bytes pass every push-constant budget but Apple's (pcEnabled false, C30)
+ */
+inline constexpr auto EngineParmSet11 = std::array<EngineParmSetMember, 68>{{
+  {RenderParm::ScreenCorrectionFactor, "rpScreenCorrectionFactor"},
+  {RenderParm::DiffuseModifier, "rpDiffuseModifier"},
+  {RenderParm::SpecularModifier, "rpSpecularModifier"},
+  {RenderParm::LocalLightOrigin, "rpLocalLightOrigin"},
+  {RenderParm::LocalViewOrigin, "rpLocalViewOrigin"},
+  {RenderParm::LightProjectionS, "rpLightProjectionS"},
+  {RenderParm::LightProjectionT, "rpLightProjectionT"},
+  {RenderParm::LightProjectionQ, "rpLightProjectionQ"},
+  {RenderParm::LightFalloffS, "rpLightFalloffS"},
+  {RenderParm::BumpMatrixS, "rpBumpMatrixS"},
+  {RenderParm::BumpMatrixT, "rpBumpMatrixT"},
+  {RenderParm::DiffuseMatrixS, "rpDiffuseMatrixS"},
+  {RenderParm::DiffuseMatrixT, "rpDiffuseMatrixT"},
+  {RenderParm::SpecularMatrixS, "rpSpecularMatrixS"},
+  {RenderParm::SpecularMatrixT, "rpSpecularMatrixT"},
+  {RenderParm::VertexColorModulate, "rpVertexColorModulate"},
+  {RenderParm::VertexColorAdd, "rpVertexColorAdd"},
+  {RenderParm::MvpMatrixX, "rpMVPmatrixX"},
+  {RenderParm::MvpMatrixY, "rpMVPmatrixY"},
+  {RenderParm::MvpMatrixZ, "rpMVPmatrixZ"},
+  {RenderParm::MvpMatrixW, "rpMVPmatrixW"},
+  {RenderParm::ModelMatrixX, "rpModelMatrixX"},
+  {RenderParm::ModelMatrixY, "rpModelMatrixY"},
+  {RenderParm::ModelMatrixZ, "rpModelMatrixZ"},
+  {RenderParm::ModelMatrixW, "rpModelMatrixW"},
+  {RenderParm::ProjMatrixW, "rpProjectionMatrixW"},
+  {RenderParm::ModelViewMatrixX, "rpModelViewMatrixX"},
+  {RenderParm::ModelViewMatrixY, "rpModelViewMatrixY"},
+  {RenderParm::ModelViewMatrixZ, "rpModelViewMatrixZ"},
+  {RenderParm::ModelViewMatrixW, "rpModelViewMatrixW"},
+  {RenderParm::GlobalLightOrigin, "rpGlobalLightOrigin"},
+  {RenderParm::JitterTexScale, "rpJitterTexScale"},
+  {RenderParm::JitterTexOffset, "rpJitterTexOffset"},
+  {RenderParm::PsxDistortions, "rpPSXDistortions"},
+  {RenderParm::CascadeDistances, "rpCascadeDistances"},
+  {RenderParm::ShadowMatrix0X, "rpShadowMatrices[0]"},
+  {RenderParm::ShadowMatrix0Y, "rpShadowMatrices[1]"},
+  {RenderParm::ShadowMatrix0Z, "rpShadowMatrices[2]"},
+  {RenderParm::ShadowMatrix0W, "rpShadowMatrices[3]"},
+  {RenderParm::ShadowMatrix1X, "rpShadowMatrices[4]"},
+  {RenderParm::ShadowMatrix1Y, "rpShadowMatrices[5]"},
+  {RenderParm::ShadowMatrix1Z, "rpShadowMatrices[6]"},
+  {RenderParm::ShadowMatrix1W, "rpShadowMatrices[7]"},
+  {RenderParm::ShadowMatrix2X, "rpShadowMatrices[8]"},
+  {RenderParm::ShadowMatrix2Y, "rpShadowMatrices[9]"},
+  {RenderParm::ShadowMatrix2Z, "rpShadowMatrices[10]"},
+  {RenderParm::ShadowMatrix2W, "rpShadowMatrices[11]"},
+  {RenderParm::ShadowMatrix3X, "rpShadowMatrices[12]"},
+  {RenderParm::ShadowMatrix3Y, "rpShadowMatrices[13]"},
+  {RenderParm::ShadowMatrix3Z, "rpShadowMatrices[14]"},
+  {RenderParm::ShadowMatrix3W, "rpShadowMatrices[15]"},
+  {RenderParm::ShadowMatrix4X, "rpShadowMatrices[16]"},
+  {RenderParm::ShadowMatrix4Y, "rpShadowMatrices[17]"},
+  {RenderParm::ShadowMatrix4Z, "rpShadowMatrices[18]"},
+  {RenderParm::ShadowMatrix4W, "rpShadowMatrices[19]"},
+  {RenderParm::ShadowMatrix5X, "rpShadowMatrices[20]"},
+  {RenderParm::ShadowMatrix5Y, "rpShadowMatrices[21]"},
+  {RenderParm::ShadowMatrix5Z, "rpShadowMatrices[22]"},
+  {RenderParm::ShadowMatrix5W, "rpShadowMatrices[23]"},
+  {RenderParm::ShadowAtlasOffset0, "rpShadowAtlasOffsets[0]"},
+  {RenderParm::ShadowAtlasOffset1, "rpShadowAtlasOffsets[1]"},
+  {RenderParm::ShadowAtlasOffset2, "rpShadowAtlasOffsets[2]"},
+  {RenderParm::ShadowAtlasOffset3, "rpShadowAtlasOffsets[3]"},
+  {RenderParm::ShadowAtlasOffset4, "rpShadowAtlasOffsets[4]"},
+  {RenderParm::ShadowAtlasOffset5, "rpShadowAtlasOffsets[5]"},
+  {RenderParm::User0, "rpUser0"},
+  {RenderParm::User1, "rpUser1"},
+  {RenderParm::User2, "rpUser2"},
+}};
+
+/**
  * LP5.0 (C48, SC524-SC526): rpNominalSet5 (RenderProgs.h:271, its layouts :273 LEGACY,
  * NORMAL_CUBE and its skinned form) and renderParmSet5_t (renderParmSet5.inc.hlsl:32-57),
  * 16 float4 = 256 bytes, the two lists in the same order: the skybox, wobblesky and
@@ -405,7 +486,8 @@ inline constexpr auto EngineParmSetSizes = std::array<int, EngineParmSetCount>{
 // for renderParmNullSet
 int engineParmSetOfLayout(EngineBindingLayout layout);
 
-// the members of a mirrored set (0, 4, 9, 10; LP5.0: 5, 7, 8, 12); empty for the others
+// the members of a mirrored set (0, 4, 9, 10; LP5.0: 5, 7, 8, 12; LP3.0: 11); empty for
+// the others
 std::span<const EngineParmSetMember> engineParmSetMembers(int set);
 
 // ----- the constant blocks of the layouts LP2 uses (C26, P2.19) -----
@@ -589,7 +671,9 @@ const EngineBuiltin* engineProgram(int index);
  * NORMAL_CUBE { uniforms }, { t0 t1 }, { s0 }; FOG { uniforms }, { t0 t1 }, { s0 s1 };
  * BLENDLIGHT { uniforms }, { t0 t1 }, { s0 }; POST_PROCESS_INGAME { uniforms t0 t1 t2 },
  * { s0 } (the uniforms set's visibility All); DRAW_INTERACTION_SKINNED is
- * DRAW_INTERACTION with the joint buffer. nullopt for a type the tables do not mirror.
+ * DRAW_INTERACTION with the joint buffer. LP3.0 (C60): DRAW_INTERACTION_SM (:530-550)
+ * { uniforms }, { t0 t1 t2 }, { t3 t4 t5 t6 }, { s0 s1 s2 s3 }; its skinned form is not
+ * mirrored (P3.24e). nullopt for a type the tables do not mirror.
  */
 std::optional<std::vector<nvrhi::BindingLayoutDesc>> engineBindingLayoutDescs(
   EngineBindingLayout layout, bool pushConstants);
@@ -651,8 +735,11 @@ struct EngineBindingSetItem
  * FOG (:1286-1329): units 0-1, LinearClamp at s0 and s1; BLENDLIGHT (:1378-1418): units
  * 0-1, LinearBorder; POST_PROCESS_INGAME (:1464-1512): units 0-2 beside the uniforms,
  * LinearClamp; NORMAL_CUBE (:1677-1734): units 0-1, LinearWrap, which carries the
- * Comparison reduction of the leaked desc (D68) as the engine creates it. nullopt for the
- * passes' own layouts and the types the tables do not mirror.
+ * Comparison reduction of the leaked desc (D68) as the engine creates it. LP3.0 (C60):
+ * DRAW_INTERACTION_SM (:1082-1181): units 0-6 at t0-t6 (unit 5 the shadow atlas, unit 6
+ * _blueNoise256), AnisotropicWrap, LinearBorder, LinearClampCompare, PointWrap; no
+ * SM_SKINNED set. nullopt for the passes' own layouts and the types the tables do not
+ * mirror.
  */
 std::optional<std::vector<std::vector<EngineBindingSetItem>>> engineBindingSetShape(
   EngineBindingLayout layout);
