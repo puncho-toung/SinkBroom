@@ -1,0 +1,78 @@
+// LP3.2 shadows parity fixture (plans/lit-preview/52-LP3-PACKAGES.md C63, section 5);
+// written by TOOLS/lit-preview/parity.py fixtures. The rooms' floors, walls and boxes and
+// the lights' images are lp2_parity.mtr's (staged with it), H07's model is the models
+// map's (lp7_models.mtr), the doorway's portal brush the areas map's (lp4_areas.mtr).
+// Names under textures/lp3p/ are reserved for fixtures (K20); LP3.1's synthetic cases'
+// materials/lp3_shadows.mtr and textures/lp3/ are other files. Every stage is
+// time-invariant (F4, P3.28): constant registers, no time or sound.
+
+// H05 (SC709, P3.10): the far wall's material, lp2/wall's images with noSelfShadow: a
+// surface of a casting light lands on the local list (tr_frontend_addmodels.cpp:995-1006)
+// and is drawn with the shadow-atlas program there as on the global list
+textures/lp3p/wall_noselfshadow
+{
+	qer_editorimage	textures/lp2/wall.tga
+	noSelfShadow
+	diffusemap	textures/lp2/wall.tga
+	bumpmap	textures/lp2/wall_local.tga
+}
+
+// H12 (P3.8): the sealing wall's room-A face, lp2/wall's images with noShadows: it casts
+// nothing, so that the panel's side face is lit through room A
+textures/lp3p/wall_noshadows
+{
+	qer_editorimage	textures/lp2/wall.tga
+	noShadows
+	diffusemap	textures/lp2/wall.tga
+	bumpmap	textures/lp2/wall_local.tga
+}
+
+// H04 (D155; gated in LP3.4): a perforated grate, one-sided (not twoSided: the perforated
+// shadow pass draws its front faces), no polygonOffset, one alpha-tested diffuse stage of a
+// constant register; nopicmip, which the engine's stage parser accepts and ignores
+// (Material.cpp:1912-1915 of the preview's copy), with an image of 64 x 64 whose every
+// level is at hand
+textures/lp3p/grate
+{
+	qer_editorimage	textures/lp3p/grate.tga
+	bumpmap	textures/lp2/floor_local.tga
+	{
+		blend	diffusemap
+		map	textures/lp3p/grate.tga
+		alphaTest	0.5
+		nopicmip
+	}
+}
+
+// H08 (C57, SC738; gated in LP3.4): H04's grate with noShadows, as DECAL_MACRO sets it
+// (Material.cpp:2926-2942), without DECAL_MACRO's polygonOffset, discrete and sort decal:
+// a perforated material casts whatever its noShadows says
+// (r_forceShadowMapsOnAlphaTestedSurfaces 1, tr_frontend_addmodels.cpp:1018-1024)
+textures/lp3p/grate_noshadows
+{
+	qer_editorimage	textures/lp3p/grate.tga
+	noShadows
+	bumpmap	textures/lp2/floor_local.tga
+	{
+		blend	diffusemap
+		map	textures/lp3p/grate.tga
+		alphaTest	0.5
+		nopicmip
+	}
+}
+
+// H09 (D154, P3.11): a translucent panel: its diffuse stage lit on the translucent list
+// (DEPTHFUNC_LESS) with the shadow-atlas program, so shadowed; a blended stage of a
+// constant colour (DrawShaderPasses', which r_skipAmbient 1 skips on both sides); a
+// caster that draws nothing into the atlas (C57, P3.17)
+textures/lp3p/panel
+{
+	qer_editorimage	textures/lp3p/panel.tga
+	translucent
+	diffusemap	textures/lp3p/panel.tga
+	{
+		blend	add
+		map	textures/lp3p/panel.tga
+		rgb	0.25
+	}
+}
