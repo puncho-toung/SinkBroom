@@ -336,15 +336,35 @@ std::vector<const LitSurface*> engineOrderInteractionSurfaces(
   const std::vector<LitSurface>& surfaces);
 
 /**
- * R_OptimizeViewLightsList's sort (tr_frontend_addlights.cpp:794-822): qsort ascending
- * by scissor area, then the list rebuilt by prepending, so the largest light is first.
- * The engine's qsort is not stable; here equal areas keep the reverse of their input
- * order (mirror.json M-FRONT-DIFF-01, K39). LP5.3 (C49, P6.23): the area is
- * idScreenRect::GetArea's arithmetic (ScreenRect::area), ( x2 - x1 + 1 ) · ( y2 - y1 + 1
- * ) on the shorts promoted to int, also for the empty scissor a kept fog or blend light
- * may have: an empty rect inverted on both axes has a positive area, possibly larger than
- * a real light's, so such a light can sort before it (and with one axis inverted a
- * negative area, after every light).
+ * LP3.0 (D148, P3.2, K39 restated): R_OptimizeViewLightsList's sort
+ * (tr_frontend_addlights.cpp:794-822) of the sort input, areas: the viewLights in their
+ * order before it (the flow's, ViewFlowResult::lightOrder) with each one's scissor area
+ * after the r_useShadowSurfaceScissor shrink, every light still in the list counted (one
+ * with no surface too: engineSortArea). The C runtime's qsort itself (the UCRT's on
+ * Windows, as the engine's MSVC build: its ties are the engine's; glibc's elsewhere, K48)
+ * sorts { index, area } records ascending by the engine's comparator, the int difference
+ * a - b (wrapping as MSVC's sub does), then the list is rebuilt by prepending: the
+ * indices in the new viewLights order, the largest first. Pure.
+ */
+std::vector<std::size_t> engineViewLightsOrder(const std::vector<int>& areas);
+
+/**
+ * LP3.0 (D148): the area a light enters the sort with (FAL:750-791, 810):
+ * r_useShadowSurfaceScissor 1 shrinks the rect of a light whose shader casts shadows
+ * (Material.h LightCastsShadows, the light's own noShadows not consulted) to the union of
+ * its surfaces' rects; every interaction surface's rect is the light's
+ * (tr_frontend_addmodels.cpp:986), so a light with a surface keeps its rect, and one
+ * without is intersected with a cleared rect (32000, 32000, -32000, -32000), whose area
+ * wraps to -199,095,295 (ScreenRect::area, ScreenRect.h:69-72): it sorts after every
+ * light. A light whose shader does not cast (fog, blend, ambient, MF_NOSHADOWS) keeps
+ * its rect. Pure.
+ */
+int engineSortArea(const ScreenRect& scissor, bool hasSurfaces, bool shaderCastsShadows);
+
+/**
+ * engineViewLightsOrder over lights already in the engine's pre-sort order, each with
+ * its scissor's area (lights that all have surfaces, or whose areas need no shrink).
+ * Equal areas fall in the C runtime qsort's order. Pure.
  */
 void engineSortViewLights(std::vector<ViewLight>& lights);
 
@@ -389,7 +409,11 @@ std::vector<const LitSurface*> stagePassOrder(
  * engineInteractionList, in chunk order, with its light triangles (DX.2: the static
  * interaction's cull to the light volume; a surface with none is left out, as the engine
  * makes no interaction surface for it). A light with no surface in any list is dropped
- * (R_OptimizeViewLightsList); the rest are sorted (engineSortViewLights).
+ * (R_OptimizeViewLightsList) after the sort; LP3.0 (D148): the sort runs on every light
+ * the engine's viewLights hold then, one without a surface or with an empty scissor
+ * among them (engineSortArea), in the flow's order (ViewFlowResult::lightOrder; without
+ * a tree, and for the outside set after the flowed lights, the reverse of the records'
+ * id order, as if each were prepended in id order), through engineViewLightsOrder.
  *
  * LP5.3 (C45, C49): a fog or blend light takes the same lists by the same rules (the
  * dead noFog and ReceivesFog are not consulted: tr_frontend_addmodels.cpp:949-1008 asks
@@ -418,7 +442,7 @@ std::vector<const LitSurface*> stagePassOrder(
  * light the flow left out asks for no registers. Each candidate surface of a view light
  * must pass lightReachesSurface (C33 a-c: a shared, connected area; an outside light
  * lights only the outside set, and every light the outside set's surfaces it meets)
- * before LP2's tests. The lights stay in id order before the sort (M-FRONT-DIFF-01).
+ * before LP2's tests. The lights enter the sort in the flow's order (LP3.0, D148).
  * Without a tree (D94) every rule is LP2's: no flow, every chunk a candidate, the view's
  * scissor.
  *

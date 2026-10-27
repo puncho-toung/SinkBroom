@@ -154,6 +154,11 @@ struct ViewFlowInputs
   // tree without nodes, or without its AreaData, counts as none
   const ProcTree* tree = nullptr;
   const AreaData* areas = nullptr;
+  // LP3.0 (D148, P3.2): in the order their references were made (the engine's
+  // R_CreateLightRefs at UpdateLightDef, a map's lights in their spawn order; the
+  // frontend gives the records' preview-id order, ids being minted in load order): each
+  // area's list is walked newest first, as AddLightRefToArea prepends
+  // (RenderWorld.cpp:1852-1876)
   std::span<const ViewFlowLight> lights;
   std::span<const ViewFlowEntity> entities;
   // LP5.3 (C49, D123): per portal index its fog (none past the span's end)
@@ -186,6 +191,16 @@ struct ViewFlowResult
   std::vector<std::optional<ScreenRect>> worldRects;
   std::map<PreviewId, ScreenRect> entityRects;
   std::map<PreviewId, ScreenRect> lightRects;
+  // LP3.0 (D148, P3.2): tr.viewDef->viewLights' order after the flow: every light the
+  // flood accepted (R_SetLightDefViewLight, RenderWorld_portals.cpp:66-90), the last
+  // accepted first, as each is prepended at its first acceptance (:84-85); the areas are
+  // walked in the flood's order and each area's lights in reverse reference order (:368)
+  std::vector<PreviewId> lightOrder;
+  // LP3.0 (D148): the lights the flood accepted only through chains of empty rects (a
+  // portal's rect is intersected and never tested for emptiness, :603-606): their union,
+  // empty; they are in viewLights all the same (R_AddSingleLight keeps an empty scissor),
+  // so in the light sort, but light nothing
+  std::map<PreviewId, ScreenRect> emptyLightRects;
   // AddAreaToView calls, and the portal sides gone through
   std::size_t chains = 0;
   std::size_t portalsVisited = 0;

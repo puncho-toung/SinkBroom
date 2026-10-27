@@ -101,6 +101,8 @@ private:
   std::vector<bool> m_entitySet;
   std::vector<ScreenRect> m_lightScissors;
   std::vector<bool> m_lightSet;
+  // LP3.0 (D148): the lights in the order the flood first accepted them
+  std::vector<std::size_t> m_acceptedLights;
   std::vector<ScreenRect> m_worldScissors;
   std::vector<bool> m_worldSet;
 
@@ -136,10 +138,14 @@ public:
     }
     for (auto i = std::size_t{0}; i < inputs.lights.size(); ++i)
     {
-      const auto& light = inputs.lights[i];
       m_lightCorners.push_back(
-        engineFrustumCorners(light.inverseBaseLightProject, zeroOneCube));
-      for (const auto area : light.areas)
+        engineFrustumCorners(inputs.lights[i].inverseBaseLightProject, zeroOneCube));
+    }
+    // LP3.0 (D148, P3.2): area->lightRefs, newest reference first (AddLightRefToArea
+    // prepends, RenderWorld.cpp:1873-1876): the lights in reverse of their input order
+    for (auto i = inputs.lights.size(); i-- > 0;)
+    {
+      for (const auto area : inputs.lights[i].areas)
       {
         if (area >= 0 && std::size_t(area) < m_numAreas)
         {
@@ -225,6 +231,17 @@ public:
       {
         m_result.lightRects[m_inputs.lights[i].id] = m_lightScissors[i];
       }
+      else if (m_lightSet[i])
+      {
+        m_result.emptyLightRects[m_inputs.lights[i].id] = m_lightScissors[i];
+      }
+    }
+    // LP3.0 (D148): R_SetLightDefViewLight prepends each light at its first acceptance
+    // (RenderWorld_portals.cpp:84-85), so viewLights holds them last accepted first
+    m_result.lightOrder.clear();
+    for (auto i = m_acceptedLights.size(); i-- > 0;)
+    {
+      m_result.lightOrder.push_back(m_inputs.lights[m_acceptedLights[i]].id);
     }
   }
 
@@ -304,6 +321,11 @@ private:
         // we are culled out through this portal chain, but it might still be visible
         // through others
         continue;
+      }
+      // R_SetLightDefViewLight: a light's first acceptance links it (LP3.0, D148)
+      if (!m_lightSet[index])
+      {
+        m_acceptedLights.push_back(index);
       }
       unite(m_lightScissors[index], m_lightSet[index], ps.rect);
     }

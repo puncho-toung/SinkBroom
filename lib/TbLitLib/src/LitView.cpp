@@ -34,6 +34,7 @@
 #include "lit/Projection.h"
 
 #include <algorithm>
+#include <cstdint>
 
 namespace tb::lit
 {
@@ -128,7 +129,12 @@ bool ScreenRect::isEmpty() const
 
 int ScreenRect::area() const
 {
-  return (x2 - x1 + 1) * (y2 - y1 + 1);
+  // the shorts promoted to int; the product wraps modulo 2^32 as MSVC's imul does (an
+  // emptied rect, (32000, 32000, -32000, -32000), has 63999 * 63999 = 4,095,872,001,
+  // stored as -199,095,295: LP3.0, D148), written without signed overflow
+  const auto width = std::uint32_t(int(x2) - int(x1) + 1);
+  const auto height = std::uint32_t(int(y2) - int(y1) + 1);
+  return int(width * height);
 }
 
 void ScreenRect::expand()

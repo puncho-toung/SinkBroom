@@ -15449,10 +15449,10 @@
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/src/LitFrontend.cpp",
-          "symbol": "engineSortViewLights, buildFrontendLists"
+          "symbol": "buildFrontendLists"
         }
       ],
-      "note": "LP2.2a, restated in LP4.1 (the flow is wired: the view lights are the records the flow gave a rect, still in preview-id order): orders the engine takes from its portal flow and its qsort: the viewLights the sort starts from are in the flow's order (each prepended as AddAreaViewLights first meets it, R_SetLightDefViewLight), here the records' preview-id order, and qsort is not stable, here equal areas keep the reverse of that order; a light's chain holds the entities in reverse viewEntitys order and each entity's surfaces in model order, here the chunks in key order (area, entity, material, cell, part). Only the order of additive fp16 blends changes, which LP2.3's tolerance covers LP5.3 (C49, K39, P6.23): the tie order is visible where fog or blend lights overlap (their SRC_ALPHA and stage blends do not commute), the K39 class; the sort's area is GetArea's arithmetic, an empty rect's too (M-FOG-01)"
+      "note": "LP2.2a, restated in LP4.1 and LP3.0. The light order is mirrored since LP3.0 (M-SHADOW-ORDER-01: the flow's first acceptances prepended, each area's references newest first, every light still in viewLights in the sort input with its shrunk area, the CRT's qsort), which closes the tie rule of LP5's C49 (equal areas in the reverse of the preview-id order); K39 restated: the tie order is the engine's on Windows when the pre-sort order is (M-SHADOW-DIFF-02 for the reference order, M-SHADOW-DIFF-01 K48 for glibc). What remains here is the surfaces' order on a light: a light's chain holds the entities in reverse viewEntitys order and each entity's surfaces in model order, here the chunks in key order (area, entity, material, cell, part); only the order of additive fp16 blends changes, which LP2.3's tolerance covers. LP5.3 (C49, K39, P6.23): the sort's area is GetArea's arithmetic, an empty rect's too (M-FOG-01)"
     },
     {
       "id": "M-FRONT-DIFF-02",
@@ -31056,6 +31056,178 @@
         }
       ],
       "note": "LP3.0 step 4 (C20, C24, A25): the copied TileMap and idSort_Quick, which LP3.1's atlas pass runs on the render thread through lit/EngineShadowAtlas.h (the tests on theirs). A TileMap reads and writes only its own members and nodes; Init allocates its node list once through the copied idList (Mem_Alloc16 of the shim's heap, thread-safe), Clear and GetTile allocate nothing; idSort_Quick sorts in place with stack arrays of 128 levels; engineSortAtlasSizes allocates its own idList<int>. No common or idLib::common call is reachable (Init's failures return false), no FatalError site, no SIMDProcessor, no static data (GetLog2 is a function). An EngineTileMap belongs to one thread at a time (its owner's)"
+    },
+    {
+      "id": "M-SHADOW-ORDER-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            66,
+            90
+          ],
+          "anchor": "R_SetLightDefViewLight: prepended at the first acceptance",
+          "sha256": "b40c655c9262ca94818ecab75f7a356866a01b98b4397c5fb5d21d2f9d572d31"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            364,
+            402
+          ],
+          "anchor": "AddAreaViewLights: area->lightRefs walked head first",
+          "sha256": "32e597a3c2b4a018f42f043804bfc2561806f9b98aea8632ab3760f0664d9efb"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            596,
+            606
+          ],
+          "anchor": "FloodViewThroughArea_r: a portal's rect intersected, never tested for emptiness",
+          "sha256": "e871d6db70d1f325826365902267e946ee4d7183c6d0cff68e366ccdcd0568fa"
+        },
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            1852,
+            1877
+          ],
+          "anchor": "AddLightRefToArea: a reference prepended to the area's list",
+          "sha256": "1dfe420f4053815ee3b1ca6ea4c452f685d643f576f7b298efb218aac6e3fa6f"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            674,
+            686
+          ],
+          "anchor": "R_AddLights: removeFromList lights unlinked, the rest in order",
+          "sha256": "0f36a05af13a96fd4ce7dbe04e30813359fa8deb9f41e28088fc91fa21b0ac43"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            712,
+            823
+          ],
+          "anchor": "R_OptimizeViewLightsList: no-surface lights kept, the r_useShadowSurfaceScissor shrink, qsort by area, the prepend",
+          "sha256": "d44b4c96882eeecb55a1021202dae78c22be2b7787ab099ae3cf172125903b4e"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            986,
+            986
+          ],
+          "anchor": "an interaction surface's scissorRect is the light's",
+          "sha256": "e648447bd73f899bb8cf395ebe8f6e154287b5495ce7b6c6ee5b0b319f6ac3fc"
+        },
+        {
+          "file": "neo/renderer/ScreenRect.cpp",
+          "lines": [
+            67,
+            73
+          ],
+          "anchor": "idScreenRect::Clear: 32000, 32000, -32000, -32000",
+          "sha256": "da9a2919612690d4978662461f315d4cfd0830cd66f8a037c08eb9d16b346554"
+        },
+        {
+          "file": "neo/renderer/ScreenRect.cpp",
+          "lines": [
+            121,
+            139
+          ],
+          "anchor": "idScreenRect::Intersect",
+          "sha256": "e72fb96510483e12a560f011a13dfd10e460de674075bc3d1068364f85ca2494"
+        },
+        {
+          "file": "neo/renderer/ScreenRect.h",
+          "lines": [
+            69,
+            72
+          ],
+          "anchor": "idScreenRect::GetArea: ( x2 - x1 + 1 ) * ( y2 - y1 + 1 ) in int",
+          "sha256": "541b9377b74e40f66cc2146a8483ffbf438023f69bbc163612b0c6ef6d1cf130"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "Flow (m_areaLights in reverse reference order, m_acceptedLights), Flow::finish (lightOrder, emptyLightRects)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "engineViewLightsOrder, engineSortArea, engineSortViewLights, buildFrontendLists (preSortRank, sortInput)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitView.cpp",
+          "symbol": "ScreenRect::area"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitPasses.cpp",
+          "symbol": "the viewLights order mirror on two areas (LP3.0, D148, P3.2); the light sort's input and the CRT's qsort (LP3.0, D148)"
+        }
+      ],
+      "note": "LP3.0 step 5 (D148, P3.2, K39 restated): the viewLights order mirrored for every pass (one light order, LitFrontend's lists). (i) The flow walks each area's lights newest reference first (area->lightRefs, RenderWorld_portals.cpp:368, the references prepended by AddLightRefToArea at R_CreateLightRefs, made at UpdateLightDef in the map's spawn order) and records each light's first acceptance; R_SetLightDefViewLight prepends, so viewLights (ViewFlowResult::lightOrder) holds the last accepted first. The input order is the records' preview-id order: ids are minted in load order (snapshotOfMapText: the map file's entity order; LitDocumentObserver: the document tree's depth-first walk at the session's start, then creation order), so id order stands for spawn order (M-SHADOW-DIFF-02 for where it does not). A light accepted only through chains of empty rects is in viewLights all the same (emptyLightRects). (ii) Every light R_AddLights keeps is in the sort input: one with an empty scissor and one whose lists are empty (FAL:720-737 keeps them; their surfaces and shadows NULL) enter with their area after the r_useShadowSurfaceScissor shrink (FAL:750-791: a light whose shader LightCastsShadows is intersected with the union of its surfaces' rects; every interaction surface's rect is the light's (FAM:986), so a light with surfaces keeps its rect (SC708 confirmed: the shrink is a no-op for it), one without is intersected with a cleared rect: (32000, 32000, -32000, -32000), whose GetArea is 63999 * 63999 = 4,095,872,001 in int, -199,095,295 as MSVC's imul wraps (ScreenRect::area now wraps explicitly, without signed overflow)), and are skipped after the sort; a light whose shader does not cast (fog, blend, ambient, MF_NOSHADOWS) keeps its own rect (C49's empty-scissor fog and blend lights as before). (iii) The C runtime's qsort itself (std::qsort: the UCRT's on Windows, as the engine's MSVC build) sorts 16-byte { index, area } records ascending by sortLight_t::sort, a - b as an int difference that wraps; the list is rebuilt by prepending. Lights the flow does not hold (no tree, D94; the outside set, D81: no engine counterpart) follow the flowed ones in the reverse of id order (as if each were prepended in id order). The two-area test (the LP1b fixture's tree, four lights, 11 and 12 tied around the eye, 13 in area 0 with no surface) gives the flow's [13, 10, 11, 12] and the lists' [11, 12, 10]: by hand from UCRT's shortsort (n <= 8: the first largest swapped to the end each pass) and as the CRT returned it; the old tie rule gave [12, 11, 10]. A no-surface light can change the others' tie order (three ties alone [0, 2, 1], with an emptied one after them [0, 1, 2]; checked against the CRT). Glibc's qsort orders ties its own way (M-SHADOW-DIFF-01, K48). The exit rule (every parity row still exact against compare-efe832c54.json) is recorded in LP3.0's report"
+    },
+    {
+      "id": "M-SHADOW-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            814,
+            814
+          ],
+          "anchor": "qsort( sortLights, numSortLightsFilled, sizeof( sortLights[0] ), sortLight_t::sort )",
+          "sha256": "6d458c2ac6b56aa9ce3ec8fb39c80158cacc8442f73fa378190c8eed88c50a54"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "engineViewLightsOrder"
+        }
+      ],
+      "note": "K48 (LP3.0, D148): the light sort calls the C runtime's qsort, which on Windows is the UCRT's, the engine's own (its MSVC build), so equal scissor areas fall as in the game when the pre-sort order is the engine's; a build against glibc (Linux) or another C library orders equal areas its own way (glibc's is a merge sort, stable while it can allocate), so the light order among ties, and with LP3.1 the atlas placement among equal tiles and the overflow victim among equal lights, can differ from the game: +-1 at penumbra pixels and another unshadowed light. Equal areas are common (every light around the camera covers the whole view). The tests assert the tie orders on Windows only"
+    },
+    {
+      "id": "M-SHADOW-DIFF-02",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            488,
+            535
+          ],
+          "anchor": "UpdateLightDef: a light's references remade when its shape changes",
+          "sha256": "8fe145f48a25f001b1e62b2e9bf87ff0e72d60f12c5201cb5e29a1a459a28326"
+        },
+        {
+          "file": "neo/renderer/RenderWorld.cpp",
+          "lines": [
+            1852,
+            1877
+          ],
+          "anchor": "AddLightRefToArea",
+          "sha256": "1dfe420f4053815ee3b1ca6ea4c452f685d643f576f7b298efb218aac6e3fa6f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (the flow's lights in preview-id order)"
+        },
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "Flow (m_areaLights)"
+        }
+      ],
+      "note": "LP3.0 (D148): the reference order the flow walks is the preview-id order, the engine's the order its lights' references were made: the map's spawn order at load (ids minted in load order equal it for a map the editor loaded, whose entities are in the file's order), but a light the editor adds later takes the next id where the engine, loading the saved map, would place it at its position in the file (TrenchBroom appends a new entity to its layer, so the file order follows the layers and groups); and in the game a light whose shape changes (UpdateLightDef with a new origin, radius, shader or noShadows) has its references remade, newest first in each area, which the editor has no counterpart for. Only the order of equal-area lights moves (their additive blends and, from LP3.1, their tiles)"
     }
   ],
   "retired": [

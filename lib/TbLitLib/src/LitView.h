@@ -129,7 +129,9 @@ struct ScreenRect
   void addPoint(float x, float y);
   // IsEmpty: x1 > x2 || y1 > y2
   bool isEmpty() const;
-  // GetArea: ( x2 - x1 + 1 ) · ( y2 - y1 + 1 )
+  // GetArea: ( x2 - x1 + 1 ) · ( y2 - y1 + 1 ) on the shorts promoted to int; LP3.0
+  // (D148): a product past an int wraps modulo 2^32 as the engine's MSVC build computes
+  // it (an emptied rect's 63999 · 63999 is -199,095,295)
   int area() const;
   // Expand: one pixel each way
   void expand();

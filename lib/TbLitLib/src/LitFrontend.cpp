@@ -41,9 +41,12 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <map>
+#include <optional>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 namespace tb::lit
@@ -224,13 +227,86 @@ std::vector<const LitSurface*> engineOrderInteractionSurfaces(
   return all;
 }
 
+namespace
+{
+
+// R_OptimizeViewLightsList's sortLight_t (tr_frontend_addlights.cpp:796-804): the light
+// (here its index in the sort input) and its screen area; 16 bytes, as the engine's
+struct SortLight
+{
+  std::size_t light = 0;
+  int screenArea = 0;
+};
+
+// sortLight_t::sort: a->screenArea - b->screenArea, the int difference wrapping as
+// MSVC's sub does (written without signed overflow)
+int sortLightCompare(const void* a, const void* b)
+{
+  const auto lhs = static_cast<const SortLight*>(a)->screenArea;
+  const auto rhs = static_cast<const SortLight*>(b)->screenArea;
+  return int(std::uint32_t(lhs) - std::uint32_t(rhs));
+}
+
+} // namespace
+
+std::vector<std::size_t> engineViewLightsOrder(const std::vector<int>& areas)
+{
+  // :805-812: one record per light, in viewLights' order
+  auto sortLights = std::vector<SortLight>{};
+  sortLights.reserve(areas.size());
+  for (std::size_t i = 0; i < areas.size(); ++i)
+  {
+    sortLights.push_back(SortLight{i, areas[i]});
+  }
+
+  // :814: the C runtime's qsort, not std::sort: its order of equal areas is the engine's
+  if (!sortLights.empty())
+  {
+    std::qsort(sortLights.data(), sortLights.size(), sizeof(SortLight), sortLightCompare);
+  }
+
+  // :816-822: rebuild the linked list in order, each prepended
+  auto order = std::vector<std::size_t>{};
+  order.reserve(sortLights.size());
+  for (auto i = sortLights.size(); i-- > 0;)
+  {
+    order.push_back(sortLights[i].light);
+  }
+  return order;
+}
+
+int engineSortArea(
+  const ScreenRect& scissor, const bool hasSurfaces, const bool shaderCastsShadows)
+{
+  if (!EngineFrame.useShadowSurfaceScissor || !shaderCastsShadows || hasSurfaces)
+  {
+    // no shrink; or the union of its surfaces' rects, each the light's (FAM:986), which
+    // intersected with the light's rect leaves it as it is
+    return scissor.area();
+  }
+  // surfRect.Clear(), no surface to unite, then vLight->scissorRect.Intersect( surfRect )
+  auto surfRect = ScreenRect{};
+  surfRect.clear();
+  auto shrunk = scissor;
+  shrunk.intersect(surfRect);
+  return shrunk.area();
+}
+
 void engineSortViewLights(std::vector<ViewLight>& lights)
 {
-  // qsort ascending by screen area, then each prepended: the largest first
-  std::stable_sort(lights.begin(), lights.end(), [](const auto& lhs, const auto& rhs) {
-    return lhs.scissor.area() < rhs.scissor.area();
-  });
-  std::reverse(lights.begin(), lights.end());
+  auto areas = std::vector<int>{};
+  areas.reserve(lights.size());
+  for (const auto& light : lights)
+  {
+    areas.push_back(light.scissor.area());
+  }
+  auto sorted = std::vector<ViewLight>{};
+  sorted.reserve(lights.size());
+  for (const auto index : engineViewLightsOrder(areas))
+  {
+    sorted.push_back(std::move(lights[index]));
+  }
+  lights = std::move(sorted);
 }
 
 std::vector<const LitSurface*> stagePassOrder(
@@ -441,6 +517,30 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
   lists.portalsFogged = flow.portalsFogged;
   lists.connectedAreas = flow.connectedAreas;
   const auto numAreas = flow.flowed ? inputs.areas->areas.size() : std::size_t{0};
+
+  // LP3.0 (D148, P3.2): each light's place in viewLights before
+  // R_OptimizeViewLightsList's sort: the flow's order (the last accepted first); the
+  // lights it does not hold (no tree, D94; the outside set, D81: no engine counterpart)
+  // after them, in the reverse of the records' id order, as if each were prepended in id
+  // order
+  auto preSortRank = std::unordered_map<PreviewId, std::size_t>{};
+  for (const auto id : flow.lightOrder)
+  {
+    preSortRank.emplace(id, preSortRank.size());
+  }
+  for (auto i = records.size(); i-- > 0;)
+  {
+    preSortRank.emplace(records[i]->id, preSortRank.size());
+  }
+  // the sort's input: per light still in viewLights its rank, its area after the shrink,
+  // and its place in lists.lights (none: no surface, skipped after the sort)
+  struct SortInput
+  {
+    std::size_t rank = 0;
+    int area = 0;
+    std::optional<std::size_t> light;
+  };
+  auto sortInput = std::vector<SortInput>{};
 
   // LP4.3 (C36, P4.11): the grid areas need a tree and a grid; a world area's model
   // surface of a material is the union of the area's world chunks of it (the _areaN
@@ -703,11 +803,21 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       if (flow.flowed && !record->derived.areas.empty())
       {
         const auto rect = flow.lightRects.find(record->id);
-        if (rect == flow.lightRects.end())
+        if (rect != flow.lightRects.end())
+        {
+          flowRect = rect->second;
+        }
+        else if (const auto empty = flow.emptyLightRects.find(record->id);
+                 empty != flow.emptyLightRects.end())
+        {
+          // LP3.0 (D148): accepted through empty chains only: in viewLights with an empty
+          // scissor (no surface; a fog or blend light kept so)
+          flowRect = empty->second;
+        }
+        else
         {
           continue;
         }
-        flowRect = rect->second;
       }
 
       const auto& material = *shader.material;
@@ -775,7 +885,12 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       if (scissor->isEmpty() && !fogOrBlend)
       {
         // tr_frontend_addmodels.cpp:362-367: an empty scissor contacts no entity, so the
-        // light has no surface; LP5.3: a fog or blend light is kept so (its cube draws)
+        // light has no surface; LP5.3: a fog or blend light is kept so (its cube draws).
+        // LP3.0 (D148): it stays in viewLights, so in the sort, with its shrunk rect
+        sortInput.push_back(SortInput{
+          preSortRank.at(record->id),
+          engineSortArea(*scissor, false, engineLightCastsShadows(material)),
+          std::nullopt});
         continue;
       }
       viewLight.scissor = *scissor;
@@ -864,10 +979,17 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
 
       // R_OptimizeViewLightsList: no lit surface, nothing to draw (:727-735); LP5.3: a
       // fog or blend light still draws its volume in FogAllLights, and stays
-      if (
-        viewLight.localInteractions.empty() && viewLight.globalInteractions.empty()
-        && viewLight.translucentInteractions.empty() && !fogOrBlend)
+      const auto hasSurfaces = !viewLight.localInteractions.empty()
+                               || !viewLight.globalInteractions.empty()
+                               || !viewLight.translucentInteractions.empty();
+      const auto sortArea =
+        engineSortArea(viewLight.scissor, hasSurfaces, engineLightCastsShadows(material));
+      if (!hasSurfaces && !fogOrBlend)
       {
+        // LP3.0 (D148, P3.2): still in viewLights at the sort, with its emptied rect
+        // (FAL:720-737, 750-791), skipped after it
+        sortInput.push_back(
+          SortInput{preSortRank.at(record->id), sortArea, std::nullopt});
         continue;
       }
       // LP5.1 (C45): tr.pc.c_mathViewLights, R_LightUsesMathPath of the lights it counts
@@ -886,11 +1008,32 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       {
         ++lists.fogAndBlendLights;
       }
+      sortInput.push_back(
+        SortInput{preSortRank.at(record->id), sortArea, lists.lights.size()});
       lists.lights.push_back(std::move(viewLight));
     }
   }
 
-  engineSortViewLights(lists.lights);
+  // R_OptimizeViewLightsList (LP3.0, D148): the sort over viewLights in their order, then
+  // the lights without a surface skipped
+  std::ranges::sort(
+    sortInput, [](const auto& lhs, const auto& rhs) { return lhs.rank < rhs.rank; });
+  auto areas = std::vector<int>{};
+  areas.reserve(sortInput.size());
+  for (const auto& input : sortInput)
+  {
+    areas.push_back(input.area);
+  }
+  auto sorted = std::vector<ViewLight>{};
+  sorted.reserve(lists.lights.size());
+  for (const auto index : engineViewLightsOrder(areas))
+  {
+    if (const auto light = sortInput[index].light)
+    {
+      sorted.push_back(std::move(lists.lights[*light]));
+    }
+  }
+  lists.lights = std::move(sorted);
   return lists;
 }
 

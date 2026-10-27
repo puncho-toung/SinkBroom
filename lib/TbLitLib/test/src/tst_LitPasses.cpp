@@ -817,7 +817,10 @@ TEST_CASE("LitPasses: the light scissor, its sort and the caps (D67, SC206, SC22
   CHECK_FALSE(
     engineLightScissorAndBox(view, behind.inverseBaseLightProject, viewScissor(view)));
 
-  // largest first; equal areas in the reverse of their order
+  // largest first; LP3.0 (D148): equal areas in the CRT qsort's order (on Windows, the
+  // UCRT's shortsort for four records: 10, 30, 20, 30 sort to 10, 20, 30 (4), 30 (2), and
+  // prepended give 2, 4, 3, 1; the old rule, the reverse of the input order, gave 4, 2,
+  // 3, 1)
   auto lights = std::vector<ViewLight>{};
   for (const auto& [id, size] :
        std::vector<std::pair<PreviewId, int>>{{1, 9}, {2, 29}, {3, 19}, {4, 29}})
@@ -838,7 +841,12 @@ TEST_CASE("LitPasses: the light scissor, its sort and the caps (D67, SC206, SC22
   {
     order.push_back(light.record->id);
   }
-  CHECK(order == std::vector<PreviewId>{4, 2, 3, 1});
+#if defined(_WIN32)
+  CHECK(order == std::vector<PreviewId>{2, 4, 3, 1});
+#else
+  CHECK(order[2] == 3u);
+  CHECK(order[3] == 1u);
+#endif
 
   // the caps: 256 complex surfaces, 2048 in all, the fast-path ones first
   auto fast = std::make_shared<MaterialEntry>();
@@ -1646,6 +1654,162 @@ TEST_CASE("LitPasses: the frontend on the view's portal flow (LP4.1, C33, D81)")
 
 // LP4.3 (C36, P4.11, D81): the grid area of each drawn surface, on the LP1b fixture's
 // tree and a synthetic grid of both areas, the valid ones the test's
+TEST_CASE("LitPasses: the viewLights order mirror on two areas (LP3.0, D148, P3.2)")
+{
+  auto f = frontendFixture();
+  // the LP1b fixture's tree: area 0 the east room (x 8..256), area 1 the west room (x
+  // -256..8), one portal on x = 8 (y -32..32, z 0..96)
+  const auto tree =
+    readProcFile(readTextFile(
+      litFixtureFolder() / "goldens" / "lp1b_geometry" / "lp1b_geometry.proc"))
+    | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  const auto areas = buildAreaData(tree);
+  REQUIRE(areas.areas.size() == 2u);
+  const auto point = [](const std::string& origin, const std::string& radius) {
+    return EntityKeys{{"origin", origin}, {"light_radius", radius}, {"noshadows", "1"}};
+  };
+  constexpr auto World = PreviewId{1};
+
+  // two rooms and the doorway; four lights in spawn (id) order: 10 ahead of the eye in
+  // area 1, 11 and 12 both around the eye (the whole view: tied), 13 in area 0 seen
+  // through the doorway with no surface in its volume
+  auto scene = FlowScene{};
+  scene.tree = &tree;
+  scene.areas = &areas;
+  // inside 11's and 12's volume (x -230..-170) and inside 10's (x -110..-90), ahead of
+  // the eye
+  addChunk(scene, 1, World, {-185, -10, 40}, {-175, 10, 56});
+  addChunk(scene, 1, World, {-105, -5, 44}, {-95, 5, 52}, "textures/lp1b/floor");
+  addLight(scene, *f, 10, point("-100 0 48", "10 10 10"));
+  addLight(scene, *f, 11, point("-200 0 48", "30 30 30"));
+  addLight(scene, *f, 12, point("-200 0 48", "30 30 30"));
+  addLight(scene, *f, 13, point("150 0 48", "20 20 20"));
+  for (const auto id : {10, 11, 12})
+  {
+    REQUIRE(scene.lights.find(PreviewId(id))->derived.areas == std::vector<int>{1});
+  }
+  REQUIRE(scene.lights.find(13)->derived.areas == std::vector<int>{0});
+  const auto camera = cameraAt({-200, 0, 48}, {1, 0, 0});
+
+  // (i) the flow: area 1 first (the view's area), its references newest first (12, 11,
+  // 10: AddLightRefToArea prepends), then area 0 through the doorway (13); each light
+  // prepended at its first acceptance, so viewLights holds 13, 10, 11, 12
+  auto flowLights = std::vector<ViewFlowLight>{};
+  for (const auto id : {10, 11, 12, 13})
+  {
+    const auto& record = *scene.lights.find(PreviewId(id));
+    flowLights.push_back(ViewFlowLight{
+      record.id,
+      record.derived.areaNum,
+      record.derived.areas,
+      record.derived.projection.inverseBaseLightProject,
+      false});
+  }
+  auto flowInputs = ViewFlowInputs{};
+  flowInputs.view = litViewOf(camera, 128, 96);
+  flowInputs.tree = &tree;
+  flowInputs.areas = &areas;
+  flowInputs.lights = flowLights;
+  const auto flow = flowView(flowInputs);
+  REQUIRE(flow.flowed);
+  CHECK(flow.viewArea == 1);
+  CHECK(flow.lightOrder == std::vector<PreviewId>{13, 10, 11, 12});
+  CHECK(flow.lightRects.size() == 4u);
+  CHECK(flow.emptyLightRects.empty());
+
+  const auto lists = flowListsOf(*f, scene, camera);
+  REQUIRE(lists.flowed);
+  // 13 lights nothing (its volume holds no chunk of area 0), the others their chunks
+  CHECK(lists.lightsInView == 4u);
+  REQUIRE(lists.lights.size() == 3u);
+  const auto& view = lists.lights;
+  const auto areaOf = [&](const PreviewId id) {
+    return viewLightOf(lists, id)->scissor.area();
+  };
+  // 11 and 12 take the whole 128 x 96 view; 10 less
+  CHECK(areaOf(11) == 128 * 96);
+  CHECK(areaOf(12) == 128 * 96);
+  CHECK(areaOf(10) < 128 * 96);
+
+  // (ii) 13 stays in the sort with its emptied rect: the shrink
+  // (r_useShadowSurfaceScissor 1, its shader casts) intersects its rect with a cleared
+  // one, whose area wraps to -199,095,295; (iii) the input [13, 10, 11, 12] by the CRT's
+  // qsort, ascending: on Windows (UCRT) four records go through its shortsort, which
+  // swaps the first largest to the end on each pass: [13, 10, 12, 11]; prepended: 11, 12,
+  // 10, 13, and 13 is skipped. The old rule (equal areas in reverse id order) gave 12,
+  // 11, 10
+  auto order = std::vector<PreviewId>{};
+  for (const auto& light : view)
+  {
+    order.push_back(light.record->id);
+  }
+#if defined(_WIN32)
+  CHECK(order == std::vector<PreviewId>{11, 12, 10});
+#else
+  // K48: glibc's qsort orders the tie its own way; the areas still descend
+  CHECK(order.back() == 10);
+#endif
+
+  // the order function itself on that input, the CRT's output
+  const auto emptied = engineSortArea(
+    viewLightOf(lists, 10)->scissor, false, engineLightCastsShadows(*view[0].shader));
+  CHECK(emptied == -199095295);
+  const auto sortOrder =
+    engineViewLightsOrder({emptied, areaOf(10), areaOf(11), areaOf(12)});
+#if defined(_WIN32)
+  CHECK(sortOrder == std::vector<std::size_t>{2, 3, 1, 0});
+#endif
+  CHECK(sortOrder.back() == 0u);
+}
+
+TEST_CASE("LitPasses: the light sort's input and the CRT's qsort (LP3.0, D148)")
+{
+  const auto rect = [](const short x1, const short y1, const short x2, const short y2) {
+    auto r = ScreenRect{};
+    r.x1 = x1;
+    r.y1 = y1;
+    r.x2 = x2;
+    r.y2 = y2;
+    return r;
+  };
+  // the cleared rect's area: ( -32000 - 32000 + 1 )² = 4,095,872,001 wraps to
+  // -199,095,295 (ScreenRect.h:69-72 on MSVC's imul)
+  auto cleared = ScreenRect{};
+  cleared.clear();
+  CHECK(cleared.area() == -199095295);
+  CHECK(rect(0, 0, 9, 9).area() == 100);
+
+  // the shrink: a casting shader's light without a surface is emptied whatever its rect,
+  // one with a surface keeps it, a shader that does not cast keeps it
+  CHECK(engineSortArea(rect(0, 0, 9, 9), false, true) == -199095295);
+  CHECK(engineSortArea(rect(50, 60, 20, 30), false, true) == -199095295);
+  CHECK(engineSortArea(rect(0, 0, 9, 9), true, true) == 100);
+  CHECK(engineSortArea(rect(0, 0, 9, 9), false, false) == 100);
+  CHECK(engineSortArea(rect(50, 60, 20, 30), false, false) == 841);
+
+  // a light without a surface changes the tie order of the others (P3.2): three equal
+  // areas alone come out 0, 2, 1; with an emptied light after them, 0, 1, 2 (UCRT's
+  // shortsort, the first largest swapped to the end on each pass)
+  const auto withoutEmptied = engineViewLightsOrder({500, 500, 500});
+  const auto withEmptied = engineViewLightsOrder({500, 500, 500, -199095295});
+#if defined(_WIN32)
+  CHECK(withoutEmptied == std::vector<std::size_t>{0, 2, 1});
+  CHECK(withEmptied == std::vector<std::size_t>{0, 1, 2, 3});
+  // the emptied light first in the input (accepted last): 1, 3, 2
+  CHECK(
+    engineViewLightsOrder({-199095295, 500, 500, 500})
+    == std::vector<std::size_t>{1, 3, 2, 0});
+#endif
+  CHECK(withEmptied.back() == 3u);
+  CHECK(engineViewLightsOrder({}).empty());
+  // distinct areas: the largest first on every platform
+  CHECK(engineViewLightsOrder({10, 30, 20}) == std::vector<std::size_t>{1, 2, 0});
+  // the comparator's int difference wraps as the engine's: the largest positive area
+  // against the emptied one compares as the smaller, so the emptied light comes first
+  CHECK(engineViewLightsOrder({-199095295, 2147483647}).front() == 0u);
+}
+
 TEST_CASE("LitPasses: the grid area of the drawn surfaces (LP4.3, C36, P4.11)")
 {
   auto f = frontendFixture();
