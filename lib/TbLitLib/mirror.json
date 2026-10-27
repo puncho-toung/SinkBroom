@@ -20912,7 +20912,7 @@
           "symbol": "the [.][feed] tag comment (in none of the [.][litgpu*] suites)"
         }
       ],
-      "note": "LP5.0 step 6 (RUN.md, the director's decisions after LPF.1 (5); P6.24), test only, no engine counterpart: the hidden GPU cases run in two suites, each under the 180 s wall clock in Debug: [.][litgpu] LP0-LP2's (on a GPU, pipelines, GPU resources, lit passes, tonemap and blit; 5 cases, 95.5 / 97.8 / 99.1 s at LP5.0) and [.][litgpu2] LP4's and later ones (ambient pass, light-grid path, live feed, LP5's programs; 4 cases, 59.7 / 59.8 / 60.4 s); LPF.2's host cases stay [.][feed]. Each case makes its own instance, device and session, bounds its waits (H.1) and resets the dispatcher, so either suite runs alone and in any order. The gate measures both and a third tag comes once one passes 150 s. TbUiLib's [.][litgpu] cases are not split LP7.0 step 1 (D134, C56): a third tag, [.][litgpu3], takes LP5's seven cases (LP5.0 programs, LP5.1 math, LP5.2a pass 8, LP5.2b texgens, LP5.F sizes, LP5.3 fog, LP5.G reload); [.][litgpu2] keeps LP4.2a, LP4.3 and LPF.1; [.][litgpu] is unchanged. Debug wall clocks at the split: [litgpu] 92.3 / 95.5 / 92.7 s (5 cases), [litgpu2] 59.1 / 59.4 / 59.0 s (3), [litgpu3] 77.9 / 78.5 / 77.7 s (7). LP7's cases join [litgpu3] until it passes 150 s, then a fourth. The GPU cases' frame-log field count is one constant, FrameLogFields (69 since LP7.0). LP7.4: the first of LP7's, LitSession the .proc's triangles adopted on a GPU, joins [litgpu3] (8 cases, 78.8 s at its first run); LPF.1's frame-log check reads the four adoption counts as numbers, the model and dress counts still 0. LP3.1 step 6 (D160, D161): LitSession shadows on a GPU (LP3.1) joins [litgpu2] (4 cases; the suite's Debug wall clock with it 66.9 / 66.6 / 67.2 s, the case 7.1 / 7.0 / 7.4 s over its seven sections), no fourth tag; FrameLogFields is 91 since LP3.1"
+      "note": "LP5.0 step 6 (RUN.md, the director's decisions after LPF.1 (5); P6.24), test only, no engine counterpart: the hidden GPU cases run in two suites, each under the 180 s wall clock in Debug: [.][litgpu] LP0-LP2's (on a GPU, pipelines, GPU resources, lit passes, tonemap and blit; 5 cases, 95.5 / 97.8 / 99.1 s at LP5.0) and [.][litgpu2] LP4's and later ones (ambient pass, light-grid path, live feed, LP5's programs; 4 cases, 59.7 / 59.8 / 60.4 s); LPF.2's host cases stay [.][feed]. Each case makes its own instance, device and session, bounds its waits (H.1) and resets the dispatcher, so either suite runs alone and in any order. The gate measures both and a third tag comes once one passes 150 s. TbUiLib's [.][litgpu] cases are not split LP7.0 step 1 (D134, C56): a third tag, [.][litgpu3], takes LP5's seven cases (LP5.0 programs, LP5.1 math, LP5.2a pass 8, LP5.2b texgens, LP5.F sizes, LP5.3 fog, LP5.G reload); [.][litgpu2] keeps LP4.2a, LP4.3 and LPF.1; [.][litgpu] is unchanged. Debug wall clocks at the split: [litgpu] 92.3 / 95.5 / 92.7 s (5 cases), [litgpu2] 59.1 / 59.4 / 59.0 s (3), [litgpu3] 77.9 / 78.5 / 77.7 s (7). LP7's cases join [litgpu3] until it passes 150 s, then a fourth. The GPU cases' frame-log field count is one constant, FrameLogFields (69 since LP7.0). LP7.4: the first of LP7's, LitSession the .proc's triangles adopted on a GPU, joins [litgpu3] (8 cases, 78.8 s at its first run); LPF.1's frame-log check reads the four adoption counts as numbers, the model and dress counts still 0. LP3.1 step 6 (D160, D161): LitSession shadows on a GPU (LP3.1) joins [litgpu2] (4 cases; the suite's Debug wall clock with it 66.9 / 66.6 / 67.2 s, the case 7.1 / 7.0 / 7.4 s over its seven sections), no fourth tag; FrameLogFields is 91 since LP3.1. LP3.2 (C63): the shadows map's 26 shots join [.][parity] (36,468 assertions; Debug 87 s at LP3.2's run and again at LP3.2-FIX's; 88 and 90 s with 28,685 at the efb290089 and d0d8d8f11 gates), under its 180 s bound; FrameLogFields is 94 since LP3.2 (the per-list shadow-atlas draws, M-SHADOW-STAT-01)"
     },
     {
       "id": "M-INTER-02",
@@ -31404,7 +31404,7 @@
         },
         {
           "file": "lib/TbLitLib/src/ViewFlow.cpp",
-          "symbol": "lightReachesCaster, lightCastsShadows, engineLightNoShadows"
+          "symbol": "lightReachesCaster, lightCasterAreas, lightCastsShadows, engineLightNoShadows"
         },
         {
           "file": "lib/TbLitLib/src/LightTriangles.h",
@@ -31419,7 +31419,7 @@
           "symbol": "the casters of a casting light, on screen or off (LP3.0, C57); a spectrum light's forced noShadows (LP3.0, C57, P3.16)"
         }
       ],
-      "note": "LP3.0 step 6 (C57, P3.14, P3.16, P3.17): the caster set and its light-triangle requests, made in the frontend as the lists are built, after the light sort, per light that will take tiles (it casts, shadowLod > -1, it has surfaces: ShadowAtlasPass' loop 1 skips the others), on screen or off: every chunk and model instance of a cast class (M-SHADOW-CAST-01) whose areas reach the light by lightReachesCaster (an area the light references, connected to the light's own area unless that is -1: FAL:494-501; D81's outside set by volume; without a tree every chunk), whose entity is visible (its space made as R_AddLights makes a shadow-only viewEntity), whose bounds R_CullModelBoundsToLight keeps, whose material's spectrum is the light shader's, and whose light triangles for the light are not None (the cache of LightTriangles.h, the request queued when Pending), each kept with its space and light triangles in ViewLight::casters; nothing draws them before LP3.1. The engine's R_ShadowBounds view cull (FAL:605-618) is not mirrored (K49: casters are not view-culled) and MAX_CONTACTED_LIGHTS is not kept (M-FLOW-DIFF-03, extended to shadows). lightCastsShadows gains UpdateLightDef's spectrum rule (engineLightNoShadows), which also moves a spectrum light's noSelfShadow surfaces to the global list (FAM:999). P3.16's 'every parallel light has area -1' is not the engine's: R_CreateLightRefs falls back to PointInArea( parms.origin ) when the offset origin is outside (RenderWorld_defs.cpp:703-707, mirrored in LightData.cpp since LP4.0), so a parallel light inside the map has its origin's area and the connection test applies; only a light whose both origins are outside has area -1 and skips it. The counts (FrontendLists casterLights, casterPairs, casterPairsResident, casterPairsPending, casters, casterMs) reach LitFrameStats and the frame log's companion, <frame log>-casters.csv (casterLogPath), written while the frame log is open and the environment sets TB_LIT_CASTER_LOG (a measurement's opt-in: the suites' frame logs leave no companion): LP3.0's measurement channel ([.][measure] on admin), no frame-log column (LP3.1's D157 folds them in). The admin measurement (Release [.][measure], five runs with the per-build candidate table: three at step 6, two in the final run list): at the start view's settled frame 30 lights in view, 11 lights gather casters, 927 (light, chunk) pairs asked, all 927 answered, 698 casters, 1.5-2.2 ms of gathering when the lists are built; over the orbit at most 35 gathering lights, 2,177 pairs and 13,134 cache entries (the lit surfaces' pairs included, on the frames with 320-329 lights in view), gathering median 0.57-0.60 ms, p95 1.8-2.1 ms, max 2.2-4.7 ms. Budget (P3.24f): 4 ms and 250,000 pairs per presented frame, a miss any frame above either: no pair miss; the final second run had 3 of its 339 rebuilt frames above 4 ms (max 4.735 ms, all with 300+ lights in view), the other four runs none (a first version without the table had one frame at 5.7 ms). LightTriangleCacheSize stays 65,536: the rule is a power of two at least four times the largest per-build demand on admin (4 x 13,134 -> 65,536), never below LP2's bound. LP3.1 step 5 (D157): the companion CSV, CasterLogRow, casterLogPath and TB_LIT_CASTER_LOG are retired; the seven counts are the frame log's last columns (caster_lights, caster_pairs, caster_pairs_resident, caster_pairs_pending, casters, caster_ms, light_triangle_entries: 85-91 of 91), on every frame row. LP3.1 step 3 draws the casters into the tiles (M-SHADOW-06)"
+      "note": "LP3.0 step 6 (C57, P3.14, P3.16, P3.17): the caster set and its light-triangle requests, made in the frontend as the lists are built, after the light sort, per light that will take tiles (it casts, shadowLod > -1, it has surfaces: ShadowAtlasPass' loop 1 skips the others), on screen or off: every chunk and model instance of a cast class (M-SHADOW-CAST-01) whose areas reach the light by lightReachesCaster (an area the light references, connected to the light's own area unless that is -1: FAL:494-501; D81's outside set for a light without references alone since LP3.2-FIX, M-SHADOW-DIFF-08; without a tree every chunk), whose entity is visible (its space made as R_AddLights makes a shadow-only viewEntity), whose bounds R_CullModelBoundsToLight keeps, whose material's spectrum is the light shader's, and whose light triangles for the light are not None (the cache of LightTriangles.h, the request queued when Pending), each kept with its space and light triangles in ViewLight::casters; nothing draws them before LP3.1. The engine's R_ShadowBounds view cull (FAL:605-618) is not mirrored (K49: casters are not view-culled) and MAX_CONTACTED_LIGHTS is not kept (M-FLOW-DIFF-03, extended to shadows). lightCastsShadows gains UpdateLightDef's spectrum rule (engineLightNoShadows), which also moves a spectrum light's noSelfShadow surfaces to the global list (FAM:999). P3.16's 'every parallel light has area -1' is not the engine's: R_CreateLightRefs falls back to PointInArea( parms.origin ) when the offset origin is outside (RenderWorld_defs.cpp:703-707, mirrored in LightData.cpp since LP4.0), so a parallel light inside the map has its origin's area and the connection test applies; only a light whose both origins are outside has area -1 and skips it. The counts (FrontendLists casterLights, casterPairs, casterPairsResident, casterPairsPending, casters, casterMs) reach LitFrameStats and the frame log's companion, <frame log>-casters.csv (casterLogPath), written while the frame log is open and the environment sets TB_LIT_CASTER_LOG (a measurement's opt-in: the suites' frame logs leave no companion): LP3.0's measurement channel ([.][measure] on admin), no frame-log column (LP3.1's D157 folds them in). The admin measurement (Release [.][measure], five runs with the per-build candidate table: three at step 6, two in the final run list): at the start view's settled frame 30 lights in view, 11 lights gather casters, 927 (light, chunk) pairs asked, all 927 answered, 698 casters, 1.5-2.2 ms of gathering when the lists are built; over the orbit at most 35 gathering lights, 2,177 pairs and 13,134 cache entries (the lit surfaces' pairs included, on the frames with 320-329 lights in view), gathering median 0.57-0.60 ms, p95 1.8-2.1 ms, max 2.2-4.7 ms. Budget (P3.24f): 4 ms and 250,000 pairs per presented frame, a miss any frame above either: no pair miss; the final second run had 3 of its 339 rebuilt frames above 4 ms (max 4.735 ms, all with 300+ lights in view), the other four runs none (a first version without the table had one frame at 5.7 ms). LightTriangleCacheSize stays 65,536: the rule is a power of two at least four times the largest per-build demand on admin (4 x 13,134 -> 65,536), never below LP2's bound. LP3.1 step 5 (D157): the companion CSV, CasterLogRow, casterLogPath and TB_LIT_CASTER_LOG are retired; the seven counts are the frame log's last columns (caster_lights, caster_pairs, caster_pairs_resident, caster_pairs_pending, casters, caster_ms, light_triangle_entries: 85-91 of 91), on every frame row. LP3.1 step 3 draws the casters into the tiles (M-SHADOW-06)"
     },
     {
       "id": "M-SHADOW-TEMP-01",
@@ -32248,6 +32248,320 @@
         }
       ],
       "note": "C57 (LP3.1 step 0), test only: skipShadowsForTesting( true ) is r_skipShadows 1's stand-in (EngineFrame is constexpr): the frontend gives no light a shadow LOD, pass 6 records nothing and every interaction is the plain one. The product never sets it. The cases on LP2.2a's root, whose eight lp1b_geometry lights cast, and whose models are the unshadowed interaction's (probe pixels, draw and write counts, frame-log counts: SC733) set it: every rootSession and loggedRootSession case (LP2.2a, LP2.2b, LP4.2a, LP4.3, LPF.1, LP5.F, LP5.G, the stale-bake parity case) and the sessions made by hand (LP2.2b's window, LP4.2a's no bake, LP5.1, LP7.2). Five sections run with shadows on and assert what does not depend on the picture (teardown, threads and handles, heap blocks, validation): LP2.2a's Stop in the middle of a frame, U2.12's thread and handle baseline, LP2.2b's Stop between the lit and the tonemap passes, LP4.2a's Stop between the prepass and the ambient pass and its 100 frames on the debug heap; LP2.2a's programs also carry the six shadow-atlas blobs now (Lp2Programs 21)"
+    },
+    {
+      "id": "M-PARITY-03",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            391,
+            469
+          ],
+          "anchor": "R_AddSingleLight: the shadow LOD from the light volume's projected box",
+          "sha256": "28e7018a456db7e8f9bb6271c9147bb7bb38879daa5ed5b58dbb292d18ff57f6"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            488,
+            634
+          ],
+          "anchor": "R_AddSingleLight: the area walk from the light's own area, the shadow-only entities",
+          "sha256": "1ab7365b5e1a681800a91c328137983c18a44df00d7a92666385796806217d6a"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            995,
+            1006
+          ],
+          "anchor": "R_AddSingleModel: the interaction lists (translucent, local for noSelfShadow, global)",
+          "sha256": "919422971e7b4c2a8a515959ef912b7744f6438546626d943c4e6ce2e7323391"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            1018,
+            1154
+          ],
+          "anchor": "R_AddSingleModel: the shadow surfaces, perforated ones forced",
+          "sha256": "a2bf3656e607376e6874d512bc43ddf9dd207d3cf8f60806718bceccb10c8fc6"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_portals.cpp",
+          "lines": [
+            381,
+            387
+          ],
+          "anchor": "AddAreaViewLights: the light-area cull passes a casting light",
+          "sha256": "e948b245c56cf48598ce49287a5cea2d59028028d1ec8e3a9eaf92620aa1bbbc"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "SHADOWS_MAP, SHADOWS_MTR, shadows_textures, shadows_light_specs, build_shadows_map, sh_expect, the rows H01-H13, MAPS' sixth entry, pair_brushes( shared_a ), BLOBS (interactionSM), PARITY_CFG_BOUND"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/maps/test/litpreview_shadows.map",
+          "symbol": "the rooms H01-H13 (parity.py fixtures)"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/materials/lp3_parity.mtr",
+          "symbol": "lp3p/wall_noselfshadow, wall_noshadows, grate, grate_noshadows, panel"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession parity rows: parityShadowCount, the row .json's shadow counters and unplaced_lights"
+        }
+      ],
+      "note": "LP3.2 (C63, section 5; SC741-SC746; P3.8-P3.12, P3.20, P3.21, P3.28), test only: the shadows parity map, the sixth of MAPS, maps/test/litpreview_shadows.map with materials/lp3_parity.mtr and textures/lp3p/ (the LP2 map's wall, floor, crate and light images; LP3.1's synthetic lp3_shadows.mtr and textures/lp3/ are other files), shot after the models map with r_skipAmbient 1: thirteen sealed rooms 1024 apart, each with an entity, the first parity lights that cast (noshadows 0; every other map's stay noshadows 1, SC744), every occluder an entity 16 or more from a point light's origin, every camera at EYE inside its light's volume but H10's, every light, register and stage time-invariant (F4). H01 a point light and a func_static box (six tiles at 512: a point light never takes LOD 0), H02 a spot (one tile at 512, the camera off its origin), H03 a parallel light (light_center -200 30 160, its box ending 12 below the ceiling, SC744; the camera at x 160 looking east, the far wall 224 deep, every lit receiver nearer than cascade 0's split 270.8: four cascades at 1024, cascade 0 alone sampled), H04 and H08 perforated grates (M-PARITY-07), H05 a noSelfShadow far wall on the local list (SC709), H06 a noshadows box, H07 LP7.2's n01.obj, H09 a translucent panel across the box's shadow (D154: shadowed; a caster that draws nothing), H10 LOD 2 from outside a small volume (six tiles at 256, atlas_bytes_written 1,572,864; MOC off, M-PARITY-04), H11 the overflow (M-PARITY-06), H12 P03's shadowing variant on a sealed pair (the shared wall's room-A face lp3p/wall_noshadows, the panel's side face lit through A, B's walls black), H13 P04's out-of-view caster on a doorway pair (M-PARITY-08); controls CH01-CH13 black on the lights-off variant. The row table's expect adds pass 6's counters (lights_casting, lights_placed, lights_unplaced, tiles_drawn, shadow_draws, perforated_skipped, atlas_bytes_written: tiles x size^2 x 4, which pins the LOD) and the per-list shadow-atlas draws (M-SHADOW-STAT-01). The preview's dress rehearsal before the run (single-room scratch maps, the BSP root for H12/H13) changed H11's colour to 0.012. The one engine run of LP3 (2026-10-27 06:25-06:48: bake 130 s, run-a 466 s, run-b 467 s; the game folder's proof listing 21,261 before and after every process; engine_repeat_max 0 for all 210 shots); parity.cfg 53,397 bytes under the 56 KB bound (MAX_CMD_BUFFER 64 KB). Compare at LP3.2-FIX: 206 of 206 gated rows pass, 4 reported; H01-H03, H05-H07 and H09-H13 exact (max 0; H03 since C57 rev 2.3, M-SHADOW-DIFF-08), thresholds lit_min alone; H05 against H01 240 pixels at max 1 in both the engine's and the preview's shots (P3.10: two rooms, not bit-equal); the 184 older rows identical to the gate's compare at d0d8d8f11"
+    },
+    {
+      "id": "M-PARITY-04",
+      "kind": "difference",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            329,
+            329
+          ],
+          "anchor": "r_useMaskedOcclusionCulling 1, NOCHEAT",
+          "sha256": "6af4865a05bd66b7693da0045df52f153e8720170b815470b173e6c3c8450e14"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "SWITCHES: r_useMaskedOcclusionCulling 0 (PRINTED no longer); cmd_selftest's check"
+        }
+      ],
+      "note": "LP3.2 (C63, D159, P3.12, P3.21; K51), test only: parity.cfg sets r_useMaskedOcclusionCulling 0 (a SWITCH, D19's class; it was PRINTED at its default 1): the preview has no masked occlusion culling before LP6, so a light the engine would drop by MOC (the camera outside its volume, the volume occluded) is drawn on both sides and H10's LOD from outside is exact. The proof that the switch changed no earlier row: the 184 older rows' compare identical to the gate's at d0d8d8f11, and their engine shots byte-equal to the previous run's in 182 of 184; A01 (4 pixels at max 1) and A01a (13 pixels) moved with the bake's area-14 probe sh0 in its 8th digit (D95: the bake need not be deterministic), both still exact, MOC never applying there (the camera inside the light). In the product the preview draws such a light (K51) until LP6"
+    },
+    {
+      "id": "M-PARITY-05",
+      "kind": "constant",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            108,
+            108
+          ],
+          "anchor": "r_useShadowSurfaceScissor 1",
+          "sha256": "08d20cdcd7d5569d6f42379d084544a8863ac6b4b84495e5b4a429901de20b02"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            251,
+            269
+          ],
+          "anchor": "r_useShadowAtlas .. r_shadowMapSunDepthBiasScale",
+          "sha256": "a116eaa209b5d77c75d55b44606c1a8cb63521f79c5dae635f79df1604c6f904"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            50,
+            50
+          ],
+          "anchor": "r_forceShadowMapsOnAlphaTestedSurfaces 1",
+          "sha256": "6c6fb312d1cd94d296898c4bc7bfd4821fff7a1913257199be0d4932799db891"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "MIRRORED: the shadow cvars (LP3.2); SWITCHES: r_shadowMapRandomizeJitter 0; PRINTED: r_shadowMapAtlasSize; cmd_selftest's checks of them"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineFrameDefaults (the shadow members)"
+        }
+      ],
+      "note": "LP3.2 (C63, D159, SC741), test only: MIRRORED gains every shadow cvar EngineFrameDefaults holds, each at the engine's default with its line, so that the engine prints it and the run checks it for every map: r_shadowMapFrustumFOV 92, r_shadowMapSingleSide -1, r_shadowMapJitterScale 2.5, r_shadowMapSamples 16, r_shadowMapSplits 3, r_shadowMapSplitWeight 0.9, r_shadowMapLodScale 1.4, r_shadowMapLodBias 0, r_shadowMapPolygonFactor 2, r_dxShadowMapPolygonOffset 0.1 (DX12's constant bias, which the Vulkan preview never reads), r_vkShadowMapPolygonOffset 1, r_shadowMapOccluderFacing 2, r_shadowMapRegularDepthBiasScale 0.999, r_shadowMapSunDepthBiasScale 0.999, r_useShadowSurfaceScissor 1 and r_forceShadowMapsOnAlphaTestedSurfaces 1, beside r_skipShadows 0 and r_useShadowAtlas 1 (18 in all); r_shadowMapRandomizeJitter 0 stays in SWITCHES (SC727) and the ROM r_shadowMapAtlasSize 8192 PRINTED. The selftest checks the list against the defaults"
+    },
+    {
+      "id": "M-PARITY-06",
+      "kind": "difference",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3889,
+            3897
+          ],
+          "anchor": "ShadowAtlasPass: a side without a tile leaves its light unshadowed (failedNum, never printed)",
+          "sha256": "57c082fe7501ad410b1a17a78fd6ff535e9a0e94f2a01db6714ded443c80abee"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "the row H11, SH_OVERFLOW, SH_OVERFLOW_COLOUR, sh_overflow_origins"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "engineViewLightsOrder (the viewLights order mirror, M-SHADOW-ORDER-01)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "the row .json's unplaced_lights"
+        }
+      ],
+      "note": "LP3.2 (D162, D148, D145; P3.1), test only: H11 is D162's test of the order mirror against the game. 43 point lights at 512 in one area (a 4 x 4 x 3 grid of origins, the first 43 in spawn order, every volume holding the camera, so every scissor is the whole view and every area ties), each _color 0.012: the copied TileMap and idSort_Quick over the mirrored viewLights order leave viewLights 0 and 21 without a tile, lp3p_h11_42 and lp3p_h11_21 (the first acceptances prepended: the last spawned light is viewLights 0), drawn with the plain program while their placed sides are still drawn (SC720); lights_placed 41, lights_unplaced 2, tiles_drawn 256, and the engine shot agrees: exact (max 0), D162's diagnostic fallback not taken. The engine prints nothing about the overflow (failedNum's line is commented out). A C library other than the UCRT may order the ties its own way (K48, M-SHADOW-DIFF-01)"
+    },
+    {
+      "id": "M-PARITY-07",
+      "kind": "temporary",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            1018,
+            1154
+          ],
+          "anchor": "R_AddSingleModel: a perforated material casts whatever its noShadows (r_forceShadowMapsOnAlphaTestedSurfaces)",
+          "sha256": "a2bf3656e607376e6874d512bc43ddf9dd207d3cf8f60806718bceccb10c8fc6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "the rows H04 and H08 (diagnostic), lp3p/grate and lp3p/grate_noshadows"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::shadowMapPass (perforatedCastersSkipped, M-SHADOW-DIFF-06)"
+        }
+      ],
+      "note": "LP3.2 (D155, C57, SC738), test only, until LP3.4: H04 (a one-sided perforated grate, lp3p/grate: alpha test 0.5, no polygonOffset, nopicmip, a 64 x 64 image) and H08 (the same with noShadows, lp3p/grate_noshadows: a perforated material casts whatever its noShadows says, r_forceShadowMapsOnAlphaTestedSurfaces 1) are diagnostic rows: the engine's shots, taken in LP3.2's one run, have the grate's shadow over the far wall; the preview skips perforated casters (perforated_skipped 1, M-SHADOW-DIFF-06), max 123 on both rows, their controls black and gated. LP3.4 mirrors the perforated path and gates both rows on these shots, without a new engine run"
+    },
+    {
+      "id": "M-PARITY-08",
+      "kind": "difference",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            488,
+            634
+          ],
+          "anchor": "R_AddSingleLight: a caster not directly visible gets a shadow-only viewEntity unless R_ShadowBounds' box is outside the view",
+          "sha256": "1ab7365b5e1a681800a91c328137983c18a44df00d7a92666385796806217d6a"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "the row H13 (the doorway pair, lp3p_h13_box)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (ViewLight::casters, never view-culled: C57)"
+        }
+      ],
+      "note": "LP3.2 (P04, C57; K49), test only: H13, the doorway pair with its areaportal: a point light in room A whose volume holds the camera in room B, the box in A beside the doorway outside the view frustum (its nearest corner 20 beyond the frustum's side plane), its shadow on A's west wall and floor seen through the doorway. The engine draws the box as a shadow-only viewEntity (FAL:585-633), kept because R_ShadowBounds' box meets the view (:605-618); the preview's caster set has it because casters are never view-culled (C57, M-SHADOW-DIFF-03). Exact (max 0, areas_flowed 2): K49's edge, a caster the engine view-culls whose shadow the view's PCF taps read, does not arise in this row"
+    },
+    {
+      "id": "M-SHADOW-STAT-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            995,
+            1006
+          ],
+          "anchor": "R_AddSingleModel: the interaction lists",
+          "sha256": "919422971e7b4c2a8a515959ef912b7744f6438546626d943c4e6ce2e7323391"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.h",
+          "symbol": "LitFrameStats::smDrawsLocal, smDrawsGlobal, smDrawsTranslucent; engineInteractionProgram, countInteractionDraw"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "the interaction draws' recording (countInteractionDraw)"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/FrameLog.h",
+          "symbol": "FrameLogRow::smDrawsLocal .. smDrawsTranslucent (sm_draws_local, sm_draws_global, sm_draws_translucent)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ShadowMatrices.cpp",
+          "symbol": "LitPasses: the shadow-atlas interaction draws per list (LP3.2, D157, SC709)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_FrameLog.cpp",
+          "symbol": "the header and the row (94 fields)"
+        }
+      ],
+      "note": "LP3.2 step 1 (D157 extended; SC709, P3.10): LitFrameStats counts per list the interaction draws whose program is a shadow-atlas one (interactionSM, builtins 39-49 of engineInteractionProgram, beside engineShadowAtlasProgram): smDrawsLocal, smDrawsGlobal, smDrawsTranslucent (countInteractionDraw, on the render thread as the draws are recorded); the plain draws are the rest of interaction_draws. The frame log gains sm_draws_local, sm_draws_global and sm_draws_translucent after set11_writes (91 to 94 columns; FrameLogFields 94; TbUiLib's column counts in tst_LitPreviewPanel.cpp and tst_LitMeasure.cpp), the [.][parity] row .json the shadow counters a row can pin with the atlas's unplaced lights by name, the expect chain the same keys (a number or a minimum). The CPU test: a placed light with a surface on each list counts 1 / 1 / 1, an unplaced light none (K26), interactionAmbient none. SC709 shown on H05: the far wall's noSelfShadow surface drawn on the local list with the shadow-atlas program (sm_draws_local 1, global 6), H09's translucent panel on the translucent list (1). On admin (Release, LP3.2-FIX's measurement) the settled start view draws 41 / 628 / 4 of its 828 interactions with the shadow-atlas programs, the orbit p95 43 / 691-692 / 4"
+    },
+    {
+      "id": "M-SHADOW-DIFF-08",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            430,
+            441
+          ],
+          "anchor": "R_DeriveLightData: a parallel light's globalLightOrigin 100000 along its light_center",
+          "sha256": "d90d1e3c0745c5b71044d73bf3a1d7472116ff733b9ebbe2544af8d9ff0917b4"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            488,
+            501
+          ],
+          "anchor": "R_AddSingleLight: the light's references walked, areas not connected to its own skipped unless it is -1",
+          "sha256": "9d8addda55afcbd05825684a7bfb99ef4ab2226cbc83af947558457f600adcf8"
+        },
+        {
+          "file": "neo/tools/compilers/dmap/usurface.cpp",
+          "lines": [
+            572,
+            640
+          ],
+          "anchor": "PutWindingIntoAreas_r: a piece reaching an opaque leaf is not kept",
+          "sha256": "29a5cc5ce093e28b00aca7d87a23a1bce7a96db440ae7b3ed54981546cba69c5"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/ViewFlow.cpp",
+          "symbol": "lightReachesCaster (both overloads), lightCasterAreas"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (the caster gathering calls lightReachesCaster)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitPasses.cpp",
+          "symbol": "LitPasses: the casters of a casting light, on screen or off (LP3.0, C57): the truth table and the outside set's casters"
+        },
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "the row H03"
+        }
+      ],
+      "note": "LP3.2-FIX (C57 rev 2.3; D47, D81, K14 extended; H03), no engine counterpart: D81's outside set (world chunks in area -1 and brush entities without references: geometry that a fresh dmap removes, a sealed hull's outer faces, or that a stale .proc places in solid, M-PARITY-DIFF-02) is in the caster set of a light without references alone, the light of the set, which lights that geometry alone (K14: a new room built outside the hull keeps its own light's shadows until the next dmap), and never in the caster set of a light with references, whatever its area (every parallel light has references: its globalLightOrigin lies 100,000 along its light_center and its frustum is pushed into the tree; its area is its origin's, M-SHADOW-CAST-02). The engine has none of that geometry, so for a light with references the preview's casters are the engine's again. LP3.2's H03 (a parallel light, its box x -23..407, y -23..407, z -20..180) failed at max 38 on 6,646 pixels while the outside set cast for every light by volume: the +y wall's outer face at y = 400, inside the light's box, shadowed the inner face at y = 384 below z 106.7 (z + 16 x 160 / 30 <= 192). One rule, lightReachesCaster over lightCasterAreas' per-light table of the areas it reaches (FAL:488-501), which the frontend's gathering calls (it repeated the rule inline before); the receivers are unchanged (lightReachesSurface: a light with references still lights the outside set it meets by volume, now without a shadow from it). Without a tree (D94) nothing is classified and every chunk casts: before the first dmap a hull face in the void can shadow the hull's inside at a grazing angle for a parallel light, accepted (an end-decision item). H03 exact (max 0) on LP3.2's shots, no second engine run; per H row two to four outer-face chunks fewer among each light's casters (H01 7 to 3, H11 301 to 129 over 43 lights) and fewer shadow draws (H01 28 to 13, H11 1,194 to 504), the tiles, atlas bytes, lights placed and the pictures of every other row unchanged. On admin (the map's brush faces that its tree puts in solid) the settled start view's casters 698 to 475, pairs 927 to 526, shadow draws 1,836 to 1,059"
     }
   ],
   "retired": [
