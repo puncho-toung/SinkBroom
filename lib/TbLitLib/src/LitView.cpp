@@ -51,6 +51,9 @@ LitView litViewOf(
   view.width = int(sized.viewportWidth);
   view.height = int(sized.viewportHeight);
   view.viewOrigin = projection.viewOrigin;
+  view.viewAxis = projection.viewAxis;
+  view.fovX = projection.fov.x;
+  view.fovY = projection.fov.y;
   view.projectionMatrix = projection.projectionMatrix;
   view.worldModelViewMatrix = projection.modelViewMatrix;
   // tr_frontend_main.cpp:904-907

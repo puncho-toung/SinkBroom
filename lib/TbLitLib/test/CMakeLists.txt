@@ -64,6 +64,7 @@ target_sources(TbLitLibTest PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ShaderBlobs.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ShaderReflection.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ShadowAtlas.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_ShadowMatrices.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_Snapshot.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_StackThread.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_SwapchainRules.cpp

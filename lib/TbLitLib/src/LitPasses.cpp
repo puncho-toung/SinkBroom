@@ -1632,6 +1632,39 @@ std::pair<int, int> shadowSides(const ShadowLightType type)
   return {-1, 0};
 }
 
+// LP3.1 (C58): what of viewDef_t the shadow matrices read: the view's origin, axis, fov,
+// viewport and world view matrix
+EngineShadowView shadowViewOf(const LitView& view)
+{
+  auto shadowView = EngineShadowView{};
+  shadowView.vieworg = view.viewOrigin;
+  shadowView.viewaxis = view.viewAxis;
+  shadowView.fovX = view.fovX;
+  shadowView.fovY = view.fovY;
+  shadowView.width = view.width;
+  shadowView.height = view.height;
+  shadowView.worldModelViewMatrix = view.worldModelViewMatrix;
+  shadowView.projectionMatrix = view.projectionMatrix;
+  return shadowView;
+}
+
+// LP3.1 (C58): the viewLight_t fields SetupShadowMapMatrices reads (R_AddSingleLight:
+// the light's globalLightOrigin, baseLightProject and its inverse, pointLight, parallel,
+// lightCenter)
+EngineShadowLight shadowLightOf(const ViewLight& light)
+{
+  const auto& record = *light.record;
+  const auto& projection = record.derived.projection;
+  auto shadowLight = EngineShadowLight{};
+  shadowLight.globalLightOrigin = projection.globalLightOrigin;
+  shadowLight.baseLightProject = projection.baseLightProject;
+  shadowLight.inverseBaseLightProject = projection.inverseBaseLightProject;
+  shadowLight.pointLight = record.light.parms.pointLight;
+  shadowLight.parallel = record.light.parms.parallel;
+  shadowLight.lightCenter = record.light.parms.lightCenter;
+  return shadowLight;
+}
+
 // the pixels a and b share
 std::int64_t overlapArea(const AtlasRect& a, const AtlasRect& b)
 {
@@ -1818,12 +1851,23 @@ void LitPasses::recordShadowAtlas(Frame& frame)
     ++m_stats.tilesVacated;
   }
 
+  // R_SetupSplitFrustums (tr_frontend_main.cpp:924: every view; a parallel light's
+  // cascades and the consumer's rpCascadeDistances read it)
+  const auto shadowView = shadowViewOf(frame.view);
+  m_splitFrustums = engineSetupSplitFrustums(shadowView);
+
   // then each placed side, in loop 2's order: its far-plane clear, then its draws
   for (auto t = std::size_t{0}; t < tiles.size() && !disabled; ++t)
   {
     const auto [r, side] = tiles[t];
     auto& record = m_shadowRecords[r];
     const auto slice = std::size_t(std::max(0, side));
+    // ShadowMapPassFast's SetupShadowMapMatrices (RB:3451-3453): its stores kept on the
+    // light's record as drawn (C61), its raster pair for the side's draws
+    const auto matrices = engineShadowMapMatrices(
+      shadowLightOf(m_lists.lights[record.index]), side, shadowView, m_splitFrustums);
+    record.shadowV[slice] = matrices.shadowV;
+    record.shadowP[slice] = matrices.shadowP;
     const auto rect = AtlasRect{
       record.atlasOffsets[slice][0], record.atlasOffsets[slice][1], record.imageSize[1]};
     if (!clearAtlasRect(atlasFrame, rect, record.light, side))

@@ -58,6 +58,12 @@ struct LitView
   int height = 1;
   // renderView.vieworg
   EngineVec3 viewOrigin = {0, 0, 0};
+  // LP3.1 (C58): renderView.viewaxis (rows forward, left, up) and fov_x, fov_y, which a
+  // parallel light's split frustums and crop read (R_SetupSplitFrustums,
+  // SetupShadowMapMatrices)
+  EngineMat3 viewAxis = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  float fovX = 90.0f;
+  float fovY = 90.0f;
   EngineGlMatrix projectionMatrix = {};
   EngineGlMatrix worldModelViewMatrix = {};
   EngineMat4 projectionRenderMatrix = {};

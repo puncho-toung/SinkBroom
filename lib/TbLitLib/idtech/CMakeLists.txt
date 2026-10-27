@@ -73,6 +73,12 @@ target_sources(TbLitIdLib
     # inside shim/src/EngineBlueNoise.cpp behind the facade lit/EngineImageData.h
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_blueNoiseVC_2.h
     ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_intrinsic.cpp
+    # LP3.1 (C58, D143): SetupShadowMapMatrices with MatrixOrthogonalProjectionRH,
+    # R_SetupSplitFrustums and R_SetupProjectionMatrix2, each a verbatim range, compiled
+    # inside shim/src/EngineShadowMatrices.cpp behind lit/EngineShadowMatrices.h
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/GLMatrix.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/RenderBackend.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/renderer/tr_frontend_main.cpp
     # LP7.1a (C51, D135, D137): the OBJ loader, copied whole; renderer/Model.cpp's ranges,
     # compiled inside shim/src/ShimModels.cpp, which declares the reduced
     # idRenderModelStatic they belong to; the conversion's slop merge (VectorSet.h);
@@ -119,6 +125,8 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_SHIM_DIR}/src/EngineInteraction.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineLight.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineShadowAtlas.cpp
+    # LP3.1 (C58, D143): the shadow maps' matrices
+    ${TB_LIT_ID_SHIM_DIR}/src/EngineShadowMatrices.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineLexer.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineMessages.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ImageFileCheck.cpp
@@ -160,6 +168,7 @@ target_sources(TbLitIdLib
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineModels.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EnginePipelineState.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineShadowAtlas.h
+      ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineShadowMatrices.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/MaterialDecls.h
 )
 
@@ -171,6 +180,9 @@ set_source_files_properties(
   ${TB_LIT_ID_ENGINE_DIR}/renderer/PipelineCache.cpp
   ${TB_LIT_ID_ENGINE_DIR}/renderer/Interaction.cpp
   ${TB_LIT_ID_ENGINE_DIR}/renderer/Image_intrinsic.cpp
+  ${TB_LIT_ID_ENGINE_DIR}/renderer/GLMatrix.cpp
+  ${TB_LIT_ID_ENGINE_DIR}/renderer/RenderBackend.cpp
+  ${TB_LIT_ID_ENGINE_DIR}/renderer/tr_frontend_main.cpp
   ${TB_LIT_ID_ENGINE_DIR}/renderer/Model.cpp
   ${TB_LIT_ID_ENGINE_DIR}/idlib/math/Simd_Generic.cpp
   ${TB_LIT_ID_ENGINE_DIR}/idlib/Lib.cpp
@@ -209,6 +221,14 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)|(e2k)|(E2K)"
    AND NOT CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
   target_compile_definitions(TbLitIdLib PRIVATE USE_INTRINSICS_SSE)
 endif()
+
+# LP3.1 (C58, M-ID-BUILD-01): the engine builds its NVRHI renderer with USE_NVRHI
+# (neo/CMakeLists.txt), under which SetupShadowMapMatrices stores shadowP times the
+# clip-to-UV matrices (RenderBackend.cpp:2998-3007, 3130-3139, 3150-3162); only the one
+# file that compiles that range has it
+set_source_files_properties(
+  ${TB_LIT_ID_SHIM_DIR}/src/EngineShadowMatrices.cpp
+  PROPERTIES COMPILE_DEFINITIONS USE_NVRHI)
 
 # G11, M-ID-BUILD-01: the engine's GCC and Clang code-generation flags. It compiles
 # everything with -fno-strict-aliasing (neo/CMakeLists.txt:199), which the copied idMath's

@@ -43,6 +43,7 @@
 #include "ViewProbes.h"
 #include "base/Macros.h"
 #include "lit/EngineShadowAtlas.h"
+#include "lit/EngineShadowMatrices.h"
 #include "lit/EngineTables.h"
 #include "lit/GridTable.h"
 
@@ -636,6 +637,8 @@ private:
   // record (-1: none)
   std::vector<ShadowLightRecord> m_shadowRecords;
   std::vector<int> m_shadowRecordOf;
+  // LP3.1 (C58): the frame's split frustums (R_SetupSplitFrustums), made by pass 6
+  EngineSplitFrustums m_splitFrustums;
   // D147's far-plane quad (z = w = 1) as a vertex and an index buffer of this session's,
   // made and written at the first clear
   nvrhi::BufferHandle m_clearQuadVertices;

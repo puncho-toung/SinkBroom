@@ -41,3 +41,28 @@ idVec4 vec4_origin( 0.0f, 0.0f, 0.0f, 0.0f );
 idVec5 vec5_origin( 0.0f, 0.0f, 0.0f, 0.0f, 0.0f );
 idVec6 vec6_origin( 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f );
 idVec6 vec6_infinity( idMath::INFINITUM, idMath::INFINITUM, idMath::INFINITUM, idMath::INFINITUM, idMath::INFINITUM, idMath::INFINITUM );
+// ==== engine neo/idlib/math/Vector.cpp lines 238-261 (idVec3::ToMat3) ====
+idMat3 idVec3::ToMat3() const
+{
+	idMat3	mat;
+	float	d;
+
+	mat[0] = *this;
+	d = x * x + y * y;
+	if( !d )
+	{
+		mat[1][0] = 1.0f;
+		mat[1][1] = 0.0f;
+		mat[1][2] = 0.0f;
+	}
+	else
+	{
+		d = idMath::InvSqrt( d );
+		mat[1][0] = -y * d;
+		mat[1][1] = x * d;
+		mat[1][2] = 0.0f;
+	}
+	mat[2] = Cross( mat[1] );
+
+	return mat;
+}
