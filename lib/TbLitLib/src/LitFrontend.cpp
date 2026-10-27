@@ -1118,46 +1118,20 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
     const auto areaNum = record.derived.areaNum;
     const auto spectrum = viewLight.shader->spectrum;
     ++lists.casterLights;
-    // lightReachesCaster's rule per area, once per light: an area the light references,
-    // connected to the light's own area unless that is -1 (FAL:488-501)
-    auto reaches = std::vector<char>(numAreas, 0);
-    for (const auto area : record.derived.areas)
-    {
-      if (
-        area >= 0 && std::size_t(area) < numAreas
-        && (areaNum == -1 || areasConnected(inputs.areas->components, areaNum, area)))
-      {
-        reaches[std::size_t(area)] = 1;
-      }
-    }
-    const auto reachesArea = [&](const int area) {
-      return area >= 0 && std::size_t(area) < numAreas && reaches[std::size_t(area)] != 0;
-    };
-    const auto hasReferences = !record.derived.areas.empty();
+    // lightReachesCaster, the one rule (C57 rev 2.3, D81, K14, H03): the light's area
+    // test tabulated once per light (lightCasterAreas, FAL:488-501), then per candidate
+    // the outside set for a light without references alone, never for one with
+    // references (a hull face in the void that dmap removes casts nothing into the hull);
+    // without a tree (D94) nothing is classified and every candidate casts
+    const auto areaLight = AreaLight{areaNum, record.derived.areas};
+    const auto casterAreas =
+      flow.flowed ? lightCasterAreas(areaLight, *inputs.areas) : std::vector<char>{};
     for (auto& candidate : candidates)
     {
-      if (flow.flowed)
+      if (
+        flow.flowed && !lightReachesCaster(areaLight, candidate.areaSurface, casterAreas))
       {
-        // D81: the outside set by volume, for every light; a light without references
-        // casts only on it
-        const auto& areaSurface = candidate.areaSurface;
-        const auto outside =
-          areaSurface.kind == AreaSurfaceKind::WorldOutside
-          || (areaSurface.kind == AreaSurfaceKind::Entity && areaSurface.refs.empty());
-        if (!outside)
-        {
-          if (!hasReferences)
-          {
-            continue;
-          }
-          const auto reached = areaSurface.kind == AreaSurfaceKind::WorldArea
-                                 ? reachesArea(areaSurface.area)
-                                 : std::ranges::any_of(areaSurface.refs, reachesArea);
-          if (!reached)
-          {
-            continue;
-          }
-        }
+        continue;
       }
       if (!candidate.resolved)
       {

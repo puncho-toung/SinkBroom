@@ -1917,9 +1917,10 @@ TEST_CASE("LitPasses: the casters of a casting light, on screen or off (LP3.0, C
   CHECK(lists.casterPairsPending == 0u);
   CHECK(lists.casters == 2u);
 
-  // lightReachesCaster, the rule the gathering tabulates per light: an area the light
-  // references (connected to its own), D81's outside set by volume, never directly
-  // visible
+  // lightReachesCaster, the rule the gathering calls per light over lightCasterAreas'
+  // table: an area the light references (connected to its own), never directly visible;
+  // C57 rev 2.3 (LP3.2-FIX, H03): D81's outside set for a light without references alone,
+  // never for a light with references
   {
     const auto refs = std::vector<int>{1};
     const auto light = AreaLight{1, refs};
@@ -1935,15 +1936,95 @@ TEST_CASE("LitPasses: the casters of a casting light, on screen or off (LP3.0, C
     surface.kind = AreaSurfaceKind::Entity;
     surface.refs = entityRefs;
     CHECK(lightReachesCaster(light, surface, areas));
+    // an entity without references: not for a light with references (it is lit by it,
+    // D81, but casts nothing into its tiles); for a light without references, yes
     surface.refs = {};
-    CHECK(lightReachesCaster(light, surface, areas));
+    CHECK_FALSE(lightReachesCaster(light, surface, areas));
+    CHECK_FALSE(lightReachesCaster(AreaLight{-1, refs}, surface, areas));
+    CHECK(lightReachesSurface(light, surface, areas));
+    CHECK(lightReachesCaster(AreaLight{-1, {}}, surface, areas));
+    // a world chunk in area -1 the same two ways (a parallel light has area -1 and
+    // references: the outside set never casts for it)
     surface.kind = AreaSurfaceKind::WorldOutside;
     CHECK(lightReachesCaster(AreaLight{-1, {}}, surface, areas));
+    CHECK_FALSE(lightReachesCaster(AreaLight{-1, refs}, surface, areas));
+    CHECK_FALSE(lightReachesCaster(light, surface, areas));
     surface.kind = AreaSurfaceKind::WorldArea;
     surface.area = 1;
     CHECK_FALSE(lightReachesCaster(AreaLight{-1, {}}, surface, areas));
     // area -1 skips the connection test
     CHECK(lightReachesCaster(AreaLight{-1, refs}, surface, areas));
+    // the table the gathering reads: one entry per area, the referenced ones set
+    CHECK(lightCasterAreas(light, areas) == std::vector<char>{0, 1});
+    CHECK(lightCasterAreas(AreaLight{-1, refs}, areas) == std::vector<char>{0, 1});
+    CHECK(lightCasterAreas(AreaLight{-1, {}}, areas) == std::vector<char>{0, 0});
+    CHECK(lightReachesCaster(light, surface, lightCasterAreas(light, areas)));
+  }
+
+  // C57 rev 2.3 on the gathering (LP3.2-FIX, H03): beyond the east room's wall (x > 256,
+  // solid) a world piece in area -1 and a brush entity without references, both of a cast
+  // class and inside two casting lights' volumes: an area-0 light with references (its
+  // box x 130..330 holds the camera) and a light in solid without references (x
+  // 318..482); a piece keyed area 0 in both volumes
+  {
+    auto outsideScene = FlowScene{};
+    outsideScene.tree = &tree;
+    outsideScene.areas = &areas;
+    addChunk(outsideScene, -1, World, {320, -10, 40}, {326, 10, 56});
+    constexpr auto Loose = PreviewId{30};
+    addEntity(
+      outsideScene,
+      Loose,
+      {324, 0, 48},
+      EngineBounds{EngineVec3{-2, -2, -2}, EngineVec3{2, 2, 2}},
+      {});
+    addChunk(outsideScene, 0, Loose, {-2, -2, -2}, {2, 2, 2}, "textures/lp1b/floor");
+    addChunk(
+      outsideScene, 0, World, {321, -10, 40}, {327, 10, 56}, "textures/lp1b/crate");
+    addLight(
+      outsideScene,
+      *f,
+      40,
+      EntityKeys{{"origin", "230 0 48"}, {"light_radius", "100 60 60"}});
+    addLight(
+      outsideScene,
+      *f,
+      41,
+      EntityKeys{{"origin", "400 0 48"}, {"light_radius", "82 60 60"}});
+    REQUIRE(outsideScene.lights.find(40)->derived.areas == std::vector<int>{0});
+    REQUIRE(outsideScene.lights.find(41)->derived.areas.empty());
+
+    const auto outsideLists =
+      flowListsOf(*f, outsideScene, cameraAt({200, 0, 48}, {1, 0, 0}));
+    REQUIRE(outsideLists.flowed);
+    const auto* referencing = viewLightOf(outsideLists, 40);
+    const auto* unreferenced = viewLightOf(outsideLists, 41);
+    REQUIRE(referencing);
+    REQUIRE(unreferenced);
+    REQUIRE(referencing->shadowLod >= 0);
+    REQUIRE(unreferenced->shadowLod >= 0);
+    const auto castersOf = [](const ViewLight& light) {
+      auto keys = std::set<std::pair<int, PreviewId>>{};
+      for (const auto& caster : light.casters)
+      {
+        keys.emplace(caster.chunk->key.area, caster.chunk->key.entity);
+      }
+      return keys;
+    };
+    // the light with references: the area-0 piece alone, the outside set not among its
+    // casters (it still lights it, D81's receivers)
+    CHECK(castersOf(*referencing) == std::set<std::pair<int, PreviewId>>{{0, World}});
+    CHECK(litOf(referencing).contains({-1, World}));
+    // the light without references: the outside set alone, not the area-0 piece in its
+    // volume
+    CHECK(
+      castersOf(*unreferenced)
+      == std::set<std::pair<int, PreviewId>>{{-1, World}, {0, Loose}});
+    // the pairs counted: 1 for the first light (it was 3 before C57 rev 2.3), 2 for the
+    // second
+    CHECK(outsideLists.casterLights == 2u);
+    CHECK(outsideLists.casterPairs == 3u);
+    CHECK(outsideLists.casters == 3u);
   }
 
   // the entity's noShadows (a cast class of None) takes a chunk out of the set

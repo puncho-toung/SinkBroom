@@ -347,10 +347,35 @@ bool lightReachesSurface(
  * the connection test and casts from every area it references. Unlike
  * lightReachesSurface the surface need not be directly visible (a shadow-only entity,
  * FAL:585-633; the engine's view cull of R_ShadowBounds, :605-618, is not mirrored: K49).
- * D81's outside set casts by volume alone, as it is lit. Pure.
+ * LP3.2-FIX (C57 rev 2.3, D81, K14, H03): D81's outside set (world chunks in area -1,
+ * brush entities without references: geometry dmap removes, so the engine never has it)
+ * casts for a light without references alone, the light of the set, which lights that
+ * geometry alone (a new room outside the hull keeps its own light's shadows until the
+ * next dmap), and never for a light with references (every parallel light has references:
+ * globalLightOrigin 100000 away, RenderWorld_defs.cpp:425-441, then PushFrustumIntoTree),
+ * so no hull face in the void shadows the hull's inside. Its receivers are
+ * lightReachesSurface's, unchanged. Only with a tree (D94: without one every chunk
+ * casts). Pure; the same rule as the overload over lightCasterAreas' table.
  */
 bool lightReachesCaster(
   const AreaLight& light, const AreaSurface& surface, const AreaData& areas);
+
+/**
+ * LP3.2-FIX: lightReachesCaster's area test tabulated for one light, as the caster
+ * gathering (buildFrontendLists) makes it once per light: one entry per area of areas,
+ * non-zero for an area the light references that is connected to the light's own area,
+ * or for every area it references when its area is -1 (tr_frontend_addlights.cpp:488-501,
+ * r_useAreasConnectedForShadowCulling 2). Pure.
+ */
+std::vector<char> lightCasterAreas(const AreaLight& light, const AreaData& areas);
+
+/**
+ * lightReachesCaster with its area test read from casterAreas, lightCasterAreas( light,
+ * areas )'s table: the rule itself (the overload over AreaData calls this one), for the
+ * gathering's loop over the candidates. Pure.
+ */
+bool lightReachesCaster(
+  const AreaLight& light, const AreaSurface& surface, std::span<const char> casterAreas);
 
 /**
  * The grid area of a model surface (tr_frontend_addmodels.cpp:814-853, C36, P4.11), for a

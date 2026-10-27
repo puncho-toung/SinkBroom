@@ -636,35 +636,54 @@ bool lightReachesSurface(
 bool lightReachesCaster(
   const AreaLight& light, const AreaSurface& surface, const AreaData& areas)
 {
-  // D81: the outside set by volume, for every light
+  return lightReachesCaster(light, surface, lightCasterAreas(light, areas));
+}
+
+std::vector<char> lightCasterAreas(const AreaLight& light, const AreaData& areas)
+{
+  // tr_frontend_addlights.cpp:488-501: the areas the light references, those not
+  // connected to the light's own area skipped unless its area is -1
+  auto casterAreas = std::vector<char>(areas.areas.size(), 0);
+  for (const auto area : light.areas)
+  {
+    if (
+      area >= 0 && std::size_t(area) < casterAreas.size()
+      && (light.areaNum == -1 || areasConnected(areas.components, light.areaNum, area)))
+    {
+      casterAreas[std::size_t(area)] = 1;
+    }
+  }
+  return casterAreas;
+}
+
+bool lightReachesCaster(
+  const AreaLight& light,
+  const AreaSurface& surface,
+  const std::span<const char> casterAreas)
+{
+  // C57 rev 2.3 (LP3.2-FIX, D81, K14, H03): the outside set casts for a light without
+  // references alone, the light of the set; never for a light with references, a parallel
+  // light's included, whose box can hold a hull face in the void that the engine never
+  // has (H03: the +y wall's outer face shadowed its inner face)
   const auto outside =
     surface.kind == AreaSurfaceKind::WorldOutside
     || (surface.kind == AreaSurfaceKind::Entity && surface.refs.empty());
   if (outside)
   {
-    return true;
+    return light.areas.empty();
   }
-  // a light without references casts only on the outside set
+  // a light without references casts only from the outside set
   if (light.areas.empty())
   {
     return false;
   }
-  // tr_frontend_addlights.cpp:488-501: the areas the light references, those not
-  // connected to the light's own area skipped unless its area is -1
   const auto reaches = [&](const int area) {
-    if (std::ranges::find(light.areas, area) == light.areas.end())
-    {
-      return false;
-    }
-    if (light.areaNum != -1)
-    {
-      return areasConnected(areas.components, light.areaNum, area);
-    }
-    return true;
+    return area >= 0 && std::size_t(area) < casterAreas.size()
+           && casterAreas[std::size_t(area)] != 0;
   };
   if (surface.kind == AreaSurfaceKind::WorldArea)
   {
-    return surface.area >= 0 && reaches(surface.area);
+    return reaches(surface.area);
   }
   return std::ranges::any_of(surface.refs, reaches);
 }
