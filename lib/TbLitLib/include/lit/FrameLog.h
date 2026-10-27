@@ -244,6 +244,12 @@ struct FrameLogRow
   std::optional<double> uploadMs;
   std::optional<double> submitMs;
   std::optional<double> recordOtherMs;
+  // LP6.0 (C65), frame rows: the GPU times of LP6's passes, their TimedPass entries
+  // reserved before the passes land: the G-buffer normals (pass 3) and SSAO (pass 4,
+  // LP6.5a), TAA (pass 11, LP6.6); empty while no pass begins them, the last columns
+  std::optional<double> gpuGbufferMs;
+  std::optional<double> gpuSsaoMs;
+  std::optional<double> gpuTaaMs;
 };
 
 // the CSV header line, ending in a newline

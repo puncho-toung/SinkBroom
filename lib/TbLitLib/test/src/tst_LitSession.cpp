@@ -375,8 +375,8 @@ using namespace std::chrono_literals;
 // proc_bytes and the eleven model, dress and adoption counts (C52, P7.20), LP7.3's
 // inlined_surfaces (C54), LP3.1's pass 6 and caster columns (D157), LP3.2's per-list
 // shadow-atlas interaction draws, LP3.4's perforated_draws (D155), LP6.0's ten split
-// columns of the CPU record (C65)
-constexpr auto FrameLogFields = std::size_t{105};
+// columns of the CPU record and three reserved GPU columns (C65)
+constexpr auto FrameLogFields = std::size_t{108};
 
 // LP2.0, T0.2: the validation layer's id of "Vertex attribute at location N not consumed
 // by vertex shader" (mirror.json M-PIPE-DEFECT-01), as this machine's layer names it
@@ -5718,6 +5718,11 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     CHECK(rows[0][ListsMsColumn + 1] == "prepass_cpu_ms");
     CHECK(rows[0][RecordOtherMsColumn - 2] == "upload_ms");
     CHECK(rows[0][RecordOtherMsColumn] == "record_other_ms");
+    // and the three GPU columns reserved for LP6's passes, empty while no pass begins
+    // them
+    CHECK(rows[0][RecordOtherMsColumn + 1] == "gpu_gbuffer_ms");
+    CHECK(rows[0][RecordOtherMsColumn + 2] == "gpu_ssao_ms");
+    CHECK(rows[0][RecordOtherMsColumn + 3] == "gpu_taa_ms");
     auto lastLit = std::optional<std::vector<std::string>>{};
     auto settledRows = 0;
     for (std::size_t i = 1; i < rows.size(); ++i)
@@ -5730,6 +5735,9 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
       CHECK((rows[i][34] == "0" || rows[i][34] == "1"));
       // LP6.0 (C65): every frame's split sums to its record time, the settled ones too
       checkCpuSplit(rows[i]);
+      CHECK(rows[i][RecordOtherMsColumn + 1].empty());
+      CHECK(rows[i][RecordOtherMsColumn + 2].empty());
+      CHECK(rows[i][RecordOtherMsColumn + 3].empty());
       if (rows[i][34] == "1")
       {
         ++settledRows;

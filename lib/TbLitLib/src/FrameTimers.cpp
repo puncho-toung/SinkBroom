@@ -47,6 +47,13 @@ std::optional<double>& rowTime(FrameLogRow& row, const TimedPass pass)
     return row.gpuFogMs;
   case TimedPass::Shadows:
     return row.gpuShadowMs;
+  // LP6.0 (C65): reserved for LP6.5a and LP6.6
+  case TimedPass::Gbuffer:
+    return row.gpuGbufferMs;
+  case TimedPass::Ssao:
+    return row.gpuSsaoMs;
+  case TimedPass::Taa:
+    return row.gpuTaaMs;
   case TimedPass::Frame:
     break;
   }

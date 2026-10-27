@@ -1177,8 +1177,9 @@ constexpr auto AdoptedTris = std::size_t{66};
 // (shadow_draws ... light_triangle_entries), the 91st the last; LP3.2 (D157 extended):
 // and the per-list shadow-atlas interaction draws after set11_writes, the 94th; LP3.4
 // (D155): and perforated_draws, the 95th; LP6.0 (C65): and the CPU record's ten split
-// columns after it, the 105th the last
-constexpr auto Count = std::size_t{105};
+// columns after it, the 105th, and the three GPU columns reserved for LP6's passes, the
+// 108th the last
+constexpr auto Count = std::size_t{108};
 } // namespace column
 
 std::vector<LogRow> readFrameLog(const std::filesystem::path& path)

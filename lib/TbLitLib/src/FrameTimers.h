@@ -37,7 +37,9 @@ namespace tb::lit
 // C16 (LP2.2b): what a frame times, each with a query of its own per frame slot: the
 // whole command list, and the passes (the tonemap's covers histogram, exposure and
 // tonemapping; LP4.2a adds the ambient pass's, LP5.2a the stage pass's, LP5.3 pass 9's,
-// LP3.1 pass 6's)
+// LP3.1 pass 6's). LP6.0 (C65) reserves LP6's: the G-buffer normals (pass 3) and SSAO
+// (pass 4), filled by LP6.5a, and TAA (pass 11), by LP6.6; until then no pass begins
+// them, and their columns stay empty
 enum class TimedPass
 {
   Frame,
@@ -49,8 +51,11 @@ enum class TimedPass
   Stages,
   Fog,
   Shadows,
+  Gbuffer,
+  Ssao,
+  Taa,
 };
-inline constexpr auto TimedPassCount = std::size_t{9};
+inline constexpr auto TimedPassCount = std::size_t{12};
 
 /**
  * The frame log (C16) and the timer queries that time each frame and its passes
