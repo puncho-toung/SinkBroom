@@ -1708,8 +1708,10 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     // ambient pass's two; LP5.1 (C45): the math and ambient lights, 51; LP5.2a (C46): the
     // stage pass's three, 54; LP5.3 (C49): pass 9's three, 57; LP7.0 (C52, C54, P7.20):
     // proc_bytes and LP7's eleven counts, 69; LP7.3 (C54, K42): inlined_surfaces, the
-    // 70th
-    REQUIRE(rows[0].size() == 70u);
+    // 70th; LP3.1 (D157, P3.24d): pass 6's fourteen and LP3.0's seven caster columns, 91
+    REQUIRE(rows[0].size() == 91u);
+    CHECK(rows[0][70] == "shadow_draws");
+    CHECK(rows[0][90] == "light_triangle_entries");
     CHECK(rows[0][6] == "gpu_frame_ms");
     CHECK(rows[0][18] == "gpu_prepass_ms");
     CHECK(rows[0][21] == "gpu_blit_ms");
@@ -1732,7 +1734,7 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     auto presentMs = std::vector<double>{};
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 70u);
+      REQUIRE(rows[i].size() == 91u);
       sessions.insert(rows[i][0]);
       if (rows[i][1] == "start")
       {

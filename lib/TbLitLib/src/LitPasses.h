@@ -331,6 +331,11 @@ struct LitFrameStats
   bool shadowAtlasTimed = false;
   double shadowRecordMs = 0.0;
   bool shadowAtlasDisabled = false;
+  // LP3.1 (D76, P3.5, D157): the interactions' writes of their volatile constant buffers
+  // this frame, set 10's (DRAW_INTERACTION) and set 11's (DRAW_INTERACTION_SM), each
+  // against constantWriteBudget
+  std::uint64_t interactionWrites = 0;
+  std::uint64_t interactionSmWrites = 0;
 };
 
 // a recorded draw (setDrawLogForTesting)

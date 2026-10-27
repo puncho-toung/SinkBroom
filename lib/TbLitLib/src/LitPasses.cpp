@@ -376,6 +376,9 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
       beginTimer(frame, inputs.interactionTimer);
       recordInteractions(frame);
       m_stats.interactionsTimed = endTimer(frame, inputs.interactionTimer);
+      // LP3.1 (D76, P3.5): each interaction layout's writes
+      m_stats.interactionWrites = m_frameWrites[EngineBindingLayout::DrawInteraction];
+      m_stats.interactionSmWrites = m_frameWrites[EngineBindingLayout::DrawInteractionSm];
     }
   }
 

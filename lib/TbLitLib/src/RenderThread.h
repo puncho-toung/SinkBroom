@@ -450,9 +450,6 @@ private:
   // the slot's event query was set by a submitted frame and not waited for yet
   std::array<bool, FramesInFlight> m_frameEventSet = {};
   FrameTimers m_timers;
-  // LP3.0 (P3.14): the casters' measurement log beside the frame log (lit/FrameLog.h
-  // casterLogPath), open while the frame log is; rows are appended per presented frame
-  std::ofstream m_casterLog;
   std::uint64_t m_frameIndex = 0;
   // the started frame's FramePacer::frameStarted stamp (RenderFrameAccess::frameStart)
   FrameClock::time_point m_frameStart;

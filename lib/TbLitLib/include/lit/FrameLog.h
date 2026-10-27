@@ -181,47 +181,44 @@ struct FrameLogRow
   // LP7.3 (C54, K42), frame rows: the .proc surfaces the dress pass identified as dmap's
   // inlined model copies (never dress fragments); a column at the end (LP7.0's rule)
   std::optional<std::uint64_t> inlinedSurfaces;
+  // ----- LP3.1 (D157, C16), frame rows, at the end (LP7.0's rule) -----
+  // pass 6's (LitFrameStats): the casters' depth draws; the tiles drawn (each cleared by
+  // its far-plane quad first), the rects cleared because last run's tiles left them
+  // (vacated, P3.3), and the tiles relocated, cached and provisional (LP3.3's and
+  // LP3.4's: 0 until then); the lights that took tiles, placed and unplaced by the atlas;
+  // the perforated casters not drawn until LP3.4; the atlas bytes the tiles cover (tiles
+  // × size² × 4); its GPU time and its CPU record time; set 11's writes (the shadow-atlas
+  // interactions' volatile constant buffer)
+  std::optional<std::uint64_t> shadowDraws;
+  std::optional<std::uint64_t> tilesDrawn;
+  std::optional<std::uint64_t> tilesCleared;
+  std::optional<std::uint64_t> tilesRelocated;
+  std::optional<std::uint64_t> tilesCached;
+  std::optional<std::uint64_t> tilesProvisional;
+  std::optional<std::uint64_t> lightsCasting;
+  std::optional<std::uint64_t> lightsPlaced;
+  std::optional<std::uint64_t> lightsUnplaced;
+  std::optional<std::uint64_t> perforatedSkipped;
+  std::optional<std::uint64_t> atlasBytesWritten;
+  std::optional<double> gpuShadowMs;
+  std::optional<double> shadowCpuMs;
+  std::optional<std::uint64_t> set11Writes;
+  // LP3.0's caster light-triangle requests of the frame's lists (C57, P3.14), the
+  // casters' log's columns until LP3.1: the lights that gathered casters, the (light,
+  // chunk) pairs asked for, answered and pending, the casters kept, the gathering's time
+  // when the lists were built this frame (0 when kept), the light-triangle cache's
+  // entries
+  std::optional<std::uint64_t> casterLights;
+  std::optional<std::uint64_t> casterPairs;
+  std::optional<std::uint64_t> casterPairsResident;
+  std::optional<std::uint64_t> casterPairsPending;
+  std::optional<std::uint64_t> casters;
+  std::optional<double> casterMs;
+  std::optional<std::uint64_t> lightTriangleEntries;
 };
 
 // the CSV header line, ending in a newline
 std::string_view frameLogHeader();
-
-/**
- * LP3.0 (C57, P3.14, P3.24f): one row of the casters' measurement log, the frame log's
- * companion (casterLogPath): per presented frame, the caster light-triangle requests of
- * the frame's lists (LitFrameStats), so that [.][measure] on admin records them without a
- * frame-log column (LP3.0 adds none; LP3.1's D157 counters fold them into the frame log
- * with its pre-authorised TbUiLib edits).
- */
-struct CasterLogRow
-{
-  std::uint64_t session = 0;
-  std::uint64_t frameIndex = 0;
-  bool settled = false;
-  bool listsRebuilt = false;
-  std::uint64_t lightsInView = 0;
-  std::uint64_t casterLights = 0;
-  std::uint64_t casterPairs = 0;
-  std::uint64_t casterPairsResident = 0;
-  std::uint64_t casterPairsPending = 0;
-  std::uint64_t casters = 0;
-  double casterMs = 0.0;
-  std::uint64_t lightTriangleEntries = 0;
-  bool lightTrianglesPending = false;
-};
-
-// the casters' log header line and one row, each ending in a newline
-std::string_view casterLogHeader();
-std::string formatCasterLogRow(const CasterLogRow& row);
-
-// the casters' log beside a frame log: <stem>-casters<extension> in its folder; empty for
-// an empty frame-log path
-std::filesystem::path casterLogPath(const std::filesystem::path& frameLogPath);
-
-// the casters' log is written, beside an open frame log, only while the environment's
-// TB_LIT_CASTER_LOG is set and not empty (a measurement's opt-in, so that the suites'
-// frame logs leave no companion behind)
-bool casterLogRequested();
 
 // one CSV line, ending in a newline; a field that does not apply or is unknown is empty
 std::string formatFrameLogRow(const FrameLogRow& row);

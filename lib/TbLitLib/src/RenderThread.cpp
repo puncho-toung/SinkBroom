@@ -1357,6 +1357,8 @@ bool RenderThread::recordLitPasses(
   inputs.stageTimer = m_timers.query(slot, TimedPass::Stages);
   // LP5.3 (C49): pass 9's timer
   inputs.fogTimer = m_timers.query(slot, TimedPass::Fog);
+  // LP3.1 (D157): pass 6's
+  inputs.shadowTimer = m_timers.query(slot, TimedPass::Shadows);
   inputs.gamePath = m_options.gamePath;
   inputs.afterPrepass = [this] { runDebugHook(DebugHook::AfterPrepass); };
   // C38 (LP4.2b): r_skipInteractions 1's stand-in, a test's switch
@@ -1385,6 +1387,10 @@ bool RenderThread::recordLitPasses(
   if (stats.fogTimed)
   {
     m_timers.passTimed(slot, TimedPass::Fog);
+  }
+  if (stats.shadowAtlasTimed)
+  {
+    m_timers.passTimed(slot, TimedPass::Shadows);
   }
   // C28: the slots asked for by the passes' draws lose no set they made
   eraseChangedSets();
@@ -1525,19 +1531,6 @@ void RenderThread::main() noexcept
     if (const auto error = m_timers.openLog(m_options.frameLogPath))
     {
       m_events.post(SessionEvent::Warning, *error);
-    }
-    else if (const auto casterLog = casterLogPath(m_options.frameLogPath);
-             !casterLog.empty() && casterLogRequested())
-    {
-      // LP3.0 (P3.14): asked for by TB_LIT_CASTER_LOG; appended to; the header into an
-      // empty file only
-      auto existing = std::error_code{};
-      const auto size = std::filesystem::file_size(casterLog, existing);
-      m_casterLog.open(casterLog, std::ios::binary | std::ios::app);
-      if (m_casterLog && (existing || size == 0))
-      {
-        m_casterLog << casterLogHeader();
-      }
     }
     appendSessionRow(FrameLogEvent::Start);
     // S31: the inbox is empty
@@ -2158,26 +2151,29 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.volatileWriteBudget = litStats.constantWriteBudget;
       row.pushConstantBytes = litStats.pushConstantBytes + tonemap.pushConstantBytes;
       row.settled = m_convergence.settled();
+      // LP3.1 (D157): pass 6's counts (its GPU time from the timers), set 11's writes,
+      // and LP3.0's caster light-triangle requests behind the frame's lists (P3.14)
+      row.shadowDraws = litStats.shadowDraws;
+      row.tilesDrawn = litStats.tilesDrawn;
+      row.tilesCleared = litStats.tilesVacated;
+      row.tilesRelocated = litStats.tilesRelocated;
+      row.tilesCached = litStats.tilesCached;
+      row.tilesProvisional = litStats.tilesProvisional;
+      row.lightsCasting = litStats.lightsCasting;
+      row.lightsPlaced = litStats.lightsPlaced;
+      row.lightsUnplaced = litStats.lightsUnplaced;
+      row.perforatedSkipped = litStats.perforatedCastersSkipped;
+      row.atlasBytesWritten = litStats.atlasBytesWritten;
+      row.shadowCpuMs = litStats.shadowRecordMs;
+      row.set11Writes = litStats.interactionSmWrites;
+      row.casterLights = litStats.casterLights;
+      row.casterPairs = litStats.casterPairs;
+      row.casterPairsResident = litStats.casterPairsResident;
+      row.casterPairsPending = litStats.casterPairsPending;
+      row.casters = litStats.casters;
+      row.casterMs = litStats.casterMs;
+      row.lightTriangleEntries = litStats.lightTriangleEntries;
       m_timers.frameShown(slot, row);
-      // LP3.0 (P3.14): the caster light-triangle requests behind the frame's lists
-      if (m_casterLog.is_open())
-      {
-        auto casters = CasterLogRow{};
-        casters.session = row.session;
-        casters.frameIndex = frame;
-        casters.settled = row.settled.value_or(false);
-        casters.listsRebuilt = litStats.listsRebuilt;
-        casters.lightsInView = litStats.lightsInView;
-        casters.casterLights = litStats.casterLights;
-        casters.casterPairs = litStats.casterPairs;
-        casters.casterPairsResident = litStats.casterPairsResident;
-        casters.casterPairsPending = litStats.casterPairsPending;
-        casters.casters = litStats.casters;
-        casters.casterMs = litStats.casterMs;
-        casters.lightTriangleEntries = litStats.lightTriangleEntries;
-        casters.lightTrianglesPending = litStats.lightTrianglesPending;
-        m_casterLog << formatCasterLogRow(casters);
-      }
       ++m_framesPresented;
       // LP2.3 (D9): the panel's status line reads the frame's counts
       {
@@ -2744,10 +2740,6 @@ void RenderThread::finish() noexcept
     m_timers.flushUnresolved(m_frameIndex);
     appendSessionRow(FrameLogEvent::Stop);
     m_frameLogError = m_timers.closeLog();
-    if (m_casterLog.is_open())
-    {
-      m_casterLog.close();
-    }
   }
   catch (const std::exception& e)
   {

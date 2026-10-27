@@ -1173,7 +1173,9 @@ constexpr auto AdoptedTris = std::size_t{66};
 // (C49): and pass 9's three (fog_draws, blend_draws, gpu_fog_ms); LP7.0 (C52, C54,
 // P7.20): and proc_bytes and LP7's eleven counts after them, the columns above unmoved;
 // LP7.3 (C54, K42): and inlined_surfaces, the 70th
-constexpr auto Count = std::size_t{70};
+// LP3.1 (D157, P3.24d): and pass 6's fourteen and LP3.0's seven caster columns after them
+// (shadow_draws ... light_triangle_entries), the 91st the last
+constexpr auto Count = std::size_t{91};
 } // namespace column
 
 std::vector<LogRow> readFrameLog(const std::filesystem::path& path)

@@ -171,6 +171,35 @@ std::string lp7Fields(const FrameLogRow& row)
     optionalCount(row.inlinedSurfaces));
 }
 
+// LP3.1's columns (D157): pass 6's counts and times, set 11's writes, and LP3.0's caster
+// requests; empty in a start or stop row
+std::string shadowFields(const FrameLogRow& row)
+{
+  return fmt::format(
+    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+    optionalCount(row.shadowDraws),
+    optionalCount(row.tilesDrawn),
+    optionalCount(row.tilesCleared),
+    optionalCount(row.tilesRelocated),
+    optionalCount(row.tilesCached),
+    optionalCount(row.tilesProvisional),
+    optionalCount(row.lightsCasting),
+    optionalCount(row.lightsPlaced),
+    optionalCount(row.lightsUnplaced),
+    optionalCount(row.perforatedSkipped),
+    optionalCount(row.atlasBytesWritten),
+    optionalField(row.gpuShadowMs, "{:.3f}"),
+    optionalField(row.shadowCpuMs, "{:.3f}"),
+    optionalCount(row.set11Writes),
+    optionalCount(row.casterLights),
+    optionalCount(row.casterPairs),
+    optionalCount(row.casterPairsResident),
+    optionalCount(row.casterPairsPending),
+    optionalCount(row.casters),
+    optionalField(row.casterMs, "{:.3f}"),
+    optionalCount(row.lightTriangleEntries));
+}
+
 std::string_view eventName(const FrameLogEvent event)
 {
   switch (event)
@@ -201,51 +230,11 @@ std::string_view frameLogHeader()
          "draws,stage_skipped,gpu_stages_ms,fog_draws,blend_draws,gpu_fog_ms,proc_bytes,"
          "model_entities,model_instances,model_draws,models_pending,models_skinned,dress_"
          "surfaces,dress_unmatched,adopted_islands,adopted_tris,unmatched_islands,curved_"
-         "islands,inlined_surfaces\n";
-}
-
-std::string_view casterLogHeader()
-{
-  return "session,frame,settled,lists_rebuilt,lights_in_view,caster_lights,caster_pairs,"
-         "caster_pairs_resident,caster_pairs_pending,casters,caster_ms,light_triangle_"
-         "entries,light_triangles_pending\n";
-}
-
-std::string formatCasterLogRow(const CasterLogRow& row)
-{
-  return fmt::format(
-    "{},{},{},{},{},{},{},{},{},{},{:.3f},{},{}\n",
-    row.session,
-    row.frameIndex,
-    row.settled ? 1 : 0,
-    row.listsRebuilt ? 1 : 0,
-    row.lightsInView,
-    row.casterLights,
-    row.casterPairs,
-    row.casterPairsResident,
-    row.casterPairsPending,
-    row.casters,
-    row.casterMs,
-    row.lightTriangleEntries,
-    row.lightTrianglesPending ? 1 : 0);
-}
-
-std::filesystem::path casterLogPath(const std::filesystem::path& frameLogPath)
-{
-  if (frameLogPath.empty())
-  {
-    return {};
-  }
-  auto name = frameLogPath.stem();
-  name += "-casters";
-  name += frameLogPath.extension();
-  return frameLogPath.parent_path() / name;
-}
-
-bool casterLogRequested()
-{
-  const auto* value = std::getenv("TB_LIT_CASTER_LOG");
-  return value && *value;
+         "islands,inlined_surfaces,shadow_draws,tiles_drawn,tiles_cleared,tiles_"
+         "relocated,tiles_cached,tiles_provisional,lights_casting,lights_placed,lights_"
+         "unplaced,perforated_skipped,atlas_bytes_written,gpu_shadow_ms,shadow_cpu_ms,"
+         "set11_writes,caster_lights,caster_pairs,caster_pairs_resident,caster_pairs_"
+         "pending,casters,caster_ms,light_triangle_entries\n";
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)
@@ -257,9 +246,10 @@ std::string formatFrameLogRow(const FrameLogRow& row)
   if (row.event != FrameLogEvent::Frame)
   {
     // the frame's columns empty (gpu_prepass_ms ... gpu_fog_ms), then proc_bytes, then
-    // LP7's twelve counts empty
+    // LP7's twelve counts and LP3.1's twenty-one empty
     return fmt::format(
-      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,{},,,,,,,,,,,,\n",
+      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,{},,,,,,,,,,,,"
+      ",,,,,,,,,,,,,,,,,,,,,\n",
       row.session,
       eventName(row.event),
       vram,
@@ -267,7 +257,8 @@ std::string formatFrameLogRow(const FrameLogRow& row)
       optionalCount(row.procBytes));
   }
   return fmt::format(
-    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+    "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}"
+    "\n",
     row.session,
     eventName(row.event),
     row.frameIndex,
@@ -290,7 +281,8 @@ std::string formatFrameLogRow(const FrameLogRow& row)
     stageFields(row),
     fogFields(row),
     optionalCount(row.procBytes),
-    lp7Fields(row));
+    lp7Fields(row),
+    shadowFields(row));
 }
 
 std::optional<std::string> FrameLogWriter::open(const std::filesystem::path& path)
