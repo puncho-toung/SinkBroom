@@ -43,7 +43,8 @@
 // global tr with its viewDef (which R_SetupSplitFrustums writes through: P3.29), the six
 // cvars at their engine defaults, and R_MatrixMultiply as the facade's own transcription
 // (engineGlMatrixMultiply, GLMatrix.cpp:77-150), not a second one. The stand-ins are
-// about 90 lines (D143: under 150, so the ranges are copied, not transcribed).
+// 98 lines of code, 128 with their comments (D143: under 150, so the ranges are copied,
+// not transcribed).
 //
 // Threads: the ranges touch no state but their arguments and tr, which
 // engineSetupSplitFrustums sets for its call and clears after it (one caller at a time:
@@ -85,7 +86,7 @@ enum
   MAX_FRUSTUMS,
 };
 
-typedef idPlane frustum_t[FRUSTUM_PLANES];
+using frustum_t = idPlane[FRUSTUM_PLANES];
 
 // renderer/ScreenRect.h's idScreenRect: the bounds R_SetupProjectionMatrix2 reads
 struct idScreenRect

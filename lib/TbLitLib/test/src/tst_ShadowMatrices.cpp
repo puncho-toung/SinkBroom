@@ -686,7 +686,7 @@ TEST_CASE("EngineShadowMatrices (LP3.1, C58, D160)")
     }
     // one on the diagonal of +X and +Y lies in both those sides (the 92° frusta overlap)
     auto both = std::vector<int>{sideOf(64.0f, 1.0f, 0.0f), sideOf(1.0f, 64.0f, 0.0f)};
-    std::sort(both.begin(), both.end());
+    std::ranges::sort(both);
     CHECK(keptIn(box(64.0f, 64.0f, 0.0f)) == both);
     // one nearer than zNear 4 / 0.999 to the light's origin: inside every side's near
     // plane only where it reaches past it

@@ -58,6 +58,16 @@ inside the namespace `tbLitBlueNoise` of `../shim/src/EngineBlueNoise.cpp` behin
 `lit/EngineImageData.h`; and the shadow atlas's packing, `idlib/TileMap.h` and `idlib/TileMap.cpp`
 whole, compiled as they are behind `lit/EngineShadowAtlas.h` (`../shim/src/EngineShadowAtlas.cpp`,
 which transcribes `ShadowAtlasPass`' comparator and placement on the copied `idSort_Quick`).
+LP3.1 (C58, D143) adds the shadow maps' matrices: `renderer/RenderBackend.cpp`'s licence,
+`MatrixOrthogonalProjectionRH` and `idRenderBackend::SetupShadowMapMatrices`,
+`renderer/tr_frontend_main.cpp`'s licence and `R_SetupSplitFrustums`, and
+`renderer/GLMatrix.cpp`'s licence and `R_SetupProjectionMatrix2`, compiled inside the namespace
+`tbLitShadowMatrices` of `../shim/src/EngineShadowMatrices.cpp` (its stand-ins declare the read
+fields of `viewDef_t`, `viewLight_t` and `renderView_t`, a reduced `idRenderBackend` and `tr`, and
+six constexpr cvars) behind `lit/EngineShadowMatrices.h`, with `USE_NVRHI` defined for that file
+alone; and `idlib/math/Vector.cpp`'s `idVec3::ToMat3`, which `SetupShadowMapMatrices` calls
+(their licence headers also name (C) 2014 Carl Kenner, (C) 2016-2017 Dustin Land and (C) 2022
+Stephen Pridham, whom the shim's engine notice repeats).
 Every one of these files is the Doom 3 BFG Edition GPL-3 code
 with id Software's additional terms (`LICENSE.md`), (C) 2022-2023 Harrie van Ginneken and
 (C) 2022-2025 Robert Beckebans among its authors; the parser embeds no third-party JSON

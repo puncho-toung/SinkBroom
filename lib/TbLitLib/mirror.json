@@ -2140,6 +2140,15 @@
           ],
           "anchor": "vec2_one through vec6_infinity",
           "sha256": "309ade22d2f19634d8c0d548e9fac75f999a20fb926c4f1232f940a7e3a03cbf"
+        },
+        {
+          "file": "neo/idlib/math/Vector.cpp",
+          "lines": [
+            238,
+            261
+          ],
+          "anchor": "idVec3::ToMat3",
+          "sha256": "6a96e2ca393c1c475ae4e451a5ef9037ce75429ec70da6185ae7284175a86abe"
         }
       ],
       "sinkbroom": [
@@ -2147,7 +2156,7 @@
           "file": "lib/TbLitLib/idtech/engine/idlib/math/Vector.cpp"
         }
       ],
-      "note": "41 of the file's 503 lines, in 2 ranges, each preceded by one marker line"
+      "note": "65 of the file's 503 lines, in 3 ranges, each preceded by one marker line. LP3.1 step 2 (C58): idVec3::ToMat3, which SetupShadowMapMatrices calls for a parallel light's rotation (M-SHADOW-COPY-05)"
     },
     {
       "id": "M-ID-PART-05",
@@ -2671,6 +2680,11 @@
           "name": "_DEBUG",
           "when": "Debug: from /MDd on MSVC (the engine also passes /D _DEBUG), defined explicitly on GCC and Clang as the engine's -D_DEBUG (G11)",
           "why": "sys_assert.h and sys_types.h compile the copied asserts in; a reported assert is a warning that never changes a parse's outcome (Registry::report counts only Error and FatalError), so Debug and Release parse alike"
+        },
+        {
+          "name": "USE_NVRHI",
+          "when": "lib/TbLitLib/idtech/shim/src/EngineShadowMatrices.cpp alone (set_source_files_properties COMPILE_DEFINITIONS), every configuration and compiler (LP3.1)",
+          "why": "the copied SetupShadowMapMatrices (M-SHADOW-COPY-05) branches on it at RenderBackend.cpp:2998-3007, 3130-3139 and 3150-3162: the NVRHI build's shadowP, which the interactionSM shaders read; no other copied file branches on it"
         }
       ],
       "compileOptions": [
@@ -2725,8 +2739,8 @@
           "why": "not set in a default engine build; CmdSystem.h then compiles CONSOLE_COMMANDs, which the shim's constexpr idCommandLink keeps unregistered"
         },
         {
-          "name": "USE_EXCEPTIONS, NOMINMAX, _CRT_SECURE_NO_DEPRECATE, _CRT_NONSTDC_NO_DEPRECATE, _CRT_SECURE_NO_WARNINGS, _MBCS, USE_NVRHI, __DOOM__, USE_DOOMCLASSIC",
-          "why": "the engine defines them; no copied file branches on them except the vendored tinyexr.h, which defines WIN32_LEAN_AND_MEAN and NOMINMAX itself before it includes windows.h (tinyexr.h:569-575), so its outcome is the same (LP1c fix S1.4)"
+          "name": "USE_EXCEPTIONS, NOMINMAX, _CRT_SECURE_NO_DEPRECATE, _CRT_NONSTDC_NO_DEPRECATE, _CRT_SECURE_NO_WARNINGS, _MBCS, __DOOM__, USE_DOOMCLASSIC",
+          "why": "the engine defines them; no copied file branches on them except the vendored tinyexr.h, which defines WIN32_LEAN_AND_MEAN and NOMINMAX itself before it includes windows.h (tinyexr.h:569-575), so its outcome is the same (LP1c fix S1.4); USE_NVRHI is defined for EngineShadowMatrices.cpp alone since LP3.1 (compileDefinitions)"
         },
         {
           "name": "STBI_NEON",
@@ -15975,10 +15989,10 @@
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/src/LitPasses.cpp",
-          "symbol": "LitPasses::recordInteractions, LitPasses::writeBudget, LitPasses::worstCaseWrites"
+          "symbol": "LitPasses::recordInteractions, LitPasses::writeBudget, LitPasses::worstCaseWrites (LP3.1: m_frameWrites per layout)"
         }
       ],
-      "note": "LP2.2a (D76, C16): the engine writes as often as it draws and relies on 8192 versions; the preview counts the writes while recording and lets a frame write at most maxVersions / (FramesInFlight + 1) (the versions of the frames before it are recycled only once NVRHI knows they finished, nvrhi rule 2): a light whose worst case (its light stages on times, per surface, its bump, diffuse and specular stages plus one) would pass that is not drawn, nor any light after it, and they count as overflowed, with one warning per session; NVRHI's \"maxVersions insufficient\" error, which fails the session, is never met. Measured on the LP1b fixture: 2 writes in a frame of 17 interaction draws"
+      "note": "LP2.2a (D76, C16): the engine writes as often as it draws and relies on 8192 versions; the preview counts the writes while recording and lets a frame write at most maxVersions / (FramesInFlight + 1) (the versions of the frames before it are recycled only once NVRHI knows they finished, nvrhi rule 2): a light whose worst case (its light stages on times, per surface, its bump, diffuse and specular stages plus one) would pass that is not drawn, nor any light after it, and they count as overflowed, with one warning per session; NVRHI's \"maxVersions insufficient\" error, which fails the session, is never met. Measured on the LP1b fixture: 2 writes in a frame of 17 interaction draws. LP3.1 step 4 (P3.5): DRAW_INTERACTION (set 10) and DRAW_INTERACTION_SM (set 11) are two layouts, each with its own volatile buffer of the same maxVersions (EngineFrame.constantBufferVersions 8192, so 2730 writes a frame each, FramesInFlight 2); a light's worst case is checked against the writes of the layout its program draws with (set 11 for a light placed in the atlas, else set 10), the one overflow rule over both phases unchanged; the frame log's volatile_writes counts every layout's writes (the tonemap's with them) and set11_writes set 11's alone. The admin measurement (Release [.][measure], two runs, 2026-10-27): set 11's writes 94 at the start view's settled frame, over the orbit median 4, p95 104 / 103, max 107 against 2,730; no light overflowed. maxVersions stays EngineFrame.constantBufferVersions (8192) for both layouts: the rule, a frame's per-layout budget maxVersions / (FramesInFlight + 1) at least ten times the largest per-frame writes measured on admin, holds with a factor of 25"
     },
     {
       "id": "M-PASS-DIFF-05",
@@ -18916,7 +18930,7 @@
           "symbol": "FrameLogRow::ambientDraws, gpuAmbientMs"
         }
       ],
-      "note": "LP4.2a step 5 (C34, D84, P4.27): the pass between the depth prepass and the interactions (the SSAO and shadow-atlas passes between them are not in the preview: K31, LP6), on HdrFramebuffer reading the prepass's depth, with its own timer (gpu_ambient_ms) and draw count (ambient_draws), the frame log's two columns after flow_ms (44). No surface: nothing. WINDOWCOORD ( 1 / w, 1 / h, w, h ) of the whole target; the MVP forced on the first surface; GL_State ONE / ZERO | DEPTHMASK | DEPTHFUNC_EQUAL, which every draw's pipeline key carries (ambientStateBits); GL_Color( white ); diffuse and specular colour white * r_lightScale; AMBIENT_COLOR ( r_forceAmbient, same, same, 1 ) (0.5, M-VIEW-01); the fast-path setup (M-AMB-05). At the end ALPHA_TEST 0; renderProgManager.Unbind has no NVRHI counterpart (the next draw's pipeline replaces the program). r_skipAmbient gates DrawShaderPasses only, not this pass; RDF_NOAMBIENT, RDF_IRRADIANCE, a view without entities and the SSAO debug branch never reach the preview's 3D view. The pass's pending pipelines and skipped draws join the frame's convergence terms"
+      "note": "LP4.2a step 5 (C34, D84, P4.27): the pass between the depth prepass and the interactions (the SSAO and shadow-atlas passes between them are not in the preview: K31, LP6), on HdrFramebuffer reading the prepass's depth, with its own timer (gpu_ambient_ms) and draw count (ambient_draws), the frame log's two columns after flow_ms (44). No surface: nothing. WINDOWCOORD ( 1 / w, 1 / h, w, h ) of the whole target; the MVP forced on the first surface; GL_State ONE / ZERO | DEPTHMASK | DEPTHFUNC_EQUAL, which every draw's pipeline key carries (ambientStateBits); GL_Color( white ); diffuse and specular colour white * r_lightScale; AMBIENT_COLOR ( r_forceAmbient, same, same, 1 ) (0.5, M-VIEW-01); the fast-path setup (M-AMB-05). At the end ALPHA_TEST 0; renderProgManager.Unbind has no NVRHI counterpart (the next draw's pipeline replaces the program). r_skipAmbient gates DrawShaderPasses only, not this pass; RDF_NOAMBIENT, RDF_IRRADIANCE, a view without entities and the SSAO debug branch never reach the preview's 3D view. The pass's pending pipelines and skipped draws join the frame's convergence terms. LP3.1 (C59): the shadow-atlas pass now records between this pass and the interactions (pass 6, M-SHADOW-05); SSAO stays out (K31)"
     },
     {
       "id": "M-AMB-02",
@@ -20898,7 +20912,7 @@
           "symbol": "the [.][feed] tag comment (in none of the [.][litgpu*] suites)"
         }
       ],
-      "note": "LP5.0 step 6 (RUN.md, the director's decisions after LPF.1 (5); P6.24), test only, no engine counterpart: the hidden GPU cases run in two suites, each under the 180 s wall clock in Debug: [.][litgpu] LP0-LP2's (on a GPU, pipelines, GPU resources, lit passes, tonemap and blit; 5 cases, 95.5 / 97.8 / 99.1 s at LP5.0) and [.][litgpu2] LP4's and later ones (ambient pass, light-grid path, live feed, LP5's programs; 4 cases, 59.7 / 59.8 / 60.4 s); LPF.2's host cases stay [.][feed]. Each case makes its own instance, device and session, bounds its waits (H.1) and resets the dispatcher, so either suite runs alone and in any order. The gate measures both and a third tag comes once one passes 150 s. TbUiLib's [.][litgpu] cases are not split LP7.0 step 1 (D134, C56): a third tag, [.][litgpu3], takes LP5's seven cases (LP5.0 programs, LP5.1 math, LP5.2a pass 8, LP5.2b texgens, LP5.F sizes, LP5.3 fog, LP5.G reload); [.][litgpu2] keeps LP4.2a, LP4.3 and LPF.1; [.][litgpu] is unchanged. Debug wall clocks at the split: [litgpu] 92.3 / 95.5 / 92.7 s (5 cases), [litgpu2] 59.1 / 59.4 / 59.0 s (3), [litgpu3] 77.9 / 78.5 / 77.7 s (7). LP7's cases join [litgpu3] until it passes 150 s, then a fourth. The GPU cases' frame-log field count is one constant, FrameLogFields (69 since LP7.0). LP7.4: the first of LP7's, LitSession the .proc's triangles adopted on a GPU, joins [litgpu3] (8 cases, 78.8 s at its first run); LPF.1's frame-log check reads the four adoption counts as numbers, the model and dress counts still 0"
+      "note": "LP5.0 step 6 (RUN.md, the director's decisions after LPF.1 (5); P6.24), test only, no engine counterpart: the hidden GPU cases run in two suites, each under the 180 s wall clock in Debug: [.][litgpu] LP0-LP2's (on a GPU, pipelines, GPU resources, lit passes, tonemap and blit; 5 cases, 95.5 / 97.8 / 99.1 s at LP5.0) and [.][litgpu2] LP4's and later ones (ambient pass, light-grid path, live feed, LP5's programs; 4 cases, 59.7 / 59.8 / 60.4 s); LPF.2's host cases stay [.][feed]. Each case makes its own instance, device and session, bounds its waits (H.1) and resets the dispatcher, so either suite runs alone and in any order. The gate measures both and a third tag comes once one passes 150 s. TbUiLib's [.][litgpu] cases are not split LP7.0 step 1 (D134, C56): a third tag, [.][litgpu3], takes LP5's seven cases (LP5.0 programs, LP5.1 math, LP5.2a pass 8, LP5.2b texgens, LP5.F sizes, LP5.3 fog, LP5.G reload); [.][litgpu2] keeps LP4.2a, LP4.3 and LPF.1; [.][litgpu] is unchanged. Debug wall clocks at the split: [litgpu] 92.3 / 95.5 / 92.7 s (5 cases), [litgpu2] 59.1 / 59.4 / 59.0 s (3), [litgpu3] 77.9 / 78.5 / 77.7 s (7). LP7's cases join [litgpu3] until it passes 150 s, then a fourth. The GPU cases' frame-log field count is one constant, FrameLogFields (69 since LP7.0). LP7.4: the first of LP7's, LitSession the .proc's triangles adopted on a GPU, joins [litgpu3] (8 cases, 78.8 s at its first run); LPF.1's frame-log check reads the four adoption counts as numbers, the model and dress counts still 0. LP3.1 step 6 (D160, D161): LitSession shadows on a GPU (LP3.1) joins [litgpu2] (4 cases; the suite's Debug wall clock with it 66.9 / 66.6 / 67.2 s, the case 7.1 / 7.0 / 7.4 s over its seven sections), no fourth tag; FrameLogFields is 91 since LP3.1"
     },
     {
       "id": "M-INTER-02",
@@ -30752,9 +30766,17 @@
         {
           "file": "lib/TbLitLib/test/src/tst_IntrinsicImages.cpp",
           "symbol": "LP3.0 (C60, P3.24a): _blueNoise256, the copied generator on the copied table"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "the run's start: m_images.request( intrinsicImageKey( \"_blueNoise256\" ) )"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::renderInteractions (m_units[UnitJitter])"
         }
       ],
-      "note": "LP3.0 step 2 (C60, P3.24a, SC732): _blueNoise256 on the LP4 _brdfLut pattern, the raw intrinsic path: the copied generator runs on the copied table and hands the stand-in GenerateImage( data, 512, 512, TF_NEAREST, TR_REPEAT, TD_LOOKUP_TABLE_RGBA ); DeriveOpts' format and mips for that usage and filter (engineImageOpts: FMT_RGBA8; engineMipLevels: one level for TF_NEAREST) give one RGBA8 level stored as it is, 1,048,576 bytes, 2D. The fill is data[x][y] = table texel (x, y) on a buffer declared [HEIGHT][WIDTH], so the image is the table transposed (the image's row r, column c is the table's row c, column r), and its alpha is the byte 1, not 255. Made only when the name is asked for (intrinsicImage, the parse thread; LP3.1 binds it at INTERACTION_TEXUNIT_JITTER 6 with the PointWrap sampler, M-SHADOW-TABLE-02). The test holds the table to its sha256 (95f0659b...), four texels of the image to the table transposed, every alpha to 1 and the whole image to its sha256 (8f5391b2...), both computed by a script from the engine's file at 285ea4d1. The rand()-seeded _jitter1/4/16 and _random256 are not made (never bound, SC732)"
+      "note": "LP3.0 step 2 (C60, P3.24a, SC732): _blueNoise256 on the LP4 _brdfLut pattern, the raw intrinsic path: the copied generator runs on the copied table and hands the stand-in GenerateImage( data, 512, 512, TF_NEAREST, TR_REPEAT, TD_LOOKUP_TABLE_RGBA ); DeriveOpts' format and mips for that usage and filter (engineImageOpts: FMT_RGBA8; engineMipLevels: one level for TF_NEAREST) give one RGBA8 level stored as it is, 1,048,576 bytes, 2D. The fill is data[x][y] = table texel (x, y) on a buffer declared [HEIGHT][WIDTH], so the image is the table transposed (the image's row r, column c is the table's row c, column r), and its alpha is the byte 1, not 255. Made only when the name is asked for (intrinsicImage, the parse thread; LP3.1 binds it at INTERACTION_TEXUNIT_JITTER 6 with the PointWrap sampler, M-SHADOW-TABLE-02). The test holds the table to its sha256 (95f0659b...), four texels of the image to the table transposed, every alpha to 1 and the whole image to its sha256 (8f5391b2...), both computed by a script from the engine's file at 285ea4d1. The rand()-seeded _jitter1/4/16 and _random256 are not made (never bound, SC732). LP3.1 step 4 (C60): asked for at every session's start after LP2's intrinsics (the _brdfLut pattern: the parse thread makes it, 1 MB), so that no frame waits for it when a light first casts; every light stage's unit 6 names it, and DRAW_INTERACTION_SM's t6 binds it"
     },
     {
       "id": "M-SHADOW-STATIC-01",
@@ -31390,14 +31412,14 @@
         },
         {
           "file": "lib/TbLitLib/include/lit/FrameLog.h",
-          "symbol": "CasterLogRow, casterLogPath"
+          "symbol": "FrameLogRow::casterLights .. lightTriangleEntries (CasterLogRow and casterLogPath retired)"
         },
         {
           "file": "lib/TbLitLib/test/src/tst_LitPasses.cpp",
           "symbol": "the casters of a casting light, on screen or off (LP3.0, C57); a spectrum light's forced noShadows (LP3.0, C57, P3.16)"
         }
       ],
-      "note": "LP3.0 step 6 (C57, P3.14, P3.16, P3.17): the caster set and its light-triangle requests, made in the frontend as the lists are built, after the light sort, per light that will take tiles (it casts, shadowLod > -1, it has surfaces: ShadowAtlasPass' loop 1 skips the others), on screen or off: every chunk and model instance of a cast class (M-SHADOW-CAST-01) whose areas reach the light by lightReachesCaster (an area the light references, connected to the light's own area unless that is -1: FAL:494-501; D81's outside set by volume; without a tree every chunk), whose entity is visible (its space made as R_AddLights makes a shadow-only viewEntity), whose bounds R_CullModelBoundsToLight keeps, whose material's spectrum is the light shader's, and whose light triangles for the light are not None (the cache of LightTriangles.h, the request queued when Pending), each kept with its space and light triangles in ViewLight::casters; nothing draws them before LP3.1. The engine's R_ShadowBounds view cull (FAL:605-618) is not mirrored (K49: casters are not view-culled) and MAX_CONTACTED_LIGHTS is not kept (M-FLOW-DIFF-03, extended to shadows). lightCastsShadows gains UpdateLightDef's spectrum rule (engineLightNoShadows), which also moves a spectrum light's noSelfShadow surfaces to the global list (FAM:999). P3.16's 'every parallel light has area -1' is not the engine's: R_CreateLightRefs falls back to PointInArea( parms.origin ) when the offset origin is outside (RenderWorld_defs.cpp:703-707, mirrored in LightData.cpp since LP4.0), so a parallel light inside the map has its origin's area and the connection test applies; only a light whose both origins are outside has area -1 and skips it. The counts (FrontendLists casterLights, casterPairs, casterPairsResident, casterPairsPending, casters, casterMs) reach LitFrameStats and the frame log's companion, <frame log>-casters.csv (casterLogPath), written while the frame log is open and the environment sets TB_LIT_CASTER_LOG (a measurement's opt-in: the suites' frame logs leave no companion): LP3.0's measurement channel ([.][measure] on admin), no frame-log column (LP3.1's D157 folds them in). The admin measurement (Release [.][measure], five runs with the per-build candidate table: three at step 6, two in the final run list): at the start view's settled frame 30 lights in view, 11 lights gather casters, 927 (light, chunk) pairs asked, all 927 answered, 698 casters, 1.5-2.2 ms of gathering when the lists are built; over the orbit at most 35 gathering lights, 2,177 pairs and 13,134 cache entries (the lit surfaces' pairs included, on the frames with 320-329 lights in view), gathering median 0.57-0.60 ms, p95 1.8-2.1 ms, max 2.2-4.7 ms. Budget (P3.24f): 4 ms and 250,000 pairs per presented frame, a miss any frame above either: no pair miss; the final second run had 3 of its 339 rebuilt frames above 4 ms (max 4.735 ms, all with 300+ lights in view), the other four runs none (a first version without the table had one frame at 5.7 ms). LightTriangleCacheSize stays 65,536: the rule is a power of two at least four times the largest per-build demand on admin (4 x 13,134 -> 65,536), never below LP2's bound"
+      "note": "LP3.0 step 6 (C57, P3.14, P3.16, P3.17): the caster set and its light-triangle requests, made in the frontend as the lists are built, after the light sort, per light that will take tiles (it casts, shadowLod > -1, it has surfaces: ShadowAtlasPass' loop 1 skips the others), on screen or off: every chunk and model instance of a cast class (M-SHADOW-CAST-01) whose areas reach the light by lightReachesCaster (an area the light references, connected to the light's own area unless that is -1: FAL:494-501; D81's outside set by volume; without a tree every chunk), whose entity is visible (its space made as R_AddLights makes a shadow-only viewEntity), whose bounds R_CullModelBoundsToLight keeps, whose material's spectrum is the light shader's, and whose light triangles for the light are not None (the cache of LightTriangles.h, the request queued when Pending), each kept with its space and light triangles in ViewLight::casters; nothing draws them before LP3.1. The engine's R_ShadowBounds view cull (FAL:605-618) is not mirrored (K49: casters are not view-culled) and MAX_CONTACTED_LIGHTS is not kept (M-FLOW-DIFF-03, extended to shadows). lightCastsShadows gains UpdateLightDef's spectrum rule (engineLightNoShadows), which also moves a spectrum light's noSelfShadow surfaces to the global list (FAM:999). P3.16's 'every parallel light has area -1' is not the engine's: R_CreateLightRefs falls back to PointInArea( parms.origin ) when the offset origin is outside (RenderWorld_defs.cpp:703-707, mirrored in LightData.cpp since LP4.0), so a parallel light inside the map has its origin's area and the connection test applies; only a light whose both origins are outside has area -1 and skips it. The counts (FrontendLists casterLights, casterPairs, casterPairsResident, casterPairsPending, casters, casterMs) reach LitFrameStats and the frame log's companion, <frame log>-casters.csv (casterLogPath), written while the frame log is open and the environment sets TB_LIT_CASTER_LOG (a measurement's opt-in: the suites' frame logs leave no companion): LP3.0's measurement channel ([.][measure] on admin), no frame-log column (LP3.1's D157 folds them in). The admin measurement (Release [.][measure], five runs with the per-build candidate table: three at step 6, two in the final run list): at the start view's settled frame 30 lights in view, 11 lights gather casters, 927 (light, chunk) pairs asked, all 927 answered, 698 casters, 1.5-2.2 ms of gathering when the lists are built; over the orbit at most 35 gathering lights, 2,177 pairs and 13,134 cache entries (the lit surfaces' pairs included, on the frames with 320-329 lights in view), gathering median 0.57-0.60 ms, p95 1.8-2.1 ms, max 2.2-4.7 ms. Budget (P3.24f): 4 ms and 250,000 pairs per presented frame, a miss any frame above either: no pair miss; the final second run had 3 of its 339 rebuilt frames above 4 ms (max 4.735 ms, all with 300+ lights in view), the other four runs none (a first version without the table had one frame at 5.7 ms). LightTriangleCacheSize stays 65,536: the rule is a power of two at least four times the largest per-build demand on admin (4 x 13,134 -> 65,536), never below LP2's bound. LP3.1 step 5 (D157): the companion CSV, CasterLogRow, casterLogPath and TB_LIT_CASTER_LOG are retired; the seven counts are the frame log's last columns (caster_lights, caster_pairs, caster_pairs_resident, caster_pairs_pending, casters, caster_ms, light_triangle_entries: 85-91 of 91), on every frame row. LP3.1 step 3 draws the casters into the tiles (M-SHADOW-06)"
     },
     {
       "id": "M-SHADOW-TEMP-01",
@@ -31425,6 +31447,807 @@
         }
       ],
       "note": "LP3.0 step 7 (D151, C62, P3.13, A49): the settle scaffolding, inert until LP3.3 replaces its two inputs. The still timer: the pacer fires a frame trigger once when the camera has been still for StillTimerDelay (200 ms) after its last move (setCamera's cameraMoved) while a settle is wanted (LitFrameStats::shadowSettleWanted: some light's held LOD differs from its exact LOD, or a cascade budget is pending), and is spent until the camera moves again; the reason of a frame so started is FrameDrawReason::StillTimer (A49's draw reason; the frame log has no draw-reason column at efe832c54, so the value lives in the pacer and is logged nowhere yet). FrameConvergence gains shadowsPending (LitFrameStats::shadowsPending: a tile not settled), in settled(), not a re-trigger term. Both inputs are false in LP3.0, so the timer never fires (every GPU fixture's teardown checks 0 firings) and no frame count moves (the pacing cases of tst_LitSession pass unchanged: 'idle is zero frames, a camera change one frame', the headless 20 cycles' 'no trigger, no frame', the injected fault's 'nothing more is drawn', the window's minimised and parked counts, the livelock guard, the feed's and the re-parse's idle checks). No engine counterpart: the engine draws every frame"
+    },
+    {
+      "id": "M-SHADOW-COPY-05",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1,
+            31
+          ],
+          "anchor": "licence",
+          "sha256": "434d8afb4847721fe26461c931d9aa03642744f91939b6a93f66e2da890d3b0c"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            2748,
+            2766
+          ],
+          "anchor": "MatrixOrthogonalProjectionRH",
+          "sha256": "bd6f019993913ea4e1b35a6bd67d925477bd6243585214a590a30dd1f887abf4"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            2839,
+            3164
+          ],
+          "anchor": "idRenderBackend::SetupShadowMapMatrices",
+          "sha256": "4a75221f7971a8c171b08c71609adb0a9be5ab74194594a6face49ff37953bce"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/RenderBackend.cpp"
+        }
+      ],
+      "note": "376 of the file's 7094 lines, in 3 ranges, each preceded by one marker line. LP3.1 step 2 (C58, D143, SC710-SC712): compiled inside the namespace tbLitShadowMatrices of ../shim/src/EngineShadowMatrices.cpp, whose stand-ins are renderView_t, viewEntity_t, viewDef_t and viewLight_t reduced to the fields the ranges read, idScreenRect's four bounds, the frustum enumerations and frustum_t (RenderCommon.h:519-542), a reduced idRenderBackend whose one member is viewDef, the global tr with its viewDef, the six constexpr cvars (r_znear, r_shadowMapFrustumFOV, r_shadowMapSplits, r_shadowMapSplitWeight, r_centerX, r_centerY at their engine defaults) and R_MatrixMultiply over the facade's engineGlMatrixMultiply (GLMatrix.cpp:77-150): 98 lines of code, 128 with their comments (D143: under 150, so copied, not transcribed); marked HEADER_FILE_ONLY in idtech/CMakeLists.txt. USE_NVRHI is defined for that one source (M-ID-BUILD-01), so the range's three USE_NVRHI blocks (RB:2998-3007 parallel and RB:3130-3139 point: shadowP = the clip-to-UVZW matrix times the projection; RB:3150-3162 spot: shadowP = the [0, 1] UV matrix times windowSpaceToClipSpace times the projection) compile as in the engine's NVRHI build, whose interactionSM shaders read them. The range calls idVec3::ToMat3 (M-ID-PART-04's third range), idRenderMatrix (copied whole) and R_SetupProjectionMatrix2 (M-SHADOW-COPY-07); its function-local static s_flipMatrix is M-SHADOW-STATIC-02's"
+    },
+    {
+      "id": "M-SHADOW-COPY-06",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            1,
+            28
+          ],
+          "anchor": "licence",
+          "sha256": "7d7a40b593bf8f28a19bb5c8a9073431b4de0f197e0bb7e32ba50609608a3be2"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            397,
+            456
+          ],
+          "anchor": "R_SetupSplitFrustums",
+          "sha256": "318c0ab98fce68d771d8e013bc5d7307edf3a5edf27cd382fab14b5866441d10"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/tr_frontend_main.cpp"
+        }
+      ],
+      "note": "88 of the file's 990 lines, in 2 ranges, each preceded by one marker line. LP3.1 step 2 (C58, D143, P3.29): the cascades' split distances and MVPs, compiled inside the namespace tbLitShadowMatrices of ../shim/src/EngineShadowMatrices.cpp with M-SHADOW-COPY-05's stand-ins; marked HEADER_FILE_ONLY. The static function writes through tr.viewDef, not its argument (P3.29), so engineSetupSplitFrustums points the stand-in tr at its own viewDef_t for the call and clears it after (R_RenderView sets tr.viewDef to the view it hands R_SetupSplitFrustums, tr_frontend_main.cpp:886, 924)"
+    },
+    {
+      "id": "M-SHADOW-COPY-07",
+      "kind": "copied-range",
+      "engine": [
+        {
+          "file": "neo/renderer/GLMatrix.cpp",
+          "lines": [
+            1,
+            29
+          ],
+          "anchor": "licence",
+          "sha256": "a3c6f08721c1f005b78e26e11a820eb1cac2d7daeb9edaad24c3cac05c10d390"
+        },
+        {
+          "file": "neo/renderer/GLMatrix.cpp",
+          "lines": [
+            548,
+            603
+          ],
+          "anchor": "R_SetupProjectionMatrix2",
+          "sha256": "d86df48fff824efc4eb4583cdd1553245137442cd26c64f1cc513951d38b73b8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/renderer/GLMatrix.cpp"
+        }
+      ],
+      "note": "85 of the file's 752 lines, in 2 ranges, each preceded by one marker line. LP3.1 step 2 (C58, D143): the cascades' projections, which R_SetupSplitFrustums calls, compiled inside the namespace tbLitShadowMatrices of ../shim/src/EngineShadowMatrices.cpp; marked HEADER_FILE_ONLY. It reads the view's fov_x, fov_y, viewport, stereoScreenSeparation (0), flipProjection (false) and the stand-in cvars r_centerX and r_centerY (0, GLMatrix.cpp:410-411)"
+    },
+    {
+      "id": "M-SHADOW-04",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            2839,
+            3164
+          ],
+          "anchor": "idRenderBackend::SetupShadowMapMatrices",
+          "sha256": "4a75221f7971a8c171b08c71609adb0a9be5ab74194594a6face49ff37953bce"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3451,
+            3453
+          ],
+          "anchor": "ShadowMapPassFast: SetupShadowMapMatrices( vLight, side, ... )",
+          "sha256": "207caf1a01a2588e0dfc57e4d1c89e2e1e47cda5cfd81a604e9ede8e2dc66bbf"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            397,
+            456
+          ],
+          "anchor": "R_SetupSplitFrustums",
+          "sha256": "318c0ab98fce68d771d8e013bc5d7307edf3a5edf27cd382fab14b5866441d10"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            924,
+            924
+          ],
+          "anchor": "R_RenderView: R_SetupSplitFrustums( tr.viewDef )",
+          "sha256": "d05613d7cb90af6ca3629c7f20dd2f6ddf482365aa153f0c72006524706ba5d9"
+        },
+        {
+          "file": "neo/renderer/GLMatrix.cpp",
+          "lines": [
+            548,
+            603
+          ],
+          "anchor": "R_SetupProjectionMatrix2",
+          "sha256": "d86df48fff824efc4eb4583cdd1553245137442cd26c64f1cc513951d38b73b8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineShadowMatrices.h",
+          "symbol": "EngineShadowView, EngineSplitFrustums, engineSetupSplitFrustums, EngineShadowLight, EngineShadowSideMatrices, engineShadowMapMatrices, engineWindowSpaceToClipSpace, engineClipSpaceToWindowSpace, EngineShadowMatrixCvars, engineShadowMatrixCvars"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineShadowMatrices.cpp",
+          "symbol": "the facade over the copied ranges"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "shadowViewOf, shadowLightOf, LitPasses::recordShadowAtlas (the split frustums per frame, the matrices per placed side)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitView.h",
+          "symbol": "LitView::viewAxis, fovX, fovY"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ShadowMatrices.cpp",
+          "symbol": "EngineShadowMatrices (LP3.1, C58, D160)"
+        }
+      ],
+      "note": "LP3.1 step 2 (C58, C61, D143, SC710-SC712): the copied ranges (M-SHADOW-COPY-05..07) behind lit/EngineShadowMatrices.h. engineSetupSplitFrustums runs R_SetupSplitFrustums once per frame of pass 6 on the view's viewDef_t (fov, origin, axis, viewport 0..w-1 x 0..h-1, the world's modelViewMatrix and projection): at the defaults (r_znear 3, r_shadowMapSplits 3, r_shadowMapSplitWeight 0.9) the split distances are 270.843, 656.814, 1940.46 and 1e30. engineShadowMapMatrices runs SetupShadowMapMatrices per placed side (parallel 0..splits, point 0..5, spot -1) and returns the raster pair the tile's draws use (lightProjection, lightView) and the stores shadowV[slice], shadowP[slice] (slice = Max( 0, side )), which pass 6 keeps on the light's ShadowLightRecord as drawn; the consumer reads them, never recomputed (C61). The test holds the stand-in cvars to EngineFrame's, and the split distances, the cascades' MVPs and every output of a point light (six sides), a spot light and a parallel light (four cascades) bit for bit to a float32 transcription of the engine's arithmetic: camera (12.5, -40.25, 64) looking along (0.8, 0.6, 0), 160 x 120, fov 90; point light at (37.5, -12.25, 80), radius (200, 180, 160); spot at (-20, 64, 96), target (180, 10, -60), right (10, -60, 0), up (30, 5, 55); parallel at (40, 20, 100), radius (300, 250, 120), center (30, -20, 100). Threads: the ranges touch only their arguments and tr, which one caller at a time uses (the one live session's render thread, L2.10's slot, or a test with no session)"
+    },
+    {
+      "id": "M-SHADOW-05",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3603,
+            3922
+          ],
+          "anchor": "idRenderBackend::ShadowAtlasPass",
+          "sha256": "dea2e27572179f6f68689e4b3ab43502f440838d4d135acfd6ddff6ff39a8bb7"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3798,
+            3895
+          ],
+          "anchor": "ShadowAtlasPass loop 2: imageSize, imageAtlasOffset, ShadowMapPassFast per side",
+          "sha256": "e97528bbd96cf93dc9b40ba51dff04acae15e0b594dba8dfbbcc885306982237"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3899,
+            3915
+          ],
+          "anchor": "back to the main render target: GL_State( GLS_DEFAULT ), ALPHA_TEST 0, ResetViewportAndScissorToDefaultCamera",
+          "sha256": "e0fc569ba7a3cba8e0ba7f167e92728bd2b1e6e2c0b6bc882641bfadffe7e2c4"
+        },
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            672,
+            675
+          ],
+          "anchor": "R_CreateShadowMapImage_Atlas",
+          "sha256": "31bcda4a85077433605b409f870a13429339ec383ad976e0b23b590e28df17a2"
+        },
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            1077,
+            1077
+          ],
+          "anchor": "shadowAtlasImage = ImageFromFunction( \"_shadowMapAtlas\", ... )",
+          "sha256": "74fda9fdea41ab3e151aa4b2d0c3d5ff78758226ea92f381bd1d122dc6567707"
+        },
+        {
+          "file": "neo/renderer/NVRHI/Image_NVRHI.cpp",
+          "lines": [
+            400,
+            402
+          ],
+          "anchor": "FMT_DEPTH: nvrhi::Format::D32",
+          "sha256": "f6ae99bf953b8c9309e9a2f01af4fbe495bc5fbe29090da1302f238afb8433a3"
+        },
+        {
+          "file": "neo/renderer/NVRHI/Image_NVRHI.cpp",
+          "lines": [
+            556,
+            566
+          ],
+          "anchor": "isRenderTarget: DepthWrite, clear value 1",
+          "sha256": "cd55c9913cc095f2c4e801dc754f8db9d5151ea2104a6b7852dc83b6b688049a"
+        },
+        {
+          "file": "neo/renderer/NVRHI/Framebuffer_NVRHI.cpp",
+          "lines": [
+            136,
+            138
+          ],
+          "anchor": "shadowAtlasFBO: the depth attachment alone",
+          "sha256": "ad2c818b5d291cdd5396bb36e9438ece645eed53ae4384dcf25a897e67758619"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            520,
+            535
+          ],
+          "anchor": "the viewport and its scissor",
+          "sha256": "a97da7f53239efe5bf11292a29cb28a6a2f7e4b1e3e9a250922a145167ef1f18"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            2176,
+            2193
+          ],
+          "anchor": "GL_Scissor",
+          "sha256": "99782af3a43be8816650058f1f5dbca756b870a0ebb4149c59a372dff79ac3c2"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::record (pass 6 between the ambient pass and the interactions), recordShadowAtlas, ensureShadowAtlas, setAtlasViewport, clearAtlasRect, clearQuadGeometry, releaseAll"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.h",
+          "symbol": "AtlasRect, ShadowLightType, ShadowLightRecord, LitFrameStats (pass 6's counts)"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "the Shadows timer pair, the shadow CPU time, renderTargetBytes with the atlas"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession shadows on a GPU (LP3.1), [.][litgpu2]"
+        }
+      ],
+      "note": "LP3.1 steps 1 and 3 (C59, D142, D145, D147, SC714-SC720): pass 6 records between AmbientPass( false ) and the interactions. _shadowMapAtlas is one 8192 x 8192 nvrhi::Format::D32 texture (256 MB, renderTargetBytes), render target, initial and kept state DepthWrite, clear value 1, made by the first frame that places a tile and cleared whole once then (M-SHADOW-DIFF-05), released with the session's device objects (LitPasses::releaseAll, teardown step 2); its framebuffer has the depth attachment alone. Loop 1 (M-SHADOW-CAST-02) and the packing (M-SHADOW-03) as LP3.0 left them; loop 2 per light in viewLights order: imageSize the first side's output size, imageAtlasOffset[ Max( 0, side ) ] per side, a light with a side that did not fit unplaced (imageSize.x -1) and drawn with the plain interaction; each placed side is GL_ViewportAndScissor( x, y, size, size ) on the atlas (top-left, unflipped), its far-plane clear (M-SHADOW-DIFF-04), its matrices (M-SHADOW-04) and its draws (M-SHADOW-06). After the pass the state, ALPHA_TEST 0 and the view's scissor are restored. A failed creation warns once and no light casts for the session; a disabled depth program (D9) draws every light with the plain interaction. The counts: LitFrameStats lightsCasting, lightsPlaced, lightsUnplaced with unplacedLights by name, tilesDrawn, tilesVacated, shadowDraws, shadowCastersCulled, perforatedCastersSkipped, atlasBytesWritten (tiles x size^2 x 4), shadowRecordMs and the GPU time (TimedPass::Shadows); tilesRelocated, tilesCached and tilesProvisional stay 0 until LP3.3 and LP3.4. The admin measurement (Release [.][measure], two runs, 2026-10-27): at the start view's settled frame 11 lights cast, all placed, 66 tiles, 1,836 shadow draws, 44 perforated casters left out, 23.2 MB of tiles, pass 6's GPU time 0.34 / 0.20 ms and CPU record 3.16 / 2.77 ms; over the orbit (290 / 291 frames) tiles median 12, p95 96 / 102, max 120, shadow draws median 472, p95 2,423, max 2,793 / 2,683, vacated rects max 62 / 56, no light unplaced, pass 6's GPU median 0.17 / 0.18 ms, p95 0.44 / 0.42, max 0.50 / 0.45, its CPU median 0.74 / 0.73 ms, p95 3.95 / 3.69, max 7.24 / 4.72; the session's VRAM account peaks at 456.2 / 456.4 MB with the atlas (LP3.0: 198.2), allocations after Stop 0"
+    },
+    {
+      "id": "M-SHADOW-06",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3395,
+            3584
+          ],
+          "anchor": "idRenderBackend::ShadowMapPassFast",
+          "sha256": "5e8253924fdb09a402e472f10a7e6b3224d386113dbbcd1f1ccd28e20c9dbbfd"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3414,
+            3414
+          ],
+          "anchor": "renderProgManager.BindShader_Depth()",
+          "sha256": "f12e501229a30973398f89076846d7bab2d67991c314a874b0a69fd60a809e4c"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3419,
+            3449
+          ],
+          "anchor": "GL_State( GLS_POLYGON_OFFSET ), r_shadowMapOccluderFacing's cull and GL_PolygonOffset",
+          "sha256": "805d93d6ada4a08beea1a8948ec3a75b1cfd04155424806d7ca0f0c5e58e7c04"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3493,
+            3517
+          ],
+          "anchor": "empty, NULL, MC_TRANSLUCENT and MC_PERFORATED surfaces",
+          "sha256": "07d945566298e40b0c8f63a9116fdbbf541cad861f73459df4685abe0ffaf230"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3519,
+            3555
+          ],
+          "anchor": "the MVPs: model -> world -> light, clipMVP; a spot light's windowSpaceToClipSpace times clipMVP",
+          "sha256": "30fcaecba0ecc006f267be58db82007355dffae10755a56f132a0995821d685a"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3559,
+            3572
+          ],
+          "anchor": "BindShader_Depth, DrawElementsWithCounters",
+          "sha256": "f225b80cde1c8a40dd9dba5cdb8eb04bf5eccc0ede1f6cbe4ee740bebb12915b"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            460,
+            460
+          ],
+          "anchor": "PipelineKey: static_cast<int>( depthBias ), slopeScaleBias",
+          "sha256": "f4c6a378b27faa5ce0a018046ac5b220baddb2f026bd9bf52306501b7af193cd"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::shadowMapPass, engineShadowCasterCulled, drawGeometry (Frame::viewport)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.h",
+          "symbol": "LitDrawRecord::Pass::Shadow, side; engineShadowCasterCulled"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ShadowMatrices.cpp",
+          "symbol": "D149: the per-side cull keeps a caster in the sides whose frustum it meets"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession shadows on a GPU (LP3.1), [.][litgpu2]"
+        }
+      ],
+      "note": "LP3.1 step 3 (C59, D149, D154, SC717-SC722, SC724, SC736): per placed side, after its clear, each caster of the light's ViewLight::casters (M-SHADOW-CAST-02) with indexes, of cast class Opaque, drawn with builtin/depth (never the skinned form: no skinned model, P3.24e) under GLS_POLYGON_OFFSET with r_shadowMapOccluderFacing 2's GLS_CULL_TWOSIDED and GL_PolygonOffset( r_shadowMapPolygonFactor 2, r_vkShadowMapPolygonOffset 1 ) (0 FRONTSIDED and 1 BACKSIDED with the negated pair, as written), depth LESS and written, the bias an int in the pipeline key as RBN:460 casts it; NVRHI's Vulkan raster state clips depth (no depthClampEnable) and enables the depth bias only for a non-zero constant. The MVP per caster space: parallel and point lightProjection x lightView x M, spot windowSpaceToClipSpace x that, M the space's model matrix transposed. A TranslucentCaster draws nothing (:3506-3509); a Perforated one is left out and counted (M-SHADOW-DIFF-06); the per-side cull is M-SHADOW-DIFF-07. Each draw is logged with its side (LitDrawRecord::Pass::Shadow; the clears ShadowClear). The depth pixel shader writes a colour the depth-only framebuffer has no attachment for (M-SHADOW-DEFECT-01)"
+    },
+    {
+      "id": "M-SHADOW-07",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1404,
+            1470
+          ],
+          "anchor": "DrawSingleInteraction: the PBR programs, ambientLight first, then the shadow-atlas programs by light type",
+          "sha256": "91ed1d8da75724c9266174f63278f25c3ad75806ddb9e467b0f7c5b911ac6b45"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1528,
+            1595
+          ],
+          "anchor": "DrawSingleInteraction: the legacy programs, the same order",
+          "sha256": "cc671a3dfd55b8c8de5d4185e744e2229009899bbf2d1f0c722a9341d18f7493"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1784,
+            1866
+          ],
+          "anchor": "RenderInteractions: the shadow parms under !r_skipShadows && shadowLOD > -1",
+          "sha256": "29872a71a847609d13d09a2104379b8deab3b5a0d86f4a5e491ed773a3370403"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            1968,
+            1981
+          ],
+          "anchor": "texture 5 the shadow atlas, texture 6 the jitter texture",
+          "sha256": "eb65a6e7d1597c22ce9dd3e47313f5cd7e6008ee6f75334fbceff4effc5dab83"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            2080,
+            2126
+          ],
+          "anchor": "the space's shadow matrices under ImageAtlasPlaced()",
+          "sha256": "d218a71d0e3616960a9e6c0f333507e748e3bb5a52f75c9c0a831c60f5848aa6"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            448,
+            460
+          ],
+          "anchor": "BUILTIN_INTERACTION_SHADOW_ATLAS_* and BUILTIN_PBR_INTERACTION_SHADOW_ATLAS_*",
+          "sha256": "877ffbd99b950cf34d73d5b122ea40b852be1dd37760e377a321a7404b609132"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::interactionProgram, shadowRecordOf, setShadowParms, setInteractionSpace, renderInteractions, recordInteractions (D76 per layout), bindingSets (DrawInteractionSm)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineBuiltins.h",
+          "symbol": "EngineBuiltinInteractionShadowAtlasSpot .. EngineBuiltinPbrInteractionShadowAtlasParallel"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession shadows on a GPU (LP3.1), [.][litgpu2]"
+        }
+      ],
+      "note": "LP3.1 step 4 (C60, C61, D154, K26, SC726-SC734): for every list (local, global, translucent) a light whose pass-6 record is placed (!r_skipShadows && ImageAtlasPlaced()) draws the shadow-atlas interaction of its type, parallel 43 / point 41 / spot 39 (PBR 49 / 47 / 45), with DRAW_INTERACTION_SM's sets (M-SHADOW-TABLE-02: t5 the atlas itself, t6 _blueNoise256, s0-s3 AnisotropicWrap, LinearBorder, LinearClampCompare, PointWrap) and set 11's 1088-byte volatile buffer; every other light, an unplaced one included, the plain program with set 10 (K26), and an ambientLight light the ambient program first. The parms of a casting light (shadowLOD > -1, placed or not): JITTER_SIZE 128, r_shadowMapSamples 16, the pinned jitter (r_shadowMapRandomizeJitter 0, SC727) with JitterTexOffset 1 / 512 (_blueNoise256's width); a parallel light's CascadeDistances from the frame's split frustums; placed: ScreenCorrectionFactor ( 1 / ( 128 x 16 ), 1 / 128, 1 / 8192, the depth bias scale 0.999 ), JitterTexScale ( 2.5, imageSize / 8192, shadowFadeOut, 16 ) and the six atlas offsets over 8192; unplaced: 1 / shadowMapResolutions[ LOD ] and ( 2.5, 2.5, fade, 16 ). Per space the shadow matrices from the record as drawn (C61): parallel (splits + 1) and point (6) clipSpaceToWindowSpace x shadowP[i] x shadowV[i] x M, spot shadowP[0] x shadowV[0] x M. D76 counts each layout's writes against its own buffer (M-PASS-DIFF-04)"
+    },
+    {
+      "id": "M-SHADOW-DIFF-03",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            605,
+            618
+          ],
+          "anchor": "R_AddSingleLight: R_ShadowBounds and CullBoundsToMVP( worldSpace.mvp )",
+          "sha256": "b59e962de64fd5b292953ec9e8aa3769c75b7b9561962edd1314597b432ef94d"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (ViewLight::casters)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::shadowMapPass"
+        }
+      ],
+      "note": "K49 (LP3.1, C57): the engine leaves out of a light's shadows an entity whose shadow bounds (R_ShadowBounds of its reference bounds from the light origin) the view's MVP culls; the preview keeps every caster that reaches the light (M-SHADOW-CAST-02), on screen or off, and draws it into every side whose frustum it meets. The cull is conservative, so a shadow in view is the same; only the PCF taps at the view's edges can read a texel an engine-culled caster did not write. The tiles draw more casters than the engine's (shadow_draws counts them)"
+    },
+    {
+      "id": "M-SHADOW-DIFF-04",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3639,
+            3643
+          ],
+          "anchor": "ShadowAtlasPass: clearDepthStencilTexture( the atlas, AllSubresources, 1.0 ) every frame",
+          "sha256": "7117e1af86598cb9bf00b608841b41dc8bbc94e441d5d70f47bc34531f668c8e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::clearAtlasRect, clearQuadGeometry, recordShadowAtlas (the vacated rects, m_atlasOccupied)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession shadows on a GPU (LP3.1), [.][litgpu2]: (d), (f)"
+        }
+      ],
+      "note": "D147, P3.3 (LP3.1 steps 1 and 3): the engine clears the whole 8192^2 atlas to 1.0 every frame (256 MB of writes); the preview clears each tile it draws by a far-plane quad under the tile's viewport and scissor (builtin/depth, the identity MVP, (+-1, +-1, 1) with w 1, GLS_DEPTHFUNC_ALWAYS | GLS_CULL_TWOSIDED, depth written, no polygon offset: exactly 1.0), and first, by the same quad, every rect last run's tiles occupied that this run's tiles do not cover (tiles_cleared, vacated); NVRHI has no rect clear. Every texel a frame's consumer can sample through a placed side is then the engine's: its tile is cleared and drawn, the rest of the atlas is 1.0 (cleared at creation, M-SHADOW-DIFF-05, or vacated); a vacated rect is cleared on the next frame that runs pass 6 (a frame with no casting light keeps it until then, and no placed side samples it). The [litgpu2] case reads the atlas back: a translucent caster's tiles all 1.0 and a light that left the view leaves its six rects 1.0"
+    },
+    {
+      "id": "M-SHADOW-DIFF-05",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            1077,
+            1077
+          ],
+          "anchor": "shadowAtlasImage = ImageFromFunction( \"_shadowMapAtlas\", ... ): made at the renderer's init",
+          "sha256": "74fda9fdea41ab3e151aa4b2d0c3d5ff78758226ea92f381bd1d122dc6567707"
+        },
+        {
+          "file": "neo/renderer/NVRHI/Framebuffer_NVRHI.cpp",
+          "lines": [
+            136,
+            138
+          ],
+          "anchor": "shadowAtlasFBO made with the framebuffers",
+          "sha256": "ad2c818b5d291cdd5396bb36e9438ece645eed53ae4384dcf25a897e67758619"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::ensureShadowAtlas, releaseAll"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "the frame row's renderTargetBytes (LitPasses::shadowAtlasBytes)"
+        }
+      ],
+      "note": "LP3.1 step 1 (C59, A49): the engine makes _shadowMapAtlas at init and keeps it; the preview makes it at the first frame that places a tile (A49: 256 MB from then on, in the session's VRAM account), clears it whole once then, and releases it in teardown step 2, so a session whose lights never cast holds none and the stop row's allocations are the start's. A failed creation warns once (\"The lit preview cannot make its shadow atlas ...\") and the session draws every light unshadowed"
+    },
+    {
+      "id": "M-SHADOW-DIFF-06",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3511,
+            3517
+          ],
+          "anchor": "ShadowMapPassFast: MC_PERFORATED surfaces saved for later",
+          "sha256": "6077eedf0df9bbc965155b2b423300d91e8af061a284c44934ad794625d9555f"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3577,
+            3581
+          ],
+          "anchor": "ShadowMapPassPerforated( perforatedSurfaces, ... )",
+          "sha256": "71957297b33650a5d24924eda6c3ec276bedb91939dacaf8adcdbc24028ebeaa"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::shadowMapPass (CastClass::Opaque only), recordShadowAtlas (perforatedCastersSkipped)"
+        }
+      ],
+      "note": "D155 (LP3.1): a Perforated caster (M-SHADOW-CAST-01) is not drawn into the tiles until LP3.4 mirrors ShadowMapPassPerforated (its alpha-tested stages and the !didDraw fallback, K52, K53); each one a placed light leaves out is counted per side (LitFrameStats::perforatedCastersSkipped, the frame log's perforated_skipped). A picture with a perforated caster in a casting light lacks its shadow until then; no parity row has one (every parity light is noshadows 1, K26)"
+    },
+    {
+      "id": "M-SHADOW-DIFF-07",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3482,
+            3572
+          ],
+          "anchor": "ShadowMapPassFast: every surface of vLight->globalShadows drawn into every side",
+          "sha256": "6077383d7f306c53c72d525120f75028cc4a05bd6168504dbc579dff57a779d1"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.h",
+          "symbol": "engineShadowCasterCulled"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::shadowMapPass (shadowCastersCulled)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ShadowMatrices.cpp",
+          "symbol": "D149: the per-side cull keeps a caster in the sides whose frustum it meets"
+        }
+      ],
+      "note": "D149 (P3.19, LP3.1 step 3): the engine draws a light's every shadow surface into each of its sides and lets the rasterizer clip; the preview leaves out of a side a caster whose bounds lie outside that side's clip volume as the device rasterizes it (x and y in [-w, w], z in [0, w], the far plane w - z; planes normalised, culled when the corner farthest inside is more than 0.01 unit outside one), so it adds no fragment and the tile is the same. The CPU test: a box 64 along each axis from a point light is kept in that axis's side alone, a diagonal box in the two sides that hold it (the 92 degree frusta overlap), a 2-unit box around the light origin, nearer than every side's near plane, in none; the GPU case (a) draws the box into sides 0, 3 and 5 (3 draws, 9 culled)"
+    },
+    {
+      "id": "M-SHADOW-STATIC-02",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderSystem.cpp",
+          "lines": [
+            42,
+            42
+          ],
+          "anchor": "idRenderSystemLocal tr",
+          "sha256": "d56bae038c9f02e9d341e17279d1654d7d1d66040ad15497754b430db7239c9a"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            118,
+            118
+          ],
+          "anchor": "r_znear",
+          "sha256": "a80ad6774b9fba67ababc664683377a7e9c877cb49f023c9f3ad662d7e7cd33f"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            253,
+            253
+          ],
+          "anchor": "r_shadowMapFrustumFOV",
+          "sha256": "b16646c326c5e06a964c571596f40cf889cc6b06911dde2dbf68e478d4109997"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            260,
+            261
+          ],
+          "anchor": "r_shadowMapSplits, r_shadowMapSplitWeight",
+          "sha256": "06ce29cf1c9e12e1d3329731bbac8072a92ad959316cea0018aa57fb7610ca8a"
+        },
+        {
+          "file": "neo/renderer/GLMatrix.cpp",
+          "lines": [
+            410,
+            411
+          ],
+          "anchor": "r_centerX, r_centerY",
+          "sha256": "c7a5eddcec28701b02da0881bc3adbe09d27df7ebf0a20ff49e0b5658c7504d3"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3068,
+            3068
+          ],
+          "anchor": "SetupShadowMapMatrices' static float s_flipMatrix[16]",
+          "sha256": "5f44b1d7058c537976fe62c31fea11379c91eaddada25dd4048b9d685991c6ae"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineShadowMatrices.cpp",
+          "symbol": "tbLitShadowMatrices::tr, r_znear, r_shadowMapFrustumFOV, r_shadowMapSplits, r_shadowMapSplitWeight, r_centerX, r_centerY; the copied s_flipMatrix"
+        }
+      ],
+      "note": "LP3.1 step 2 (C9, C17, C20): the stand-in tr is an internal-linkage struct of one pointer with a nullptr default member initialiser: constant-initialised, zero at load (.bss, no ??__E dynamic initialiser). engineSetupSplitFrustums alone writes it, pointing it at its own viewDef_t for the call to R_SetupSplitFrustums and back to nullptr after, so it never outlives a call and needs no reset; one caller at a time (the one live session's render thread, L2.10, or a test with no session). The six cvars are namespace-scope constexpr idCVars at the engine's defaults: constant-initialised in .rdata, never registered, never written. The copied range's function-local static float s_flipMatrix[16] is initialised from literals (.data, constant-initialised) and only read. check_static_init.py: Debug 50 and Release 25 dynamic initialisers in TbLitIdLib, as before LP3.1, 0 not allowed"
+    },
+    {
+      "id": "M-SHADOW-DEFECT-01",
+      "kind": "known-defect",
+      "engine": [
+        {
+          "file": "neo/shaders/builtin/depth.ps.hlsl",
+          "lines": [
+            34,
+            43
+          ],
+          "anchor": "PS_OUT: float4 color : SV_Target0; result.color = float4( 0, 0, 0, 1 )",
+          "sha256": "614757bf0314e6ed2d37e33916f2bd33b48fb2e7944db24995bc656bfcff830b"
+        },
+        {
+          "file": "neo/renderer/NVRHI/Framebuffer_NVRHI.cpp",
+          "lines": [
+            136,
+            138
+          ],
+          "anchor": "shadowAtlasFBO: a depth attachment and no colour attachment",
+          "sha256": "ad2c818b5d291cdd5396bb36e9438ece645eed53ae4384dcf25a897e67758619"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3414,
+            3414
+          ],
+          "anchor": "ShadowMapPassFast: BindShader_Depth into the atlas",
+          "sha256": "f12e501229a30973398f89076846d7bab2d67991c314a874b0a69fd60a809e4c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "DepthOnlyOutputId, the validation counts (mirroredDepthOnly)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_Feed.cpp",
+          "symbol": "DepthOnlyOutputId (counted as mirrored)"
+        }
+      ],
+      "note": "LP3.1 (C59): builtin/depth's pixel shader writes a colour at location 0, and the shadow atlas's framebuffer has only its depth attachment, so each pipeline of it there (the tile draw's and the far-plane clear's) makes Vulkan's validation layer report the warning Undefined-Value-ShaderOutputNotConsumed, as it does for the engine under r_useValidationLayers; the write is discarded and nothing else changes. The preview keeps the engine's program; the GPU cases count these warnings apart (2 per session with shadows), like M-PIPE-DEFECT-01's, and every other validation message is 0"
+    },
+    {
+      "id": "M-SHADOW-TABLE-03",
+      "kind": "table",
+      "engine": [
+        {
+          "file": "neo/renderer/Framebuffer.h",
+          "lines": [
+            34,
+            34
+          ],
+          "anchor": "MAX_SHADOWMAP_RESOLUTIONS = 5",
+          "sha256": "387eb82a95bc767db0cc0aa35cebcf449991b426dc85c1c743f32a339309cde0"
+        },
+        {
+          "file": "neo/renderer/Framebuffer.h",
+          "lines": [
+            48,
+            48
+          ],
+          "anchor": "shadowMapResolutions = { 1024, 512, 256, 256, 128 }",
+          "sha256": "c44d667308e635d999222f54e107d20a14e7698689a492781cd1b4fa59540c16"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3706,
+            3706
+          ],
+          "anchor": "ShadowAtlasPass loop 1: a side's size shadowMapResolutions[ shadowLOD ]",
+          "sha256": "4e5e822517f5c1c2891b23bf9c878625dcac3a0a7a7447d115b85d201a07259d"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            207,
+            215
+          ],
+          "anchor": "MAX_TILE_RES = shadowMapResolutions[ 0 ], NUM_QUAD_TREE_LEVELS 8, tileMap.Init",
+          "sha256": "c613c18b86cb6d3294a4513f218423738dd55cc649ea08bc1778f41d31e1ce62"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineLight.h",
+          "symbol": "EngineShadowMapResolutions"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordShadowAtlas (the sides' sizes, the tile map), setShadowParms (an unplaced light's 1 / resolution)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_EngineLight.cpp",
+          "symbol": "EngineLight: the shadow LOD of SC703's table (LP3.0, C58, D144)"
+        }
+      ],
+      "note": "LP3.1 step 7: the side of a shadow map per LOD 0-4, 1024, 512, 256, 256, 128 (the 1.3 table { 2048, 1024, 512, 512, 256 } at :45 is commented out), row for row as EngineLight.h's EngineShadowMapResolutions, equal to ShimRenderer's ShadowMapResolutions (M-ID-FN-03); every side of a light is its LOD's size, the tile map's largest tile is row 0 (1024) over 8 levels, and an unplaced casting light's ScreenCorrectionFactor.z is 1 / its row"
+    },
+    {
+      "id": "M-SHADOW-TEST-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            151,
+            151
+          ],
+          "anchor": "r_skipShadows 0, ARCHIVE",
+          "sha256": "167de9d73b6efee0578c1dc3394e249893b2ebbc546bc6c4c41ace63bbd8ecca"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/LitSession.h",
+          "symbol": "SessionOptions::skipShadowsForTesting"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "LitPasses::setSkipShadowsForTesting"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "FrontendInputs::skipShadows (no shadow LOD)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "rootSession( ..., shadows ), loggedRootSession, the sessions the window, LP4.2a no-bake, LP5.1 and LP7.2 cases make"
+        }
+      ],
+      "note": "C57 (LP3.1 step 0), test only: skipShadowsForTesting( true ) is r_skipShadows 1's stand-in (EngineFrame is constexpr): the frontend gives no light a shadow LOD, pass 6 records nothing and every interaction is the plain one. The product never sets it. The cases on LP2.2a's root, whose eight lp1b_geometry lights cast, and whose models are the unshadowed interaction's (probe pixels, draw and write counts, frame-log counts: SC733) set it: every rootSession and loggedRootSession case (LP2.2a, LP2.2b, LP4.2a, LP4.3, LPF.1, LP5.F, LP5.G, the stale-bake parity case) and the sessions made by hand (LP2.2b's window, LP4.2a's no bake, LP5.1, LP7.2). Five sections run with shadows on and assert what does not depend on the picture (teardown, threads and handles, heap blocks, validation): LP2.2a's Stop in the middle of a frame, U2.12's thread and handle baseline, LP2.2b's Stop between the lit and the tonemap passes, LP4.2a's Stop between the prepass and the ambient pass and its 100 frames on the debug heap; LP2.2a's programs also carry the six shadow-atlas blobs now (Lp2Programs 21)"
     }
   ],
   "retired": [
