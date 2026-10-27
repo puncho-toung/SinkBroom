@@ -1105,7 +1105,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 24
 {
@@ -1115,7 +1115,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 25
 {
@@ -1125,7 +1125,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 26
 {
@@ -1135,7 +1135,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 27
 {
@@ -1145,7 +1145,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 28
 {
@@ -1155,7 +1155,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 29
 {
@@ -1165,7 +1165,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 30
 {
@@ -1175,7 +1175,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 31
 {
@@ -1185,7 +1185,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 32
 {
@@ -1195,7 +1195,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 33
 {
@@ -1205,7 +1205,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 34
 {
@@ -1215,7 +1215,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 35
 {
@@ -1225,7 +1225,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 36
 {
@@ -1235,7 +1235,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 37
 {
@@ -1245,7 +1245,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 38
 {
@@ -1255,7 +1255,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 39
 {
@@ -1265,7 +1265,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 40
 {
@@ -1275,7 +1275,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 41
 {
@@ -1285,7 +1285,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 42
 {
@@ -1295,7 +1295,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 43
 {
@@ -1305,7 +1305,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 44
 {
@@ -1315,7 +1315,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 45
 {
@@ -1325,7 +1325,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 46
 {
@@ -1335,7 +1335,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 47
 {
@@ -1345,7 +1345,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 48
 {
@@ -1355,7 +1355,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 49
 {
@@ -1365,7 +1365,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 50
 {
@@ -1375,7 +1375,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 51
 {
@@ -1385,7 +1385,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 52
 {
@@ -1395,7 +1395,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 53
 {
@@ -1405,7 +1405,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 54
 {
@@ -1415,7 +1415,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 55
 {
@@ -1425,7 +1425,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 56
 {
@@ -1435,7 +1435,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 57
 {
@@ -1445,7 +1445,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 58
 {
@@ -1455,7 +1455,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 59
 {
@@ -1465,7 +1465,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 60
 {
@@ -1475,7 +1475,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 61
 {
@@ -1485,7 +1485,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 62
 {
@@ -1495,7 +1495,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 63
 {
@@ -1505,7 +1505,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 64
 {
@@ -1515,7 +1515,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 65
 {
@@ -1525,7 +1525,7 @@
 "light_radius" "400 400 200"
 "noshadows" "0"
 "texture" "lights/lp2/round"
-"_color" "0.03 0.03 0.03"
+"_color" "0.012 0.012 0.012"
 }
 // entity 66
 {
