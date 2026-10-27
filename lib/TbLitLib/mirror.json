@@ -30927,6 +30927,135 @@
         }
       ],
       "note": "LP3.0 step 3 (D159, SC741): the shadow cvars in EngineFrame at the engine's defaults: r_skipShadows 0, r_useShadowAtlas 1, r_shadowMapAtlasSize 8192 (ROM), r_shadowMapFrustumFOV 92, r_shadowMapSingleSide -1, r_shadowMapJitterScale 2.5, r_shadowMapSamples 16, r_shadowMapSplits 3, r_shadowMapSplitWeight 0.9, r_shadowMapLodScale 1.4, r_shadowMapLodBias 0, r_shadowMapPolygonFactor 2, r_vkShadowMapPolygonOffset 1 (parity runs Vulkan; the DX12 0.1 is not the preview's), r_shadowMapOccluderFacing 2, r_shadowMapRegularDepthBiasScale and r_shadowMapSunDepthBiasScale 0.999, r_forceShadowMapsOnAlphaTestedSurfaces 1, r_useShadowSurfaceScissor 1, r_useMaskedOcclusionCulling 1 (the engine's default; the preview has no MOC, K51, and the parity pin to 0 is LP3.2's parity.cfg). One is the preview's behaviour, not the engine's default: shadowMapRandomizeJitter false, the engine's being 1 (:258), because the preview draws the jitter pinned as parity pins it (SC727). r_shadowMapImageSize (:255) is the non-atlas path's (K50) and is not mirrored"
+    },
+    {
+      "id": "M-SHADOW-COPY-03",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/TileMap.h",
+          "lines": [
+            1,
+            122
+          ],
+          "anchor": "whole file",
+          "gitBlob": "58a3ce1ed3a91811139ad4ed1a1596f7b33410b3",
+          "sha256": "b512085acf4e2855f05f5e88bd908d9d4a29962c1bea3a5efdff64c511906b6b"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/TileMap.h"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob. LP3.0 step 4 (C59, D145, SC718): Tile, TileNode and TileMap, the shadow atlas's quad tree; only the shim's EngineShadowAtlas.cpp and the copied TileMap.cpp include it"
+    },
+    {
+      "id": "M-SHADOW-COPY-04",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/idlib/TileMap.cpp",
+          "lines": [
+            1,
+            176
+          ],
+          "anchor": "whole file",
+          "gitBlob": "ea43f3956d2f84ebc9b01bb328b5000e3755a1c7",
+          "sha256": "a8da3d307680eb92e9df2b4590b3e6b3ada1472138af5b1e682c45ec66488d11"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/idlib/TileMap.cpp"
+        }
+      ],
+      "note": "copied whole and byte for byte; the copy's git blob id equals gitBlob. LP3.0 step 4 (C59, D145, SC718): GetLog2 (ceil( log( x ) / log( 2.0f ) ), the floats as the engine's), Init, BuildTree (children at (-s, +s), (-s, -s), (+s, -s), (+s, +s), s = 1 / 2^level), Clear (every node's minLevel 0), GetTile (the size clamped to [minAbsTileSize, maxAbsTileSize] through idMath::ClampInt, the required level log2MapSize - GetLog2( size )) and FindNode (depth first, first fit, the hit's minLevel numLevels and its parent's the level; the grandparent is never marked, so only largest-first order keeps tiles apart). Compiled in TbLitIdLib as it is (its precompiled.h is the shim's); it defines no static data (GetLog2 is a static function), so check_static_init's counts are unchanged; Init allocates the node list once through the copied idList (21,845 nodes for Init( 8192, 1024, 8 ))"
+    },
+    {
+      "id": "M-SHADOW-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3587,
+            3601
+          ],
+          "anchor": "idSortrects: SizeMetric x*x + y*y, Compare( a, b ) = SizeMetric( b ) - SizeMetric( a )",
+          "sha256": "7c8ccba7b3a073d1b623feba975325ff5297631a7ceb49580a127ed60fd8b475"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3718,
+            3783
+          ],
+          "anchor": "ShadowAtlasPass: outputPositions and outputSizes, the sizeRemap sort, tileMap.Clear, GetTile per sorted side, the placement",
+          "sha256": "65f3d7d8d501b9f76d1b09c395e08e7fb312ca92009c3c3061b5d967a94d8a72"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            204,
+            215
+          ],
+          "anchor": "tileMap.Init( r_shadowMapAtlasSize, MAX_TILE_RES = shadowMapResolutions[0], NUM_QUAD_TREE_LEVELS 8 )",
+          "sha256": "45d3e5ded255e06e2570dbc441ef90dde40ab7788fc09070264c44518f739148"
+        },
+        {
+          "file": "neo/idlib/containers/Sort.h",
+          "lines": [
+            123,
+            230
+          ],
+          "anchor": "idSort_Quick (copied whole, M-ID-COPY-21)",
+          "sha256": "ee425dd8597b48f9a620a549f23dc8a79bd22e15b829837a6d668479efcb06d8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineShadowAtlas.cpp",
+          "symbol": "idSortrects, EngineTileMap, engineSortAtlasSizes, engineShadowAtlasLayout"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineShadowAtlas.h"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_ShadowAtlas.cpp"
+        }
+      ],
+      "note": "LP3.0 step 4 (C59, D145, D160, P3.1, SC717-SC719): the comparator transcribed on the copied idSort_Quick (through idList<int>::SortWithTemplate, as the engine sorts sizeRemap) over the sides' sizes (EngineAtlasSize stands for idVec2i, which is not copied); the placement as the engine computes it: area = Max( x, y ), GetTile( area ), imageSize = int( tile.size * atlasSize ), uv = position * 0.5 + 0.5 (no flip whatever the comment says), iPos = int( uv * atlasSize ), then iPos -= imageSize * 0.5f through float and back to int: the tile's top-left pixel; a side without a tile is (-1, -1) with its asked size. The packing test (Init( 8192, 1024, 8 )), the copied code's own orders, equal to the plan review's: (a) one point light's six 512 sides sort [4, 3, 5, 1, 0, 2] and land side 4 (0, 7680), 3 (0, 7168), 5 (512, 7168), 1 (512, 7680), 0 (0, 6656), 2 (0, 6144); (b) one parallel light's four 1024 cascades sort [1, 2, 3, 0]: cascade 1 (0, 7168), 2 (0, 6144), 3 (1024, 6144), 0 the fourth tile at (1024, 7168); (c) 43 point lights at 512 (258 equal keys) sort [256, 255 .. 129, 257, 127 .. 0, 128] and leave shadowIndex 0 and 128 without a tile, so lights 0 and 21 of the input order are unshadowed (D160, D162; not the 43rd); (d) 42 lights place all 252 sides; (e) the capacities 64 x 1024, 256 x 512, 1024 x 256, 4096 x 128 and 16384 x 64; a size is clamped to 64..1024. No two placed tiles overlap in any of them. LP3.1's ShadowAtlasPass calls engineShadowAtlasLayout with the sides of the casting, placed lights in viewLights order (M-SHADOW-ORDER-01)"
+    },
+    {
+      "id": "M-SHADOW-PURE-01",
+      "kind": "pure-function",
+      "engine": [
+        {
+          "file": "neo/idlib/TileMap.cpp",
+          "lines": [
+            35,
+            175
+          ],
+          "anchor": "GetLog2, TileMap::Release, Init, BuildTree, Clear, GetTile, FindNode",
+          "sha256": "6337edd2b285ee88297f0bdc5a990a226023795aa5935b1b1333496cd8fe0c0b"
+        },
+        {
+          "file": "neo/idlib/containers/Sort.h",
+          "lines": [
+            123,
+            230
+          ],
+          "anchor": "idSort_Quick::Sort",
+          "sha256": "ee425dd8597b48f9a620a549f23dc8a79bd22e15b829837a6d668479efcb06d8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineShadowAtlas.cpp"
+        }
+      ],
+      "note": "LP3.0 step 4 (C20, C24, A25): the copied TileMap and idSort_Quick, which LP3.1's atlas pass runs on the render thread through lit/EngineShadowAtlas.h (the tests on theirs). A TileMap reads and writes only its own members and nodes; Init allocates its node list once through the copied idList (Mem_Alloc16 of the shim's heap, thread-safe), Clear and GetTile allocate nothing; idSort_Quick sorts in place with stack arrays of 128 levels; engineSortAtlasSizes allocates its own idList<int>. No common or idLib::common call is reachable (Init's failures return false), no FatalError site, no SIMDProcessor, no static data (GetLog2 is a function). An EngineTileMap belongs to one thread at a time (its owner's)"
     }
   ],
   "retired": [

@@ -18,6 +18,10 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_ENGINE_DIR}/idlib/Lexer.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/Str.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/Token.cpp
+    # LP3.0 (C59, D145): the shadow atlas's quad tree, copied whole, behind the facade
+    # lit/EngineShadowAtlas.h (shim/src/EngineShadowAtlas.cpp)
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/TileMap.cpp
+    ${TB_LIT_ID_ENGINE_DIR}/idlib/TileMap.h
     ${TB_LIT_ID_ENGINE_DIR}/idlib/bv/Bounds.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/containers/HashIndex.cpp
     ${TB_LIT_ID_ENGINE_DIR}/idlib/geometry/DecalProjection.cpp
@@ -114,6 +118,7 @@ target_sources(TbLitIdLib
     ${TB_LIT_ID_SHIM_DIR}/src/EngineImageData.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineInteraction.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineLight.cpp
+    ${TB_LIT_ID_SHIM_DIR}/src/EngineShadowAtlas.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineLexer.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/EngineMessages.cpp
     ${TB_LIT_ID_SHIM_DIR}/src/ImageFileCheck.cpp
@@ -154,6 +159,7 @@ target_sources(TbLitIdLib
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineLight.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineModels.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/EnginePipelineState.h
+      ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineShadowAtlas.h
       ${TB_LIT_ID_SHIM_DIR}/include/lit/MaterialDecls.h
 )
 

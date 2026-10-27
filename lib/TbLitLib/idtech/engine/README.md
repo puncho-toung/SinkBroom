@@ -55,7 +55,10 @@ parser's node matrices need. LP3.0 (C60, P3.24a) adds `_blueNoise256`: `renderer
 whole (the table, 512 x 512 RGB8, added upstream in 99235ec92 with no licence header of its
 own) and `renderer/Image_intrinsic.cpp`'s licence and `R_CreateBlueNoise256Image`, compiled
 inside the namespace `tbLitBlueNoise` of `../shim/src/EngineBlueNoise.cpp` behind
-`lit/EngineImageData.h`. Every one of these files is the Doom 3 BFG Edition GPL-3 code
+`lit/EngineImageData.h`; and the shadow atlas's packing, `idlib/TileMap.h` and `idlib/TileMap.cpp`
+whole, compiled as they are behind `lit/EngineShadowAtlas.h` (`../shim/src/EngineShadowAtlas.cpp`,
+which transcribes `ShadowAtlasPass`' comparator and placement on the copied `idSort_Quick`).
+Every one of these files is the Doom 3 BFG Edition GPL-3 code
 with id Software's additional terms (`LICENSE.md`), (C) 2022-2023 Harrie van Ginneken and
 (C) 2022-2025 Robert Beckebans among its authors; the parser embeds no third-party JSON
 code (the engine's `neo/libs/rapidjson` is not used by it, and is not copied).
