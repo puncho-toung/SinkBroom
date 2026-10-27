@@ -1513,9 +1513,10 @@ void RenderThread::main() noexcept
       m_events.post(SessionEvent::Warning, *error);
     }
     else if (const auto casterLog = casterLogPath(m_options.frameLogPath);
-             !casterLog.empty())
+             !casterLog.empty() && casterLogRequested())
     {
-      // LP3.0 (P3.14): appended to; the header into an empty file only
+      // LP3.0 (P3.14): asked for by TB_LIT_CASTER_LOG; appended to; the header into an
+      // empty file only
       auto existing = std::error_code{};
       const auto size = std::filesystem::file_size(casterLog, existing);
       m_casterLog.open(casterLog, std::ios::binary | std::ios::app);

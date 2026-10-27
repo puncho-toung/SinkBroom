@@ -21,6 +21,7 @@
 
 #include <fmt/format.h>
 
+#include <cstdlib>
 #include <system_error>
 #include <utility>
 
@@ -239,6 +240,12 @@ std::filesystem::path casterLogPath(const std::filesystem::path& frameLogPath)
   name += "-casters";
   name += frameLogPath.extension();
   return frameLogPath.parent_path() / name;
+}
+
+bool casterLogRequested()
+{
+  const auto* value = std::getenv("TB_LIT_CASTER_LOG");
+  return value && *value;
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)

@@ -218,6 +218,11 @@ std::string formatCasterLogRow(const CasterLogRow& row);
 // an empty frame-log path
 std::filesystem::path casterLogPath(const std::filesystem::path& frameLogPath);
 
+// the casters' log is written, beside an open frame log, only while the environment's
+// TB_LIT_CASTER_LOG is set and not empty (a measurement's opt-in, so that the suites'
+// frame logs leave no companion behind)
+bool casterLogRequested();
+
 // one CSV line, ending in a newline; a field that does not apply or is unknown is empty
 std::string formatFrameLogRow(const FrameLogRow& row);
 
