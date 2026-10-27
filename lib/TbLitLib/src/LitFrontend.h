@@ -144,6 +144,13 @@ struct ViewLight
   bool provisional = false;
   ViewLightKind kind = ViewLightKind::Texture;
   EnginePlane fogPlane = {};
+  // LP3.0 (C58, D144): the light volume's window-space box (LightScissor::projected) and
+  // viewLight_t::shadowLOD and shadowFadeOut (RenderCommon.h), engineShadowLod's for a
+  // light that casts (lightCastsShadows, r_skipShadows 0), else -1 and 0; LP3.1 reads
+  // them
+  EngineBounds projected = {};
+  int shadowLod = -1;
+  float shadowFadeOut = 0.0f;
 };
 
 // LP5.3 (C45, C49): the kind of a light of this shader (ViewLightKind's rule). Pure.
@@ -285,6 +292,22 @@ bool engineSnapLightRegisters(const MaterialEntry& shader, std::vector<float>& r
  * outside set's lights, D81), with zmin and zmax (no depth-bounds test, SC212). Pure.
  */
 std::optional<ScreenRect> engineLightScissor(
+  const LitView& view,
+  const EngineMat4& inverseBaseLightProject,
+  const ScreenRect& flowRect);
+
+// LP3.0 (C58): the light scissor with the window-space box it was made from
+struct LightScissor
+{
+  ScreenRect scissor;
+  // ProjectedFullyClippedBounds( worldMvp · inverseBaseLightProject, the zero-to-one
+  // cube ): x, y and depth in 0..1, before the flow-rect intersection
+  // (tr_frontend_addlights.cpp:248-264), the shadow LOD's input (engineShadowLod)
+  EngineBounds projected = {};
+};
+
+// engineLightScissor's rect beside its projected box; nullopt where it is. Pure.
+std::optional<LightScissor> engineLightScissorAndBox(
   const LitView& view,
   const EngineMat4& inverseBaseLightProject,
   const ScreenRect& flowRect);

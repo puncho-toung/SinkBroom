@@ -17,6 +17,7 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "lit/EngineLight.h"
 #include "lit/EnginePipelineState.h"
 #include "lit/EngineTables.h"
 #include "lit/ImageCache.h"
@@ -171,6 +172,39 @@ TEST_CASE("EngineTables")
     CHECK(
       shaderPermutationKey(engineBuiltinDefines(exposure, false))
       == "HISTOGRAM_BINS=256 USE_PUSH_CONSTANTS=0");
+  }
+
+  SECTION("the shadow cvars at the engine's defaults (LP3.0, C58, D159, SC741)")
+  {
+    // RenderSystem_init.cpp:108, 151, 251-269, 329 and tr_frontend_addmodels.cpp:50
+    CHECK_FALSE(EngineFrame.skipShadows);
+    CHECK(EngineFrame.useShadowAtlas == 1);
+    CHECK(EngineFrame.shadowMapAtlasSize == 8192);
+    CHECK(EngineFrame.shadowMapFrustumFov == 92.0f);
+    CHECK(EngineFrame.shadowMapSingleSide == -1);
+    CHECK(EngineFrame.shadowMapJitterScale == 2.5f);
+    // the preview's pin (parity.cfg's SWITCHES), not the engine's default of 1
+    CHECK_FALSE(EngineFrame.shadowMapRandomizeJitter);
+    CHECK(EngineFrame.shadowMapSamples == 16);
+    CHECK(EngineFrame.shadowMapSplits == 3);
+    CHECK(EngineFrame.shadowMapSplitWeight == 0.9f);
+    CHECK(EngineFrame.shadowMapLodScale == 1.4f);
+    CHECK(EngineFrame.shadowMapLodBias == 0);
+    CHECK(EngineFrame.shadowMapPolygonFactor == 2.0f);
+    CHECK(EngineFrame.vkShadowMapPolygonOffset == 1.0f);
+    CHECK(EngineFrame.shadowMapOccluderFacing == 2);
+    CHECK(EngineFrame.shadowMapRegularDepthBiasScale == 0.999f);
+    CHECK(EngineFrame.shadowMapSunDepthBiasScale == 0.999f);
+    CHECK(EngineFrame.forceShadowMapsOnAlphaTestedSurfaces);
+    CHECK(EngineFrame.useShadowSurfaceScissor);
+    CHECK(EngineFrame.useMaskedOcclusionCulling);
+    // engineShadowLod's defaults are EngineFrame's
+    const auto box =
+      EngineBounds{EngineVec3{0.0f, 0.5f, 0.5f}, EngineVec3{0.4f, 0.5f, 0.5f}};
+    CHECK(
+      engineShadowLod(box, false)
+      == engineShadowLod(
+        box, false, EngineFrame.shadowMapLodScale, EngineFrame.shadowMapLodBias));
   }
 
   SECTION("renderparm sets")

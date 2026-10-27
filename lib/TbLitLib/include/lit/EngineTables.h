@@ -944,6 +944,58 @@ struct EngineFrameDefaults
   float slopTexCoord = 0.001f;
   // r_slopNormal "0.02": normals merge when their dot product is above 1 - this
   float slopNormal = 0.02f;
+  // LP3.0 (C58, C60, D159, SC741): the shadow cvars, each at the engine's default
+  // (RenderSystem_init.cpp at 285ea4d1 unless named); LP3.1 on read them
+  // r_skipShadows "0", ARCHIVE (:151): ShadowAtlasPass and the SM programs run
+  bool skipShadows = false;
+  // r_useShadowAtlas "1", INTEGER, not archived (:251): the atlas path, never the arrays
+  // (K50)
+  int useShadowAtlas = 1;
+  // r_shadowMapAtlasSize "8192", ROM (:252): the atlas's side
+  int shadowMapAtlasSize = 8192;
+  // r_shadowMapFrustumFOV "92" (:253): a point light side's field of view, both axes
+  float shadowMapFrustumFov = 92.0f;
+  // r_shadowMapSingleSide "-1" (:254): every side of a point light
+  int shadowMapSingleSide = -1;
+  // r_shadowMapJitterScale "2.5" (:256): the PCF disk's radius in atlas texels
+  float shadowMapJitterScale = 2.5f;
+  // r_shadowMapRandomizeJitter: the engine's default is "1" (:258), which feeds
+  // Sys_Milliseconds and frameCount into jitterTexOffset; the preview draws the pinned
+  // jitter, as parity.cfg's SWITCHES pin it to 0 (SC727, SC741), so this is the
+  // preview's behaviour, not the engine's default
+  bool shadowMapRandomizeJitter = false;
+  // r_shadowMapSamples "16", 1..64 (:259): the PCF taps
+  int shadowMapSamples = 16;
+  // r_shadowMapSplits "3", 0..4 (:260): a parallel light's cascades are this + 1
+  int shadowMapSplits = 3;
+  // r_shadowMapSplitWeight "0.9" (:261): R_SetupSplitFrustums' lambda
+  float shadowMapSplitWeight = 0.9f;
+  // r_shadowMapLodScale "1.4" (:262) and r_shadowMapLodBias "0" (:263): the LOD rule
+  // (engineShadowLod's defaults)
+  float shadowMapLodScale = 1.4f;
+  int shadowMapLodBias = 0;
+  // r_shadowMapPolygonFactor "2" (:264): the tile draw's slope-scaled bias
+  float shadowMapPolygonFactor = 2.0f;
+  // r_vkShadowMapPolygonOffset "1" (:266): the tile draw's constant bias on Vulkan, which
+  // the pipeline key makes an int (RenderBackend_NVRHI.cpp:460, SC722;
+  // r_dxShadowMapPolygonOffset's 0.1 is DX12's, never the preview's)
+  float vkShadowMapPolygonOffset = 1.0f;
+  // r_shadowMapOccluderFacing "2" (:267): casters drawn two-sided
+  int shadowMapOccluderFacing = 2;
+  // r_shadowMapRegularDepthBiasScale "0.999" (:268) and r_shadowMapSunDepthBiasScale
+  // "0.999" (:269): the receiver's depth scale, point and spot, and parallel
+  float shadowMapRegularDepthBiasScale = 0.999f;
+  float shadowMapSunDepthBiasScale = 0.999f;
+  // r_forceShadowMapsOnAlphaTestedSurfaces "1" (tr_frontend_addmodels.cpp:50): a
+  // perforated material casts even with noShadows (C57)
+  bool forceShadowMapsOnAlphaTestedSurfaces = true;
+  // r_useShadowSurfaceScissor "1" (:108): R_OptimizeViewLightsList shrinks a casting
+  // shader's light rect to its surfaces' (D148)
+  bool useShadowSurfaceScissor = true;
+  // r_useMaskedOcclusionCulling "1", NOCHEAT (:329): the engine's default; the preview
+  // has no MOC before LP6 (K51, M-FRONT-DIFF-02), and parity pins it to 0 (LP3.2's
+  // parity.cfg)
+  bool useMaskedOcclusionCulling = true;
 };
 inline constexpr auto EngineFrame = EngineFrameDefaults{};
 

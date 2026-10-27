@@ -130,6 +130,44 @@ float engineVec3Length(const EngineVec3& v);
 // copy, for R_FogImage's distances (src/IntrinsicImages.cpp, Image_intrinsic.cpp:465-466)
 float engineMathSqrt(float x);
 
+// LP3.0 (C58): shadowMapResolutions (Framebuffer.h:48), the side of a shadow map per LOD;
+// MAX_SHADOWMAP_RESOLUTIONS (Framebuffer.h:34) of them
+inline constexpr auto EngineShadowMapResolutions =
+  std::array<int, 5>{1024, 512, 256, 256, 128};
+
+// LP3.0 (C58): a light's viewLight_t::shadowLOD (-1: no shadow) and shadowFadeOut
+struct EngineShadowLod
+{
+  int lod = -1;
+  float fadeOut = 0.0f;
+
+  // C++17 (TbLitIdLib): written out
+  bool operator==(const EngineShadowLod& other) const
+  {
+    return lod == other.lod && fadeOut == other.fadeOut;
+  }
+  bool operator!=(const EngineShadowLod& other) const { return !(*this == other); }
+};
+
+/**
+ * LP3.0 (C58, D144, P3.18, SC702-SC703): R_AddSingleLight's shadow LOD for a light that
+ * casts (tr_frontend_addlights.cpp:391-466, inside r_useLightScissors' block), from the
+ * light volume's window-space box projected (the ProjectedFullyClippedBounds box the
+ * light scissor computes before its flow-rect intersection, x, y and depth in 0..1): the
+ * radius is the copied idBounds::GetRadius( GetCenter() ) (Bounds.cpp:72-88, its
+ * idMath::Sqrt = x · sqrtf( 1 / x ), Math.h:527-552), at most 1; flod = 1 - radius · min(
+ * lodScale, 20 ), 0 for a radius of 0, times MAX_SHADOWMAP_RESOLUTIONS + 1 (6), at least
+ * 0; lod = idMath::Ftoi( flod ) (truncation, Math.h:1331-1338) + lodBias, at least 0; 5
+ * or more is -1 (no shadow); at 4 the fade is idMath::Frac( flod ) (f - floorf( f ),
+ * Math.h:569-572); then a LOD of 0 becomes 1 for a light that is not parallel (1024 is
+ * the parallel lights' alone). lodScale and lodBias are r_shadowMapLodScale's and
+ * r_shadowMapLodBias's defaults (RenderSystem_init.cpp:262-263), equal to EngineFrame's
+ * by a test. A light that does not cast keeps lod -1 and fade 0: the caller's test. Pure;
+ * any thread.
+ */
+EngineShadowLod engineShadowLod(
+  const EngineBounds& projected, bool parallel, float lodScale = 1.4f, int lodBias = 0);
+
 /**
  * idRenderMatrix::OffsetScaleForBounds( src, bounds, out ) (RenderMatrix.cpp:793-869, its
  * SSE path): the matrix that takes the unit cube onto bounds in src's space, as

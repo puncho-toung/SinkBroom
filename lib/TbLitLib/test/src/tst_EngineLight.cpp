@@ -23,8 +23,12 @@
 
 #include "kd/result.h"
 
+#include <array>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <thread>
+#include <vector>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -126,6 +130,76 @@ TEST_CASE("EngineLight: the copy runs on the CPU pool (C24)")
   REQUIRE(expected);
   CHECK(result.result == Result<EngineMat4>{*expected});
   pool->stop();
+}
+
+TEST_CASE("EngineLight: the shadow LOD of SC703's table (LP3.0, C58, D144)")
+{
+  // a window-space box of projected radius r: (0, 0.5, 0.5) to (2r, 0.5, 0.5), so the
+  // copied GetRadius( GetCenter() ) is Sqrt( r · r ) = t · sqrtf( 1 / t ); the radius
+  // bits, flod and the fade were computed by a script with every operation rounded to
+  // float32 (the engine's arithmetic)
+  const auto boxOf = [](const float r) {
+    return EngineBounds{EngineVec3{0.0f, 0.5f, 0.5f}, EngineVec3{2.0f * r, 0.5f, 0.5f}};
+  };
+  const auto bitsOf = [](const float value) {
+    auto bits = std::uint32_t{};
+    std::memcpy(&bits, &value, sizeof(bits));
+    return bits;
+  };
+  struct Row
+  {
+    float r = 0.0f;
+    int pointLod = 0;
+    int parallelLod = 0;
+    std::uint32_t fadeBits = 0;
+  };
+  // SC703 at its 4-place boundaries; its table is rounded: the copied code's exact
+  // boundaries are (1 - k/6) / 1.4 (0.119048, 0.238095, 0.357143, 0.476190, 0.595238), so
+  // 0.4762 is LOD 1 (the table's row "0.3571 < r <= 0.4762: 2" ends at 0.476190)
+  const auto rows = std::vector<Row>{
+    // r = 0: "object intersects near view plane", flod 0, LOD 0 (512 for point and spot)
+    {0.0f, 1, 0, 0},
+    // flod 5.0004: LOD 5 is past the last, no shadow
+    {0.119f, -1, -1, 0},
+    // flod 4.99956: LOD 4 (128) with the fade frac( flod ) = 0.99956
+    {0.1191f, 4, 4, 0x3f7fe328u},
+    {0.2f, 4, 4, 0x3ea3d700u},
+    // flod 3.99996 and 3.00036: LOD 3 (256)
+    {0.2381f, 3, 3, 0},
+    {0.3571f, 3, 3, 0},
+    // flod 1.99992 and 1.00032: LOD 1 (512)
+    {0.4762f, 1, 1, 0},
+    {0.5952f, 1, 1, 0},
+    // a camera inside the volume: r >= sqrt( 0.5 ), LOD 0, 1024 for a parallel light
+    // alone
+    {0.7071f, 1, 0, 0},
+    {1.0f, 1, 0, 0},
+  };
+  for (const auto& row : rows)
+  {
+    CAPTURE(row.r);
+    const auto point = engineShadowLod(boxOf(row.r), false);
+    const auto parallel = engineShadowLod(boxOf(row.r), true);
+    CHECK(point.lod == row.pointLod);
+    CHECK(parallel.lod == row.parallelLod);
+    CHECK(bitsOf(point.fadeOut) == row.fadeBits);
+    CHECK(bitsOf(parallel.fadeOut) == row.fadeBits);
+    // the defaults are r_shadowMapLodScale 1.4 and r_shadowMapLodBias 0
+    CHECK(engineShadowLod(boxOf(row.r), false, 1.4f, 0) == point);
+  }
+  // the radius through the copy: 0.1191's is 0x3df3eab3 (a box's radius above 1 is 1)
+  CHECK(engineMathSqrt(0.1191f * 0.1191f) == 0.11909999698400497f);
+  CHECK(engineShadowLod(boxOf(5.0f), true).lod == 0);
+  // the scale is capped at 20; a bias moves the LOD after the truncation and before the
+  // "no shadow" test, which the fade follows (Ftoi, then lodBias, then >= 5)
+  CHECK(engineShadowLod(boxOf(0.2381f), false, 1.4f, 1).lod == 4);
+  CHECK(engineShadowLod(boxOf(0.2381f), false, 1.4f, 2).lod == -1);
+  CHECK(engineShadowLod(boxOf(0.1191f), false, 1.4f, -10).lod == 1);
+  CHECK(
+    engineShadowLod(boxOf(0.1f), false, 100.0f, 0)
+    == engineShadowLod(boxOf(0.1f), false, 20.0f, 0));
+  // the resolutions per LOD (Framebuffer.h:48)
+  CHECK(EngineShadowMapResolutions == std::array<int, 5>{1024, 512, 256, 256, 128});
 }
 
 } // namespace tb::lit

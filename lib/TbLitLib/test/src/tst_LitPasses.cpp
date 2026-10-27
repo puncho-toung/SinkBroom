@@ -792,6 +792,31 @@ TEST_CASE("LitPasses: the light scissor, its sort and the caps (D67, SC206, SC22
     return rect;
   }());
 
+  // LP3.0 (C58, D144): the projected box beside the rect, the shadow LOD's input; the
+  // camera inside the volume puts x and y over the whole window, so the radius is at
+  // least sqrt( 0.5 ): LOD 0, 512 for a point light, 1024 for a parallel one (SC703)
+  const auto aroundBox =
+    engineLightScissorAndBox(view, around.inverseBaseLightProject, viewScissor(view));
+  REQUIRE(aroundBox);
+  CHECK(aroundBox->scissor == *whole);
+  CHECK(aroundBox->projected[0][0] == 0.0f);
+  CHECK(aroundBox->projected[1][0] == 1.0f);
+  CHECK(aroundBox->projected[0][1] == 0.0f);
+  CHECK(aroundBox->projected[1][1] == 1.0f);
+  CHECK(aroundBox->projected[0][2] == whole->zmin);
+  CHECK(aroundBox->projected[1][2] == whole->zmax);
+  CHECK(engineShadowLod(aroundBox->projected, false) == EngineShadowLod{1, 0.0f});
+  CHECK(engineShadowLod(aroundBox->projected, true) == EngineShadowLod{0, 0.0f});
+  // the light ahead: its box is the rect's before the pixel expansion and the flow rect
+  const auto aheadBox =
+    engineLightScissorAndBox(view, ahead.inverseBaseLightProject, viewScissor(view));
+  REQUIRE(aheadBox);
+  CHECK(aheadBox->scissor == *scissor);
+  CHECK(std::abs(aheadBox->projected[0][0] - 0.4375f) < 1e-5f);
+  CHECK(std::abs(aheadBox->projected[1][0] - 0.5625f) < 1e-5f);
+  CHECK_FALSE(
+    engineLightScissorAndBox(view, behind.inverseBaseLightProject, viewScissor(view)));
+
   // largest first; equal areas in the reverse of their order
   auto lights = std::vector<ViewLight>{};
   for (const auto& [id, size] :

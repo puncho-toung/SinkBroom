@@ -30777,6 +30777,156 @@
         }
       ],
       "note": "LP3.0 step 2 (C9, C17, C20): blueNoiseTexBytes is an internal-linkage const array of 786,432 bytes, initialised from literals: constant-initialised (in .rdata; no ??__E dynamic initialiser, check_static_init's count unchanged), never written, so any thread may read it. The generator's function-local static data[512][512][4] (1,048,576 bytes) is zero-initialised at load (.bss, no initialiser) and written in full by every call before GenerateImage reads it: no reset is needed (each call rewrites every byte), but two calls at once would race on it, so the generator is the parse thread's alone (C20: the parse thread runs the copied code; intrinsicImage is its caller)"
+    },
+    {
+      "id": "M-SHADOW-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            391,
+            466
+          ],
+          "anchor": "R_AddSingleLight: the shadow LOD, similar to Q3A .md3 LOD code",
+          "sha256": "74de690c982110c3e9893198a480f6634ec476655e9d3b8edfc51d111fdb6d07"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            242,
+            264
+          ],
+          "anchor": "R_AddSingleLight: lightCastsShadows and the ProjectedFullyClippedBounds box (r_useLightScissors 3)",
+          "sha256": "c2a0ed83c95e41a8ad5cb148d24e2b381404bb6a15912f682f9c625ed09a04ce"
+        },
+        {
+          "file": "neo/idlib/bv/Bounds.cpp",
+          "lines": [
+            72,
+            88
+          ],
+          "anchor": "idBounds::GetRadius( center )",
+          "sha256": "4248103bbe888e43ef85a8f2a86fa476dfedea78529dfe1f8fea026b15d04bc7"
+        },
+        {
+          "file": "neo/idlib/math/Math.h",
+          "lines": [
+            527,
+            552
+          ],
+          "anchor": "idMath::InvSqrt, idMath::Sqrt: x * sqrtf( 1 / x )",
+          "sha256": "abc61d7d107be7014ceda6702c0dd9959872d26cedd278264896e5a43812c555"
+        },
+        {
+          "file": "neo/idlib/math/Math.h",
+          "lines": [
+            569,
+            572
+          ],
+          "anchor": "idMath::Frac: f - floorf( f )",
+          "sha256": "c36ef6579700bfd35ca7e363aa1709a46029a40ee5bc8d0936a6ccf1fe6331a0"
+        },
+        {
+          "file": "neo/idlib/math/Math.h",
+          "lines": [
+            1331,
+            1338
+          ],
+          "anchor": "idMath::Ftoi: _mm_cvttss_si32, truncation",
+          "sha256": "8b1f8520ea478b11a3fbcf3ec2caf8db9583d87ee3a45e78a07d3e14b8fa26b1"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            262,
+            263
+          ],
+          "anchor": "r_shadowMapLodScale 1.4, r_shadowMapLodBias 0",
+          "sha256": "e917748b97293f57cc0d04f83e1b12e9e90eaa1fb39388125225fe504e817a21"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineShadowLod"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineLight.h",
+          "symbol": "EngineShadowLod, EngineShadowMapResolutions, engineShadowLod"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "engineLightScissorAndBox; buildFrontendLists (ViewLight::projected, shadowLod, shadowFadeOut)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_EngineLight.cpp",
+          "symbol": "EngineLight: the shadow LOD of SC703's table (LP3.0, C58, D144)"
+        }
+      ],
+      "note": "LP3.0 step 3 (C58, D144, P3.18, SC702-SC703): transcribed in the shim on the copied idBounds (GetCenter, GetRadius) and idMath (Sqrt over InvSqrt, Ftoi, Frac), compiled with TbLitIdLib's flags, so the radius and the fade are the engine's bits (the fade at LOD 4 is read by interactionSM.ps:519). The box is the one engineLightScissor already computes, ProjectedFullyClippedBounds( worldMvp * inverseBaseLightProject, zeroOneCube ) in window space, returned beside the rect (engineLightScissorAndBox, LightScissor::projected) before the flow-rect intersection. MAX_SHADOWMAP_RESOLUTIONS is EngineShadowMapResolutions' size (5; Framebuffer.h:34, :48 {1024, 512, 256, 256, 128}, equal to ShimRenderer's ShadowMapResolutions of M-ID-FN-03). buildFrontendLists fills ViewLight::shadowLod and shadowFadeOut for a light that casts (lightCastsShadows, r_skipShadows 0), -1 and 0 otherwise, as R_AddSingleLight inside r_useLightScissors' block; nothing reads them before LP3.1. SC703's 4-place boundaries are rounded: the copied code's exact ones are (1 - k/6) / 1.4 = 0.119048, 0.238095, 0.357143, 0.476190, 0.595238, so r = 0.4762 is LOD 1 (the table's row 0.3571 < r <= 0.4762 for LOD 2 ends at 0.476190); the test holds r = 0, 0.119, 0.1191, 0.2, 0.2381, 0.3571, 0.4762, 0.5952, 0.7071 and 1 for point and parallel lights to a script's float32 arithmetic (radius bits, LOD, the fade bits 0x3f7fe328 at 0.1191 and 0x3ea3d700 at 0.2). The engine runs this only past MOC (FAL:291-386), which the preview does not mirror (M-FRONT-DIFF-02, K51)"
+    },
+    {
+      "id": "M-SHADOW-02",
+      "kind": "constant",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            108,
+            108
+          ],
+          "anchor": "r_useShadowSurfaceScissor 1",
+          "sha256": "08d20cdcd7d5569d6f42379d084544a8863ac6b4b84495e5b4a429901de20b02"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            151,
+            151
+          ],
+          "anchor": "r_skipShadows 0, ARCHIVE",
+          "sha256": "167de9d73b6efee0578c1dc3394e249893b2ebbc546bc6c4c41ace63bbd8ecca"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            251,
+            269
+          ],
+          "anchor": "r_useShadowAtlas .. r_shadowMapSunDepthBiasScale",
+          "sha256": "a116eaa209b5d77c75d55b44606c1a8cb63521f79c5dae635f79df1604c6f904"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            329,
+            329
+          ],
+          "anchor": "r_useMaskedOcclusionCulling 1",
+          "sha256": "6af4865a05bd66b7693da0045df52f153e8720170b815470b173e6c3c8450e14"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            50,
+            50
+          ],
+          "anchor": "r_forceShadowMapsOnAlphaTestedSurfaces 1",
+          "sha256": "6c6fb312d1cd94d296898c4bc7bfd4821fff7a1913257199be0d4932799db891"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineFrameDefaults (skipShadows .. useMaskedOcclusionCulling)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_EngineTables.cpp",
+          "symbol": "the shadow cvars at the engine's defaults (LP3.0, C58, D159, SC741)"
+        }
+      ],
+      "note": "LP3.0 step 3 (D159, SC741): the shadow cvars in EngineFrame at the engine's defaults: r_skipShadows 0, r_useShadowAtlas 1, r_shadowMapAtlasSize 8192 (ROM), r_shadowMapFrustumFOV 92, r_shadowMapSingleSide -1, r_shadowMapJitterScale 2.5, r_shadowMapSamples 16, r_shadowMapSplits 3, r_shadowMapSplitWeight 0.9, r_shadowMapLodScale 1.4, r_shadowMapLodBias 0, r_shadowMapPolygonFactor 2, r_vkShadowMapPolygonOffset 1 (parity runs Vulkan; the DX12 0.1 is not the preview's), r_shadowMapOccluderFacing 2, r_shadowMapRegularDepthBiasScale and r_shadowMapSunDepthBiasScale 0.999, r_forceShadowMapsOnAlphaTestedSurfaces 1, r_useShadowSurfaceScissor 1, r_useMaskedOcclusionCulling 1 (the engine's default; the preview has no MOC, K51, and the parity pin to 0 is LP3.2's parity.cfg). One is the preview's behaviour, not the engine's default: shadowMapRandomizeJitter false, the engine's being 1 (:258), because the preview draws the jitter pinned as parity pins it (SC727). r_shadowMapImageSize (:255) is the non-atlas path's (K50) and is not mirrored"
     }
   ],
   "retired": [

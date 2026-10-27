@@ -136,6 +136,15 @@ std::optional<ScreenRect> engineLightScissor(
   const EngineMat4& inverseBaseLightProject,
   const ScreenRect& flowRect)
 {
+  const auto both = engineLightScissorAndBox(view, inverseBaseLightProject, flowRect);
+  return both ? std::optional{both->scissor} : std::nullopt;
+}
+
+std::optional<LightScissor> engineLightScissorAndBox(
+  const LitView& view,
+  const EngineMat4& inverseBaseLightProject,
+  const ScreenRect& flowRect)
+{
   // Calculate the matrix that projects the zero-to-one cube to exactly cover the light
   // frustum in clip space.
   const auto invProjectMVPMatrix =
@@ -167,7 +176,7 @@ std::optional<ScreenRect> engineLightScissor(
   scissor.intersect(lightScissorRect);
   scissor.zmin = projected[0][2];
   scissor.zmax = projected[1][2];
-  return scissor;
+  return LightScissor{scissor, projected};
 }
 
 InteractionList engineInteractionList(
@@ -742,12 +751,26 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
         continue;
       }
 
-      const auto scissor = engineLightScissor(
+      const auto scissorAndBox = engineLightScissorAndBox(
         view, record->derived.projection.inverseBaseLightProject, flowRect);
-      if (!scissor)
+      if (!scissorAndBox)
       {
         // the light was culled to the view frustum (:266-270): every kind
         continue;
+      }
+      const auto* scissor = &scissorAndBox->scissor;
+      // LP3.0 (C58, D144): the shadow LOD from the projected box, for a light that casts
+      // (tr_frontend_addlights.cpp:391-466; r_useLightScissors 3, no MOC: K51)
+      viewLight.projected = scissorAndBox->projected;
+      if (!EngineFrame.skipShadows && lightCastsShadows(*record).value_or(false))
+      {
+        const auto lod = engineShadowLod(
+          viewLight.projected,
+          record->light.parms.parallel,
+          EngineFrame.shadowMapLodScale,
+          EngineFrame.shadowMapLodBias);
+        viewLight.shadowLod = lod.lod;
+        viewLight.shadowFadeOut = lod.fadeOut;
       }
       if (scissor->isEmpty() && !fogOrBlend)
       {

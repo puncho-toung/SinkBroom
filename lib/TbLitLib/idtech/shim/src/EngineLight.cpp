@@ -446,6 +446,88 @@ float engineMathSqrt(const float x)
   return idMath::Sqrt(x);
 }
 
+EngineShadowLod engineShadowLod(
+  const EngineBounds& projected,
+  const bool parallel,
+  const float lodScale,
+  const int lodBias)
+{
+  // tr_frontend_addlights.cpp:391-466 (RB: calculate shadow LOD similar to Q3A .md3 LOD
+  // code), for a light that casts shadows: vLight->shadowLOD = 0, then
+  float flod, lodscale;
+  float projectedRadius;
+  int lod;
+  int numLods;
+
+  // MAX_SHADOWMAP_RESOLUTIONS (Framebuffer.h:34)
+  numLods = int(EngineShadowMapResolutions.size());
+
+  // compute projected bounding sphere
+  // and use that as a criteria for selecting LOD
+  const auto box = toId(projected);
+  idVec3 center = box.GetCenter();
+  projectedRadius = box.GetRadius(center);
+  if (projectedRadius > 1.0f)
+  {
+    projectedRadius = 1.0f;
+  }
+
+  if (projectedRadius != 0)
+  {
+    lodscale = lodScale;
+
+    if (lodscale > 20)
+    {
+      lodscale = 20;
+    }
+
+    flod = 1.0f - projectedRadius * lodscale;
+  }
+  else
+  {
+    // object intersects near view plane, e.g. view weapon
+    flod = 0;
+  }
+
+  // +1 allow to be so distant so we turn off shadow mapping
+  flod *= (numLods + 1);
+
+  if (flod < 0)
+  {
+    flod = 0;
+  }
+
+  lod = idMath::Ftoi(flod);
+  lod += lodBias;
+
+  if (lod < 0)
+  {
+    lod = 0;
+  }
+
+  auto result = EngineShadowLod{};
+  if (lod >= numLods)
+  {
+    // don't draw any shadow
+    lod = -1;
+  }
+
+  if (lod == (numLods - 1))
+  {
+    // blend shadows smoothly in
+    result.fadeOut = idMath::Frac(flod);
+  }
+
+  // 2048^2 ultra quality is only for cascaded shadow mapping with sun lights
+  if (lod == 0 && !parallel)
+  {
+    lod = 1;
+  }
+
+  result.lod = lod;
+  return result;
+}
+
 EngineMat4 engineOffsetScaleForBounds(const EngineMat4& src, const EngineBounds& bounds)
 {
   auto out = idRenderMatrix{};
