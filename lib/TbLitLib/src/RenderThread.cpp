@@ -2184,6 +2184,8 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.casters = litStats.casters;
       row.casterMs = litStats.casterMs;
       row.lightTriangleEntries = litStats.lightTriangleEntries;
+      // LP3.4 (D155): the perforated casters' shadow draws
+      row.perforatedDraws = litStats.perforatedShadowDraws;
       m_timers.frameShown(slot, row);
       ++m_framesPresented;
       // LP2.3 (D9): the panel's status line reads the frame's counts

@@ -143,6 +143,57 @@ std::uint64_t shadowCasterTerm(
   return mix(hash);
 }
 
+std::uint64_t shadowPerforatedTerm(
+  const ChunkKey& key,
+  const bool instance,
+  const MaterialEntry* material,
+  const EvaluatedRegisters* registers)
+{
+  auto hash = FnvBasis;
+  hash = fnvOf(hash, key.area);
+  hash = fnvOf(hash, key.entity);
+  hash = fnv(hash, key.material.data(), key.material.size());
+  hash = fnvOf(hash, key.cell);
+  hash = fnvOf(hash, key.part);
+  hash = fnvOf(hash, instance);
+  if (!material || !registers)
+  {
+    // pending: drawn solid and provisional until they arrive
+    hash = fnvOf(hash, std::uint8_t{0xff});
+    return mix(hash);
+  }
+  hash = fnvOf(hash, material->revision);
+  auto carried = enginePerforatedShadowOpening();
+  const auto none = Vec4{-1.0f, -1.0f, -1.0f, -1.0f};
+  for (const auto& draw :
+       enginePerforatedShadowDraws(*material, registers->registers, carried))
+  {
+    hash = fnvOf(hash, draw.program);
+    hash = fnvOf(hash, draw.state);
+    hash = fnvOf(hash, draw.slopeBias);
+    hash = fnvOf(hash, draw.depthBias);
+    hash = fnvOf(hash, draw.color.value_or(none));
+    hash = fnvOf(hash, draw.alphaTest.value_or(none));
+    hash = fnvOf(hash, draw.stage);
+    hash = fnvOf(hash, draw.textureMatrix);
+    hash = fnvOf(hash, draw.texGenEnabled);
+    hash = fnvOf(hash, draw.screenTexgen);
+    hash = fnvOf(hash, draw.bumpStage);
+    hash = fnvOf(hash, draw.wobbleSky);
+  }
+  return mix(hash);
+}
+
+std::uint64_t shadowPerforatedImageTerm(
+  const std::uint64_t slot, const bool complete, const std::uint64_t version)
+{
+  auto hash = FnvBasis;
+  hash = fnvOf(hash, slot);
+  hash = fnvOf(hash, complete);
+  hash = fnvOf(hash, complete ? version : std::uint64_t{0});
+  return mix(hash);
+}
+
 std::int64_t atlasOverlap(const AtlasRect& a, const AtlasRect& b)
 {
   const auto x0 = std::max(a.x, b.x);

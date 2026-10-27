@@ -24,6 +24,7 @@
 #include "lit/EngineLight.h"
 #include "lit/EngineTables.h"
 #include "lit/LightRecord.h"
+#include "lit/MaterialDecls.h"
 
 #include <array>
 #include <cstddef>
@@ -104,8 +105,11 @@ ShadowCvars shadowCvarsOf(const EngineFrameDefaults& frame);
  *   (ViewLight::casters), accumulated in the frontend's gathering after the rule admitted
  *   each (lightReachesCaster, the light volume's cull, the spectrum, the light
  *   triangles): order-independent, so the set the tiles were drawn from;
- * - perforated: reserved for the perforated casters' evaluated stage registers and their
- *   material entries' revision (P3.6, LP3.4: they draw nothing before), 0;
+ * - perforated: LP3.4 (P3.6, C61, D156): the sum of shadowPerforatedTerm over the light's
+ *   Perforated casters (their stage draws, so the registers that reach them, and their
+ *   material entries' revision: the frontend's gathering, ViewLight::perforatedHash) and
+ *   of shadowPerforatedImageTerm over their alpha-tested stages' image slots (pass 6's,
+ *   each frame); an opaque caster's appearance is in neither (S36);
  * - cvars: the shadow cvars by value;
  * - generation: the bake the chunk set was built under (LitPasses' count of the scene's
  *   tree and AreaData pointers, tree presence included: D94's no-tree rule makes every
@@ -154,6 +158,32 @@ std::uint64_t shadowCasterTerm(
   const EngineGlMatrix& modelMatrix,
   CastClass castClass,
   const AreaSurface& surface);
+
+/**
+ * LP3.4 (C61, P3.6, D155): one Perforated caster's term of its light's key.perforated:
+ * its id (as shadowCasterTerm's), its material entry's revision and the draws
+ * enginePerforatedShadowDraws makes of it under the call's opening state, which are what
+ * its evaluated registers decide (the condition and the colour alpha by which its stages
+ * draw, ALPHA_TEST, the texture matrix, the texgen; each draw's program, state and
+ * offsets); its material or registers pending (null): the id and a pending mark. Mixed to
+ * 64 bits so that the sum over a light's perforated casters is order-independent. Pure.
+ */
+std::uint64_t shadowPerforatedTerm(
+  const ChunkKey& key,
+  bool instance,
+  const MaterialEntry* material,
+  const EvaluatedRegisters* registers);
+
+/**
+ * LP3.4 (C61, D156, K53): an alpha-tested stage image's term of its caster's light's
+ * key.perforated: its image slot (an ImageSlotId), whether the slot is complete
+ * (Resident, Replacing with its complete texture, or a final Default: D88) and its
+ * version while it is (an image swapped by a reload, LPF.1's Replacing, redraws the
+ * tiles; a slot still loading moves nothing here: its tiles are provisional and drawn
+ * again instead). Pure.
+ */
+std::uint64_t shadowPerforatedImageTerm(
+  std::uint64_t slot, bool complete, std::uint64_t version);
 
 // the pixels a and b share
 std::int64_t atlasOverlap(const AtlasRect& a, const AtlasRect& b);
@@ -280,6 +310,11 @@ struct ShadowTileRecord
   // the casters' depth draws it was drawn with, and the frame that drew it
   std::size_t draws = 0;
   std::uint64_t drawnFrame = 0;
+  // LP3.4 (D156, K53): drawn with a perforated caster's stage image not complete, or its
+  // material or registers pending: provisional (not valid either, so drawn again; this
+  // flag tells it from LP3.3's other reasons: a skipped draw or clear, a budget drop, a
+  // caster's light triangles pending)
+  bool provisional = false;
 };
 
 /**

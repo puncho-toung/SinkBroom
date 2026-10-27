@@ -347,8 +347,8 @@ using namespace std::chrono_literals;
 // the frame log's fields (lit/FrameLog.cpp, frameLogHeader): LP5.3's 57, LP7.0's
 // proc_bytes and the eleven model, dress and adoption counts (C52, P7.20), LP7.3's
 // inlined_surfaces (C54), LP3.1's pass 6 and caster columns (D157), LP3.2's per-list
-// shadow-atlas interaction draws
-constexpr auto FrameLogFields = std::size_t{94};
+// shadow-atlas interaction draws, LP3.4's perforated_draws (D155)
+constexpr auto FrameLogFields = std::size_t{95};
 
 // LP2.0, T0.2: the validation layer's id of "Vertex attribute at location N not consumed
 // by vertex shader" (mirror.json M-PIPE-DEFECT-01), as this machine's layer names it
@@ -15280,6 +15280,8 @@ struct ShadowFrame
   std::uint64_t atlasBytes = 0;
   std::uint64_t smWrites = 0;
   std::uint64_t plainWrites = 0;
+  // LP3.4: the frame's convergence (D77) settled
+  bool converged = false;
 };
 
 // the atlas rect of a record's side
@@ -15376,6 +15378,7 @@ std::optional<ShadowFrame> settledShadowFrame(
         {
           auto& frame = state->frame;
           frame.stats = stats;
+          frame.converged = access.convergence.settled();
           frame.records = access.passes.shadowLights();
           for (const auto& light : lists.lights)
           {
@@ -17224,6 +17227,415 @@ TEST_CASE("LitSession shadow records on a GPU (LP3.3)", "[.][litgpu2]")
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
   teardown(*session, std::nullopt);
   messages.print("LP3.3 shadow records, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+}
+
+namespace
+{
+
+// LP3.4: lp3_point.map with its box replaced by a grate of material (TrenchBroom's name),
+// a 2-unit slab at x 32..34, y -24..24, z 104..152 between the light (0, 0, 128) and the
+// far wall, whole inside the light's +x side (its corners 36.9 degrees off the axis)
+std::string lp3GrateMapText(const std::string& material)
+{
+  auto text = lp3MapText("lp3_point.map");
+  const auto from = text.find("// entity 2");
+  const auto to = text.find("// entity 3");
+  REQUIRE(from != std::string::npos);
+  REQUIRE(to != std::string::npos);
+  const auto grate = fmt::format(
+    "// entity 2\n{{\n\"classname\" \"func_static\"\n\"name\" \"lp3_grate\"\n\"model\" "
+    "\"lp3_grate\"\n\"origin\" \"33 0 128\"\n{}}}\n",
+    boxBrush(32, -24, 104, 34, 24, 152, material));
+  return text.substr(0, from) + grate + text.substr(to);
+}
+
+// the grate's two faces facing x (the light's and the far wall's), in world space
+constexpr auto Lp3GrateNear = 32.0f;
+constexpr auto Lp3GrateFar = 34.0f;
+constexpr auto Lp3Grate = EngineBounds{EngineVec3{32, -24, 104}, EngineVec3{34, 24, 152}};
+constexpr auto Lp3GrateNearFace =
+  EngineBounds{EngineVec3{32, -24, 104}, EngineVec3{32, 24, 152}};
+constexpr auto Lp3GrateFarFace =
+  EngineBounds{EngineVec3{34, -24, 104}, EngineVec3{34, 24, 152}};
+
+// a world point's depth in a side's tile as the atlas holds it and interactionSM compares
+// it: clipToWindow · P · V · p, z / w (the depth range's 0.5 · ndc + 0.5)
+float tileDepthOf(
+  const ShadowLightRecord& record, const int side, const EngineVec3& point)
+{
+  const auto slice = std::size_t(std::max(0, side));
+  const auto matrix = engineMatrixMultiply(
+    engineClipSpaceToWindowSpace(),
+    engineMatrixMultiply(record.shadowP[slice], record.shadowV[slice]));
+  const auto p = std::array<float, 4>{point[0], point[1], point[2], 1.0f};
+  auto out = std::array<float, 4>{};
+  for (std::size_t r = 0; r < 4; ++r)
+  {
+    out[r] = matrix[r * 4 + 0] * p[0] + matrix[r * 4 + 1] * p[1]
+             + matrix[r * 4 + 2] * p[2] + matrix[r * 4 + 3] * p[3];
+  }
+  return out[2] / out[3];
+}
+
+// what the grate's tile holds inside the footprint both its x faces cover (3 texels in
+// from its edges: the slab's four thin side faces, seen from the light at a grazing
+// angle, lie between the two faces' footprints): the side whose tile holds the whole
+// slab, the texels nearer than the far clear (bars) and at it (holes), the bars' depth
+// range, and the texels nearer outside the slab's footprint (with 2 texels of margin)
+struct GrateTile
+{
+  int side = -100;
+  std::size_t bars = 0;
+  std::size_t holes = 0;
+  float barMin = 2.0f;
+  float barMax = -1.0f;
+  std::size_t outside = 0;
+  std::vector<float> texels;
+};
+
+GrateTile grateTileOf(const ShadowFrame& frame, const ShadowLightRecord& record)
+{
+  auto result = GrateTile{};
+  for (auto side = 0; side < record.sides; ++side)
+  {
+    const auto footprint = footprintOf(record, side, Lp3Grate);
+    const auto tile = tileOf(record, side);
+    if (
+      !footprint || (*footprint)[0] < float(tile.x) || (*footprint)[1] < float(tile.y)
+      || (*footprint)[2] > float(tile.x + tile.size)
+      || (*footprint)[3] > float(tile.y + tile.size))
+    {
+      continue;
+    }
+    result.side = side;
+    const auto& f = *footprint;
+    const auto nearFace = footprintOf(record, side, Lp3GrateNearFace);
+    const auto farFace = footprintOf(record, side, Lp3GrateFarFace);
+    REQUIRE(nearFace);
+    REQUIRE(farFace);
+    const auto both = std::array<float, 4>{
+      std::max((*nearFace)[0], (*farFace)[0]),
+      std::max((*nearFace)[1], (*farFace)[1]),
+      std::min((*nearFace)[2], (*farFace)[2]),
+      std::min((*nearFace)[3], (*farFace)[3])};
+    for (auto ty = tile.y; ty < tile.y + tile.size; ++ty)
+    {
+      for (auto tx = tile.x; tx < tile.x + tile.size; ++tx)
+      {
+        const auto d = frame.atlas.at(std::uint32_t(tx), std::uint32_t(ty));
+        const auto x = float(tx) + 0.5f;
+        const auto y = float(ty) + 0.5f;
+        const auto inner = x >= both[0] + 3.0f && x <= both[2] - 3.0f
+                           && y >= both[1] + 3.0f && y <= both[3] - 3.0f;
+        const auto margin =
+          x >= f[0] - 2.0f && x <= f[2] + 2.0f && y >= f[1] - 2.0f && y <= f[3] + 2.0f;
+        if (inner)
+        {
+          result.texels.push_back(d);
+          if (d < 1.0f)
+          {
+            ++result.bars;
+            result.barMin = std::min(result.barMin, d);
+            result.barMax = std::max(result.barMax, d);
+          }
+          else
+          {
+            ++result.holes;
+          }
+        }
+        else if (!margin && d < 1.0f)
+        {
+          ++result.outside;
+        }
+      }
+    }
+  }
+  return result;
+}
+
+// the clears of a light's side in the draw log (its tile drawn again)
+std::size_t sideClearsOf(
+  const std::vector<LitDrawRecord>& log, const PreviewId light, const int side)
+{
+  return std::size_t(std::ranges::count_if(log, [&](const LitDrawRecord& record) {
+    return record.pass == LitDrawRecord::Pass::ShadowClear && record.light == light
+           && record.side == side;
+  }));
+}
+
+} // namespace
+
+// LP3.4 (C61, D155, D156, K52, K53; D160, D161): perforated casters in pass 6 on the
+// synthetic point scene (fixture/lit/maps/lp3/lp3_point.map, its box replaced by a grate
+// of the shadows map's materials/lp3_parity.mtr): (m) the grate's bars at its depth and
+// its holes at the far clear, the noShadows grate the same; (n) its image slot not
+// complete: the tile provisional, then redrawn once it is. Hidden: it needs a GPU and the
+// blobs.
+TEST_CASE("LitSession perforated shadows on a GPU (LP3.4)", "[.][litgpu2]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto started = std::chrono::steady_clock::now();
+  const auto root = assembleLp3Root(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  // the shadows map's grates (H04, H08) and their images (textures/lp3p, copied whole)
+  std::filesystem::copy_file(
+    litFixtureFolder() / "materials" / "lp3_parity.mtr",
+    root / "base" / "materials" / "lp3_parity.mtr");
+
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  const auto instance = testInstance(true, false, messages);
+  REQUIRE(instance.valid());
+  REQUIRE(initInstanceDispatcher(instance.handles()));
+  auto service = rootService(root);
+  auto events = Events{};
+  auto session = rootSession(instance, events, *service, root, true, false, true);
+  session->setExposed(true);
+  REQUIRE(waitFor(
+    [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+  auto sequence = std::uint64_t{0};
+  const auto offer = [&](const std::string& text) {
+    REQUIRE(session->offerSnapshot(lp3Snapshot(text, root, "lp3_point.map", ++sequence)));
+    REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+      access.passes.setDrawLogForTesting(true);
+    }));
+  };
+  const auto clearLog = [&] {
+    REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+      access.passes.setDrawLogForTesting(true);
+    }));
+  };
+  const auto camera = litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1});
+  // the grate's texture: bars 5 texels wide every 16 (parity.py lp3p_grate_texture), so
+  // 135 of every 256 texels opaque, 52.7 %; its face is perpendicular to the +x side's
+  // axis, so its projection keeps the fraction up to the edges' rounding: a band of 45 to
+  // 60 % (stated before the run)
+  constexpr auto BarsMin = 0.45;
+  constexpr auto BarsMax = 0.60;
+
+  // ---------------------------------------------------------------------------------
+  SECTION("(m) a perforated grate between a point light and a wall: bars and holes")
+  {
+    offer(lp3GrateMapText("lp3p/grate"));
+    const auto shadowed = settledShadowFrame(*session, camera, 1, true);
+    REQUIRE(shadowed);
+    const auto& frame = *shadowed;
+    REQUIRE(frame.records.size() == 1u);
+    const auto& record = frame.records[0];
+    CHECK(frame.stats.lightsPlaced == 1u);
+    CHECK(frame.stats.perforatedCastersSkipped == 0u);
+    CHECK(frame.stats.tilesProvisional == 0u);
+    CHECK_FALSE(record.provisional);
+    CHECK(frame.converged);
+    // the draws: the grate's texture_color draws in pass 6, the side's state 0 (E-LIT-12)
+    auto perforatedDraws = std::size_t{0};
+    for (const auto& draw : frame.drawLog)
+    {
+      if (
+        draw.pass == LitDrawRecord::Pass::Shadow
+        && draw.program == EngineBuiltinTextureVertexColor)
+      {
+        ++perforatedDraws;
+        CHECK(draw.state == 0u);
+      }
+    }
+    CHECK(perforatedDraws > 0u);
+    const auto grate = grateTileOf(frame, record);
+    REQUIRE(grate.side >= 0);
+    const auto total = grate.bars + grate.holes;
+    REQUIRE(total > 0u);
+    const auto fraction = double(grate.bars) / double(total);
+    const auto nearDepth = tileDepthOf(record, grate.side, {Lp3GrateNear, 0, 128});
+    const auto farDepth = tileDepthOf(record, grate.side, {Lp3GrateFar, 0, 128});
+    std::cout << fmt::format(
+      "LP3.4 (m) grate: side {}, {} bars and {} holes in its footprint ({:.1f} % bars, "
+      "band {:.0f}-{:.0f} %), bar depth {:.7f}..{:.7f} (the near face {:.7f}, the far "
+      "face {:.7f}), {} texels nearer outside it, {} perforated draws of {} shadow "
+      "draws\n",
+      grate.side,
+      grate.bars,
+      grate.holes,
+      100.0 * fraction,
+      100.0 * BarsMin,
+      100.0 * BarsMax,
+      grate.barMin,
+      grate.barMax,
+      nearDepth,
+      farDepth,
+      grate.outside,
+      perforatedDraws,
+      frame.stats.layoutShadowDraws);
+    CHECK(fraction >= BarsMin);
+    CHECK(fraction <= BarsMax);
+    // every bar at the grate's depth: one plane perpendicular to the side's axis, the
+    // near face's or the far face's (one alone, whichever the side's FRONTSIDED cull
+    // keeps: E-LIT-12), no polygon offset
+    CHECK(grate.barMax - grate.barMin < 1e-5f);
+    CHECK(
+      (std::abs(grate.barMin - nearDepth) < 1e-4f
+       || std::abs(grate.barMin - farDepth) < 1e-4f));
+    // nothing else below the far clear in the grate's tile (the room's faces cast
+    // nothing, the anchor is in another side)
+    CHECK(grate.outside == 0u);
+    saveAtlasPng(frame.atlas, "lp34_m_grate");
+    saveHdrPng(frame.hdr, "lp34_m_grate");
+
+    // the noShadows grate: the same draws, the same texels (C57: a perforated material
+    // casts whatever its noShadows says)
+    offer(lp3GrateMapText("lp3p/grate_noshadows"));
+    const auto noShadows = settledShadowFrame(*session, camera, 1, true);
+    REQUIRE(noShadows);
+    REQUIRE(noShadows->records.size() == 1u);
+    const auto other = grateTileOf(*noShadows, noShadows->records[0]);
+    CHECK(other.side == grate.side);
+    CHECK(other.bars == grate.bars);
+    CHECK(other.holes == grate.holes);
+    CHECK(other.texels == grate.texels);
+    std::cout << fmt::format(
+      "LP3.4 (m) noShadows grate: {} bars, {} holes, texels equal {}\n",
+      other.bars,
+      other.holes,
+      other.texels == grate.texels);
+
+    // its shadow on the far wall: the grate's entity noshadows 1 (the anchor keeps the
+    // light casting, so both pictures take the shadow-atlas program, SC733)
+    offer(withKey(lp3GrateMapText("lp3p/grate"), "lp3_grate", "noshadows", "1"));
+    const auto unshadowed = settledShadowFrame(*session, camera, 1, false);
+    REQUIRE(unshadowed);
+    const auto diff = comparePictures(frame.hdr, unshadowed->hdr);
+    std::cout << fmt::format(
+      "LP3.4 (m) the grate's shadow: {} pixels darker, {} brighter, {} equal\n",
+      diff.darker,
+      diff.brighter,
+      diff.equal);
+    CHECK(diff.darker > 100u);
+    CHECK(diff.brighter == 0u);
+    saveHdrPng(unshadowed->hdr, "lp34_m_grate_unshadowed");
+  }
+
+  // ---------------------------------------------------------------------------------
+  SECTION("(n) the grate's image not complete: provisional, then redrawn once")
+  {
+    offer(lp3GrateMapText("lp3p/grate"));
+    const auto first = settledShadowFrame(*session, camera, 1, true);
+    REQUIRE(first);
+    REQUIRE(first->records.size() == 1u);
+    const auto light = first->records[0].light;
+    const auto before = grateTileOf(*first, first->records[0]);
+    REQUIRE(before.side >= 0);
+    // the grate's alpha-tested stage image (its coverage stage's, TD_COVERAGE), dropped
+    // with no uploads: its slot binds its intrinsic until its texture is back
+    auto image = std::optional<MaterialImageKey>{};
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      for (const auto& viewLight : access.passes.lists().lights)
+      {
+        for (const auto& caster : viewLight.casters)
+        {
+          if (caster.chunk->castClass == CastClass::Perforated && caster.material)
+          {
+            for (const auto& stage : caster.material->stages)
+            {
+              if (stage.hasAlphaTest && stage.image)
+              {
+                image = stage.image;
+              }
+            }
+          }
+        }
+      }
+    }));
+    REQUIRE(image);
+    session->setUploadCapForTesting(0);
+    auto dropped = false;
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      if (const auto id = access.images.find(*image))
+      {
+        access.images.dropTexture(*id, access.frameIndex);
+        dropped = true;
+      }
+      access.passes.setDrawLogForTesting(true);
+    }));
+    REQUIRE(dropped);
+    auto provisionalFrames = 0;
+    auto provisional = std::optional<ShadowFrame>{};
+    for (auto i = 0; i < 3; ++i)
+    {
+      auto frame =
+        settledShadowFrame(*session, camera, 1, true, {}, std::nullopt, 10000ms, false);
+      REQUIRE(frame);
+      if (frame->stats.tilesProvisional > 0)
+      {
+        ++provisionalFrames;
+        // the grate's tile alone, the light's record flagged, the frame not settled
+        CHECK(frame->stats.tilesProvisional == 1u);
+        CHECK(frame->stats.shadowsPending);
+        CHECK_FALSE(frame->converged);
+        REQUIRE(frame->records.size() == 1u);
+        CHECK(frame->records[0].provisional);
+        provisional = std::move(frame);
+      }
+    }
+    CHECK(provisionalFrames == 3);
+    REQUIRE(provisional);
+    const auto stand = grateTileOf(*provisional, provisional->records[0]);
+    std::cout << fmt::format(
+      "LP3.4 (n) provisional: {} frames with the tile provisional, the grate drawn with "
+      "its slot's stand-in: {} bars, {} holes (complete: {} and {})\n",
+      provisionalFrames,
+      stand.bars,
+      stand.holes,
+      before.bars,
+      before.holes);
+    saveAtlasPng(provisional->atlas, "lp34_n_provisional");
+
+    // uploads again: the slot complete, the tile drawn once more and settled
+    session->setUploadCapForTesting(UploadBytesPerFrame);
+    clearLog();
+    const auto settled = settledShadowFrame(*session, camera, 1, true);
+    REQUIRE(settled);
+    CHECK(settled->converged);
+    CHECK(settled->stats.tilesProvisional == 0u);
+    REQUIRE(settled->records.size() == 1u);
+    CHECK_FALSE(settled->records[0].provisional);
+    const auto after = grateTileOf(*settled, settled->records[0]);
+    CHECK(after.texels == before.texels);
+    const auto grateClears = sideClearsOf(settled->drawLog, light, before.side);
+    auto sideClears = std::vector<std::size_t>{};
+    for (auto side = 0; side < 6; ++side)
+    {
+      sideClears.push_back(sideClearsOf(settled->drawLog, light, side));
+      CHECK(sideClears.back() <= 1u);
+    }
+    CHECK(grateClears == 1u);
+    // then nothing: every tile cached
+    clearLog();
+    const auto still = settledShadowFrame(*session, camera, 1, true);
+    REQUIRE(still);
+    CHECK(still->stats.tilesDrawn == 0u);
+    CHECK(still->stats.tilesProvisional == 0u);
+    CHECK(tileClearsOf(still->drawLog, light) == 0u);
+    std::cout << fmt::format(
+      "LP3.4 (n) complete again: the grate's tile (side {}) drawn {} time(s), the six "
+      "sides' clears {}, texels as before {}; the next settled frame drew {} tiles\n",
+      before.side,
+      grateClears,
+      fmt::join(sideClears, " "),
+      after.texels == before.texels,
+      still->stats.tilesDrawn);
+    saveAtlasPng(settled->atlas, "lp34_n_complete");
+  }
+
+  std::cout << fmt::format(
+    "LP3.4 perforated shadows on a GPU: {:.1f} s\n",
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+  teardown(*session, std::nullopt);
+  messages.print("LP3.4 perforated shadows, validation");
   CHECK(messages.errors == 0);
   CHECK(messages.warnings == 0);
 }

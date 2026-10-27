@@ -172,12 +172,12 @@ std::string lp7Fields(const FrameLogRow& row)
 }
 
 // LP3.1's columns (D157): pass 6's counts and times, set 11's writes, LP3.2's per-list
-// shadow-atlas interaction draws, and LP3.0's caster requests; empty in a start or stop
-// row
+// shadow-atlas interaction draws, LP3.0's caster requests, and LP3.4's perforated draws;
+// empty in a start or stop row
 std::string shadowFields(const FrameLogRow& row)
 {
   return fmt::format(
-    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
     optionalCount(row.shadowDraws),
     optionalCount(row.tilesDrawn),
     optionalCount(row.tilesCleared),
@@ -201,7 +201,8 @@ std::string shadowFields(const FrameLogRow& row)
     optionalCount(row.casterPairsPending),
     optionalCount(row.casters),
     optionalField(row.casterMs, "{:.3f}"),
-    optionalCount(row.lightTriangleEntries));
+    optionalCount(row.lightTriangleEntries),
+    optionalCount(row.perforatedDraws));
 }
 
 std::string_view eventName(const FrameLogEvent event)
@@ -239,7 +240,7 @@ std::string_view frameLogHeader()
          "unplaced,perforated_skipped,atlas_bytes_written,gpu_shadow_ms,shadow_cpu_ms,"
          "set11_writes,sm_draws_local,sm_draws_global,sm_draws_translucent,caster_"
          "lights,caster_pairs,caster_pairs_resident,caster_pairs_pending,casters,caster_"
-         "ms,light_triangle_entries\n";
+         "ms,light_triangle_entries,perforated_draws\n";
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)
@@ -251,10 +252,10 @@ std::string formatFrameLogRow(const FrameLogRow& row)
   if (row.event != FrameLogEvent::Frame)
   {
     // the frame's columns empty (gpu_prepass_ms ... gpu_fog_ms), then proc_bytes, then
-    // LP7's twelve counts, LP3.1's twenty-one and LP3.2's three empty
+    // LP7's twelve counts, LP3.1's twenty-one, LP3.2's three and LP3.4's one empty
     return fmt::format(
       "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,{},,,,,,,,,,,,"
-      ",,,,,,,,,,,,,,,,,,,,,,,,\n",
+      ",,,,,,,,,,,,,,,,,,,,,,,,,\n",
       row.session,
       eventName(row.event),
       vram,

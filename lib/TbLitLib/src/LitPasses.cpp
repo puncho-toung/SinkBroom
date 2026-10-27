@@ -171,6 +171,16 @@ PassDesc interactionPassDesc()
   return pass;
 }
 
+// LP3.4 (D156, D88): a slot whose texture is complete, or final: Resident, Replacing (its
+// complete texture bound while the new one is written, LPF.1) and Default (the service
+// has no image: its stand-in is final, as D88's Missing); Pending and Loading are not
+bool slotComplete(const ImageSlots::Slot& slot)
+{
+  return slot.state == ImageSlots::State::Resident
+         || slot.state == ImageSlots::State::Replacing
+         || slot.state == ImageSlots::State::Default;
+}
+
 } // namespace
 
 LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
@@ -734,112 +744,12 @@ bool LitPasses::genericDepth(Frame& frame, const std::vector<const LitSurface*>&
     setSpace(frame, surface->space);
     for (const auto& prepassDraw : draws)
     {
-      if (prepassDraw.color)
+      const auto binding = bindDepthStageDraw(frame, *surface, prepassDraw);
+      if (!binding.drawable)
       {
-        // GL_Color
-        m_parms.set(RenderParm::Color, *prepassDraw.color);
+        continue;
       }
-      if (prepassDraw.alphaTest)
-      {
-        m_parms.set(RenderParm::AlphaTest, *prepassDraw.alphaTest);
-      }
-
-      auto program = EngineBuiltinDepth;
-      switch (prepassDraw.program)
-      {
-      case PrepassProgram::TextureColor:
-      case PrepassProgram::Environment:
-      case PrepassProgram::BumpyEnvironment:
-      case PrepassProgram::SkyBox:
-      case PrepassProgram::WobbleSky: {
-        // :832-850: BindShader_TextureVertexColor, SVC_IGNORE, unit 0 the stage's image;
-        // LP5.2b (C48, SC528): PrepareStageTexturing then replaces the program for the
-        // cube and sky texgens (ALPHA_TEST stays written and unread: the key names the
-        // replacing program, which never clips), so their stage writes the whole
-        // surface's depth; LOCALVIEWORIGIN and MODELMATRIX are what the frame's
-        // ZeroUniforms left (0: no space set them before the prepass), as the engine's
-        program = EngineBuiltinTextureVertexColor;
-        const auto vertexColor = engineVertexColorParms(em::VertexColorIgnore);
-        m_parms.set(RenderParm::VertexColorModulate, vertexColor[0]);
-        m_parms.set(RenderParm::VertexColorAdd, vertexColor[1]);
-        // bind the texture: unit 0 is the stage's image
-        const auto& stage = surface->material->stages[std::size_t(prepassDraw.stage)];
-        if (prepassDraw.program == PrepassProgram::TextureColor)
-        {
-          if (!stage.image)
-          {
-            continue;
-          }
-          m_units[0] = *stage.image;
-        }
-        else
-        {
-          program =
-            prepassDraw.program == PrepassProgram::Environment ? EngineBuiltinEnvironment
-            : prepassDraw.program == PrepassProgram::BumpyEnvironment
-              ? EngineBuiltinBumpyEnvironment
-            : prepassDraw.program == PrepassProgram::SkyBox ? EngineBuiltinSkyBox
-                                                            : EngineBuiltinWobbleSky;
-          // the cube by its slot's state (the zero cube while not written:
-          // M-STAGE-DIFF-04); the frame unconverged until it is
-          auto& images = *frame.inputs->images;
-          const auto [cube, pendingCube] = cubeImage(images, stage.image);
-          m_units[0] = cube;
-          if (pendingCube)
-          {
-            m_stats.unconverged = true;
-            m_stats.retrigger = true;
-          }
-          if (prepassDraw.program == PrepassProgram::BumpyEnvironment)
-          {
-            // :366-368: the bump stage's image raw at unit 1 (_flat for a Default one,
-            // M-STAGE-DIFF-06)
-            const auto& bump =
-              surface->material->stages[std::size_t(prepassDraw.bumpStage)];
-            m_units[1] = bumpImage(images, bump.image);
-            if (!m_units[1])
-            {
-              ++m_stats.skippedDraws;
-              m_stats.unconverged = true;
-              m_stats.retrigger = true;
-              continue;
-            }
-          }
-          if (prepassDraw.program == PrepassProgram::WobbleSky)
-          {
-            m_parms.set(RenderParm::WobbleSkyX, prepassDraw.wobbleSky[0]);
-            m_parms.set(RenderParm::WobbleSkyY, prepassDraw.wobbleSky[1]);
-            m_parms.set(RenderParm::WobbleSkyZ, prepassDraw.wobbleSky[2]);
-          }
-        }
-        // PrepareStageTexturing: the texture matrix and TEXGEN_0_ENABLED
-        m_parms.set(RenderParm::TextureMatrixS, prepassDraw.textureMatrix[0]);
-        m_parms.set(RenderParm::TextureMatrixT, prepassDraw.textureMatrix[1]);
-        if (prepassDraw.screenTexgen)
-        {
-          const auto& space = m_lists.spaces[surface->space];
-          const auto mat =
-            engineGlMatrixMultiply(space.modelViewMatrix, frame.view.projectionMatrix);
-          m_parms.set(
-            RenderParm::TexGen0S,
-            Vec4{mat[0 * 4 + 0], mat[1 * 4 + 0], mat[2 * 4 + 0], mat[3 * 4 + 0]});
-          m_parms.set(
-            RenderParm::TexGen0T,
-            Vec4{mat[0 * 4 + 1], mat[1 * 4 + 1], mat[2 * 4 + 1], mat[3 * 4 + 1]});
-          m_parms.set(
-            RenderParm::TexGen0Q,
-            Vec4{mat[0 * 4 + 3], mat[1 * 4 + 3], mat[2 * 4 + 3], mat[3 * 4 + 3]});
-        }
-        m_parms.set(RenderParm::TexGen0Enabled, prepassDraw.texGenEnabled);
-        break;
-      }
-      case PrepassProgram::Color:
-        program = EngineBuiltinColor;
-        break;
-      case PrepassProgram::Depth:
-        program = EngineBuiltinDepth;
-        break;
-      }
+      const auto program = binding.program;
 
       const auto outcome = draw(
         frame,
@@ -872,6 +782,131 @@ bool LitPasses::genericDepth(Frame& frame, const std::vector<const LitSurface*>&
 
   m_parms.set(RenderParm::AlphaTest, ZeroVec4);
   return true;
+}
+
+LitPasses::DepthStageBinding LitPasses::bindDepthStageDraw(
+  Frame& frame, const LitSurface& surface, const PrepassDraw& prepassDraw)
+{
+  auto binding = DepthStageBinding{};
+  if (prepassDraw.color)
+  {
+    // GL_Color
+    m_parms.set(RenderParm::Color, *prepassDraw.color);
+  }
+  if (prepassDraw.alphaTest)
+  {
+    m_parms.set(RenderParm::AlphaTest, *prepassDraw.alphaTest);
+  }
+
+  binding.program = EngineBuiltinDepth;
+  switch (prepassDraw.program)
+  {
+  case PrepassProgram::TextureColor:
+  case PrepassProgram::Environment:
+  case PrepassProgram::BumpyEnvironment:
+  case PrepassProgram::SkyBox:
+  case PrepassProgram::WobbleSky: {
+    // :832-850 (the perforated shadow pass's :3322-3352): BindShader_TextureVertexColor,
+    // SVC_IGNORE, unit 0 the stage's image; LP5.2b (C48, SC528): PrepareStageTexturing
+    // then replaces the program for the cube and sky texgens (ALPHA_TEST stays written
+    // and unread: the key names the replacing program, which never clips), so their stage
+    // writes the whole surface's depth; LOCALVIEWORIGIN and MODELMATRIX are what the
+    // passes before left (in the prepass the frame's ZeroUniforms: no space set them
+    // yet), as the engine's
+    binding.program = EngineBuiltinTextureVertexColor;
+    const auto vertexColor = engineVertexColorParms(em::VertexColorIgnore);
+    m_parms.set(RenderParm::VertexColorModulate, vertexColor[0]);
+    m_parms.set(RenderParm::VertexColorAdd, vertexColor[1]);
+    // bind the texture: unit 0 is the stage's image
+    const auto& stage = surface.material->stages[std::size_t(prepassDraw.stage)];
+    if (prepassDraw.program == PrepassProgram::TextureColor)
+    {
+      if (!stage.image)
+      {
+        binding.drawable = false;
+        return binding;
+      }
+      m_units[0] = *stage.image;
+      // LP3.4 (D156): what the slot binds while it is not complete (its intrinsic, or the
+      // levels written so far): drawn with it, a shadow tile provisional
+      if (const auto* images = frame.inputs->images)
+      {
+        const auto id = images->find(*stage.image);
+        const auto* slot = id ? images->slot(*id) : nullptr;
+        binding.pending = !slot || !slotComplete(*slot);
+      }
+    }
+    else
+    {
+      binding.program =
+        prepassDraw.program == PrepassProgram::Environment ? EngineBuiltinEnvironment
+        : prepassDraw.program == PrepassProgram::BumpyEnvironment
+          ? EngineBuiltinBumpyEnvironment
+        : prepassDraw.program == PrepassProgram::SkyBox ? EngineBuiltinSkyBox
+                                                        : EngineBuiltinWobbleSky;
+      // the cube by its slot's state (the zero cube while not written: M-STAGE-DIFF-04);
+      // the frame unconverged until it is
+      auto& images = *frame.inputs->images;
+      const auto [cube, pendingCube] = cubeImage(images, stage.image);
+      m_units[0] = cube;
+      if (pendingCube)
+      {
+        m_stats.unconverged = true;
+        m_stats.retrigger = true;
+        binding.pending = true;
+      }
+      if (prepassDraw.program == PrepassProgram::BumpyEnvironment)
+      {
+        // :366-368: the bump stage's image raw at unit 1 (_flat for a Default one,
+        // M-STAGE-DIFF-06)
+        const auto& bump = surface.material->stages[std::size_t(prepassDraw.bumpStage)];
+        m_units[1] = bumpImage(images, bump.image);
+        if (!m_units[1])
+        {
+          ++m_stats.skippedDraws;
+          m_stats.unconverged = true;
+          m_stats.retrigger = true;
+          binding.drawable = false;
+          binding.retry = true;
+          return binding;
+        }
+      }
+      if (prepassDraw.program == PrepassProgram::WobbleSky)
+      {
+        m_parms.set(RenderParm::WobbleSkyX, prepassDraw.wobbleSky[0]);
+        m_parms.set(RenderParm::WobbleSkyY, prepassDraw.wobbleSky[1]);
+        m_parms.set(RenderParm::WobbleSkyZ, prepassDraw.wobbleSky[2]);
+      }
+    }
+    // PrepareStageTexturing: the texture matrix and TEXGEN_0_ENABLED
+    m_parms.set(RenderParm::TextureMatrixS, prepassDraw.textureMatrix[0]);
+    m_parms.set(RenderParm::TextureMatrixT, prepassDraw.textureMatrix[1]);
+    if (prepassDraw.screenTexgen)
+    {
+      const auto& space = m_lists.spaces[surface.space];
+      const auto mat =
+        engineGlMatrixMultiply(space.modelViewMatrix, frame.view.projectionMatrix);
+      m_parms.set(
+        RenderParm::TexGen0S,
+        Vec4{mat[0 * 4 + 0], mat[1 * 4 + 0], mat[2 * 4 + 0], mat[3 * 4 + 0]});
+      m_parms.set(
+        RenderParm::TexGen0T,
+        Vec4{mat[0 * 4 + 1], mat[1 * 4 + 1], mat[2 * 4 + 1], mat[3 * 4 + 1]});
+      m_parms.set(
+        RenderParm::TexGen0Q,
+        Vec4{mat[0 * 4 + 3], mat[1 * 4 + 3], mat[2 * 4 + 3], mat[3 * 4 + 3]});
+    }
+    m_parms.set(RenderParm::TexGen0Enabled, prepassDraw.texGenEnabled);
+    break;
+  }
+  case PrepassProgram::Color:
+    binding.program = EngineBuiltinColor;
+    break;
+  case PrepassProgram::Depth:
+    binding.program = EngineBuiltinDepth;
+    break;
+  }
+  return binding;
 }
 
 std::uint64_t LitPasses::writeBudget() const
@@ -1815,6 +1850,57 @@ void LitPasses::recordAmbient(Frame& frame)
 namespace
 {
 
+/**
+ * LP3.4 (D155): a perforated caster's alpha-tested stage that pass 6 cannot draw (as the
+ * generic depth path, bindDepthStageDraw): one on, with an alpha above 0, that is a
+ * TG_REFLECT_CUBE2 stage (M-STAGE-DIFF-05) or a texture_color stage without an image (a
+ * dynamic or cinematic image's, K25), which enginePerforatedShadowDraws tries and the
+ * draw leaves out
+ */
+bool perforatedStageLeftOut(
+  const MaterialEntry& material, const std::span<const float> registers)
+{
+  if (material.coverage != em::CoveragePerforated)
+  {
+    return false;
+  }
+  for (const auto& stage : material.stages)
+  {
+    if (
+      !stage.hasAlphaTest || engineRegister(registers, stage.conditionRegister) == 0.0f
+      || engineRegister(registers, stage.colorRegisters[3]) <= 0.0f)
+    {
+      continue;
+    }
+    if (stage.texgen == em::TexgenReflectCube2)
+    {
+      return true;
+    }
+    const auto cube = stage.texgen == em::TexgenReflectCube
+                      || stage.texgen == em::TexgenSkyboxCube
+                      || stage.texgen == em::TexgenWobbleskyCube;
+    if (!cube && !stage.image)
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+// LP3.4 (C61, D156): the term of key.perforated of a perforated caster's stage image: its
+// slot's id, completeness and version (none: a slot not made yet, not complete)
+std::uint64_t perforatedImageTerm(const ImageSlots* images, const MaterialImageKey& key)
+{
+  const auto id = images ? images->find(key) : std::nullopt;
+  const auto* slot = id ? images->slot(*id) : nullptr;
+  if (!slot)
+  {
+    return shadowPerforatedImageTerm(~std::uint64_t{0}, false, 0);
+  }
+  return shadowPerforatedImageTerm(
+    std::uint64_t(*id), slotComplete(*slot), slot->version);
+}
+
 // LP3.1 (C59): the atlas's format and its framebuffer's (FBN:136-138: depth only)
 constexpr auto AtlasFormat = nvrhi::Format::D32;
 constexpr auto AtlasFormats = FramebufferFormats{nvrhi::Format::UNKNOWN, AtlasFormat};
@@ -1924,6 +2010,7 @@ void LitPasses::recordShadowAtlas(Frame& frame)
   }
 
   // loop 1 (:3653-3716): the sides' sizes in viewLights order
+  auto castersPending = std::vector<bool>{};
   for (std::size_t i = 0; i < m_lists.lights.size(); ++i)
   {
     const auto& light = m_lists.lights[i];
@@ -1957,6 +2044,43 @@ void LitPasses::recordShadowAtlas(Frame& frame)
     record.key.casterCount = light.casterCount;
     record.key.cvars = shadowCvarsOf(EngineFrame);
     record.key.generation = m_bakeGeneration * 2 + (m_lists.flowed ? 1 : 0);
+    // LP3.3 (C61): a caster whose light triangles are not known yet (it is drawn whole:
+    // its tiles are drawn again once they are); LP3.4 (C61, P3.6, D156): the perforated
+    // casters' part of the key, the frontend's sum over their registers and revisions and
+    // each alpha-tested stage image's completeness, and the perforated casters whose
+    // stage pass 6 cannot draw
+    auto pending = false;
+    auto perforatedImages = std::uint64_t{0};
+    for (const auto& caster : light.casters)
+    {
+      if (
+        caster.lightTriangles
+        && caster.lightTriangles->state == LightTriangles::State::Pending)
+      {
+        pending = true;
+      }
+      if (
+        !caster.chunk || caster.chunk->castClass != CastClass::Perforated
+        || !caster.material)
+      {
+        continue;
+      }
+      if (
+        caster.registers
+        && perforatedStageLeftOut(*caster.material, caster.registers->registers))
+      {
+        ++m_stats.perforatedCastersSkipped;
+      }
+      for (const auto& stage : caster.material->stages)
+      {
+        if (stage.hasAlphaTest && stage.image)
+        {
+          perforatedImages += perforatedImageTerm(frame.inputs->images, *stage.image);
+        }
+      }
+    }
+    record.key.perforated = light.perforatedHash + perforatedImages;
+    castersPending.push_back(pending);
     const auto [first, stop] = shadowSides(record.type);
     record.sides = stop - first;
     m_shadowRecordOf[i] = int(m_shadowRecords.size());
@@ -2275,27 +2399,6 @@ void LitPasses::recordShadowAtlas(Frame& frame)
     vacatedRects += parts.empty() ? 0 : 1;
     vacated.insert(vacated.end(), parts.begin(), parts.end());
   }
-  // the perforated casters a light that takes tiles leaves out until LP3.4 (D155);
-  // LP3.3 (C61): the lights with a caster whose light triangles are not known yet (it is
-  // drawn whole: its tiles are drawn again once they are)
-  auto castersPending = std::vector<bool>(m_shadowRecords.size(), false);
-  for (std::size_t r = 0; r < m_shadowRecords.size(); ++r)
-  {
-    for (const auto& caster : m_lists.lights[m_shadowRecords[r].index].casters)
-    {
-      if (caster.chunk && caster.chunk->castClass == CastClass::Perforated)
-      {
-        ++m_stats.perforatedCastersSkipped;
-      }
-      if (
-        caster.lightTriangles
-        && caster.lightTriangles->state == LightTriangles::State::Pending)
-      {
-        castersPending[r] = true;
-      }
-    }
-  }
-
   // the lights placed and not, the latter by name (D157), at every way out; LP3.3 (C61,
   // D146): the frame's records sample their kept tiles' matrices, and the tiles the
   // frame's interactions sample are counted with what each was last drawn with
@@ -2440,9 +2543,18 @@ void LitPasses::recordShadowAtlas(Frame& frame)
       disabled = true;
       break;
     }
-    // LP3.3 (C61): the tile as drawn, against the record's key
+    // LP3.3 (C61): the tile as drawn, against the record's key; LP3.4 (D156, K53): drawn
+    // with a perforated caster's image not complete or its registers pending, it is
+    // provisional: drawn again, counted (its own cause, ShadowTileRecord::provisional)
     auto& tile = m_shadowCache.record(record.light).tiles[slice];
-    tile.valid = cleared && drawn.complete && !castersPending[work.record];
+    tile.valid =
+      cleared && drawn.complete && !castersPending[work.record] && !drawn.provisional;
+    tile.provisional = drawn.provisional;
+    if (drawn.provisional)
+    {
+      ++m_stats.tilesProvisional;
+      record.provisional = true;
+    }
     tile.shadowV = work.matrices.shadowV;
     tile.shadowP = work.matrices.shadowP;
     tile.draws = drawn.draws;
@@ -2680,80 +2792,59 @@ bool LitPasses::shadowMapPass(
   // r_shadowMapOccluderFacing 2's TWOSIDED with GL_PolygonOffset(
   // r_shadowMapPolygonFactor, r_vkShadowMapPolygonOffset ) (the key's bias an int,
   // RBN:460, SC722); 0 FRONTSIDED and 1 BACKSIDED with the negated offsets as written
-  // (:3433-3449)
-  auto stateBits = gls::PolygonOffset;
-  auto slope = EngineFrame.shadowMapPolygonFactor;
-  auto bias = EngineFrame.vkShadowMapPolygonOffset;
-  switch (EngineFrame.shadowMapOccluderFacing)
-  {
-  case 0:
-    stateBits |= gls::CullFrontSided;
-    break;
-  case 1:
-    stateBits |= gls::CullBackSided;
-    slope = -slope;
-    bias = -bias;
-    break;
-  default:
-    stateBits |= gls::CullTwoSided;
-    break;
-  }
+  // (:3433-3449): enginePerforatedShadowOpening, which the perforated pass opens with too
+  const auto opening = enginePerforatedShadowOpening();
+  const auto stateBits = opening.state;
+  const auto slope = opening.slopeBias;
+  const auto bias = opening.depthBias;
   const auto& light = m_lists.lights[record.index];
   m_logLight = record.light;
-  m_currentSpace.reset();
-  for (const auto& caster : light.casters)
-  {
-    if (!caster.chunk || surfaceIndexCount(caster) == 0)
-    {
-      // a job may have created an empty shadow geometry
-      continue;
-    }
-    // translucent surfaces don't put anything in the depth buffer (:3506-3509, P3.17);
-    // perforated ones go through ShadowMapPassPerforated, LP3.4's (D155): left out, and
-    // counted
-    if (caster.chunk->castClass != CastClass::Opaque)
-    {
-      continue;
-    }
-    // :3519-3555: model -> world, world -> light, then the clip MVP; a parallel light's
-    // and a point light's clipMVP, a spot light's windowToClip · clipMVP
+  // :3519-3555 (:3230-3270 the perforated pass's): model -> world, world -> light, then
+  // the clip MVP; a parallel light's and a point light's clipMVP, a spot light's
+  // windowToClip · clipMVP
+  const auto casterMvp = [&](const LitSurface& caster) {
     const auto& space = m_lists.spaces[caster.space];
     const auto modelRenderMatrix = engineMatrixTranspose(space.modelMatrix);
     const auto modelToLight = engineMatrixMultiply(matrices.lightView, modelRenderMatrix);
     const auto clipMvp = engineMatrixMultiply(matrices.lightProjection, modelToLight);
-    const auto mvp = record.type == ShadowLightType::Spot
-                       ? engineMatrixMultiply(engineWindowSpaceToClipSpace(), clipMvp)
-                       : clipMvp;
-    // D149 (P3.19): not inside the side's true frustum, so it adds no fragment
-    if (engineShadowCasterCulled(mvp, caster.chunk->bounds))
-    {
-      ++m_stats.shadowCastersCulled;
-      continue;
-    }
-    setMvp(m_parms, mvp);
-    // :3559-3572: BindShader_Depth (never the skinned form: no skinned model, P3.24e);
-    // DrawElementsWithCounters on the caster's light triangles (a Pending one whole)
+    return record.type == ShadowLightType::Spot
+             ? engineMatrixMultiply(engineWindowSpaceToClipSpace(), clipMvp)
+             : clipMvp;
+  };
+  // DrawElementsWithCounters on the caster's light triangles (a Pending one whole), the
+  // draw counted and logged; false when the pass is disabled
+  const auto drawCaster = [&](
+                            const LitSurface& caster,
+                            const int program,
+                            const std::uint64_t state,
+                            const float casterSlope,
+                            const float casterBias,
+                            const bool perforated) {
     const auto outcome = draw(
       frame,
-      EngineBuiltinDepth,
+      program,
       *caster.chunk,
-      stateBits,
-      slope,
-      bias,
+      state,
+      casterSlope,
+      casterBias,
       caster.lightTriangles.get());
     switch (outcome)
     {
     case DrawOutcome::Drawn:
       ++m_stats.shadowDraws;
       ++drawn.draws;
+      if (perforated)
+      {
+        ++m_stats.perforatedShadowDraws;
+      }
       if (m_logDraws)
       {
         auto logged = LitDrawRecord{};
         logged.pass = LitDrawRecord::Pass::Shadow;
         logged.light = record.light;
         logged.chunk = caster.chunk->key;
-        logged.program = EngineBuiltinDepth;
-        logged.state = stateBits;
+        logged.program = program;
+        logged.state = state;
         logged.scissor = m_scissor;
         logged.side = side;
         m_drawLog.push_back(std::move(logged));
@@ -2768,6 +2859,105 @@ bool LitPasses::shadowMapPass(
     case DrawOutcome::Skipped:
       drawn.complete = false;
       break;
+    }
+    return true;
+  };
+
+  m_currentSpace.reset();
+  for (const auto& caster : light.casters)
+  {
+    if (!caster.chunk || surfaceIndexCount(caster) == 0)
+    {
+      // a job may have created an empty shadow geometry
+      continue;
+    }
+    // translucent surfaces don't put anything in the depth buffer (:3506-3509, P3.17);
+    // perforated ones are saved for ShadowMapPassPerforated, below (:3511-3517)
+    if (caster.chunk->castClass != CastClass::Opaque)
+    {
+      continue;
+    }
+    const auto mvp = casterMvp(caster);
+    // D149 (P3.19): not inside the side's true frustum, so it adds no fragment
+    if (engineShadowCasterCulled(mvp, caster.chunk->bounds))
+    {
+      ++m_stats.shadowCastersCulled;
+      continue;
+    }
+    setMvp(m_parms, mvp);
+    // :3559-3572: BindShader_Depth (never the skinned form: no skinned model, P3.24e);
+    // draw it solid
+    if (!drawCaster(caster, EngineBuiltinDepth, stateBits, slope, bias, false))
+    {
+      return false;
+    }
+  }
+
+  // LP3.4 (D155, K52): draw all perforated surfaces with the general code path (:3576-
+  // 3581): ShadowMapPassPerforated (:3171-3388) over the light's Perforated casters in
+  // the preview's chunk and instance order, each with the registers the gathering
+  // evaluated at view time, the side's call carrying its GL state from surface to surface
+  // from its opening on (enginePerforatedShadowDraws: the stage loop, the !didDraw
+  // fallback)
+  auto carried = opening;
+  m_currentSpace.reset();
+  for (const auto& caster : light.casters)
+  {
+    if (
+      !caster.chunk || surfaceIndexCount(caster) == 0
+      || caster.chunk->castClass != CastClass::Perforated)
+    {
+      continue;
+    }
+    const auto mvp = casterMvp(caster);
+    // D149: culled as the opaque casters are
+    if (engineShadowCasterCulled(mvp, caster.chunk->bounds))
+    {
+      ++m_stats.shadowCastersCulled;
+      continue;
+    }
+    setMvp(m_parms, mvp);
+    auto draws = std::vector<PrepassDraw>{};
+    if (caster.material && caster.registers)
+    {
+      draws = enginePerforatedShadowDraws(
+        *caster.material, caster.registers->registers, carried);
+    }
+    else
+    {
+      // D77: its material or registers pending: drawn solid as an opaque caster until
+      // they arrive (the tile provisional, K53)
+      auto solid = PrepassDraw{};
+      solid.state = stateBits;
+      solid.slopeBias = slope;
+      solid.depthBias = bias;
+      draws.push_back(solid);
+    }
+    // registers pending or not current (D52): provisional
+    drawn.provisional = drawn.provisional || caster.provisional;
+    for (const auto& perforatedDraw : draws)
+    {
+      // GL_Color, ALPHA_TEST, texture_color's unit 0 and PrepareStageTexturing (a cube or
+      // sky texgen's replacing program writing the whole surface, LP5.2b), as the generic
+      // depth path binds them; an image not complete is drawn with what its slot binds
+      // and makes the tile provisional (D156, D88)
+      const auto binding = bindDepthStageDraw(frame, caster, perforatedDraw);
+      if (!binding.drawable)
+      {
+        drawn.complete = drawn.complete && !binding.retry;
+        continue;
+      }
+      drawn.provisional = drawn.provisional || binding.pending;
+      if (!drawCaster(
+            caster,
+            binding.program,
+            perforatedDraw.state,
+            perforatedDraw.slopeBias,
+            perforatedDraw.depthBias,
+            true))
+      {
+        return false;
+      }
     }
   }
   return true;

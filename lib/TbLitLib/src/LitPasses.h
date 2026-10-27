@@ -323,7 +323,9 @@ struct LitFrameStats
   // the tiles cleared and drawn (each its far-plane clear first) and the rects of last
   // frame's tiles this frame's do not cover, cleared (vacated, P3.3); LP3.3 (C61, D146):
   // the tiles left as they were (cached: their light's record key, rect and matrices
-  // unchanged), and those copied to their new rect (relocated); provisional is LP3.4's, 0
+  // unchanged), and those copied to their new rect (relocated); LP3.4 (D156, K53): the
+  // tiles drawn provisional (a perforated caster's stage image not complete, or its
+  // material or registers pending: ShadowTileRecord::provisional, drawn again)
   std::size_t tilesDrawn = 0;
   std::size_t tilesVacated = 0;
   std::size_t tilesRelocated = 0;
@@ -347,11 +349,14 @@ struct LitFrameStats
   std::size_t cascadesStale = 0;
   bool shadowLayoutDrift = false;
   // the casters' depth draws into the tiles, the (caster, side) pairs the per-side cull
-  // left out (D149), and the perforated casters of the lights that take tiles, not drawn
-  // until LP3.4 (D155: H04 and H08 are reported until then)
+  // left out (D149), and the perforated casters of the lights that take tiles whose
+  // stage pass 6 cannot draw (LP3.4, D155: an alpha-tested texture_color stage without an
+  // image, a TG_REFLECT_CUBE2 one; each light's once per frame); LP3.4: the perforated
+  // casters' draws among shadowDraws (ShadowMapPassPerforated's)
   std::size_t shadowDraws = 0;
   std::size_t shadowCastersCulled = 0;
   std::size_t perforatedCastersSkipped = 0;
+  std::size_t perforatedShadowDraws = 0;
   // the pass ran (its timer begun and ended), its CPU record time, and whether a failed
   // pipeline or the atlas's creation disabled it (every light then unplaced, D9)
   bool shadowAtlasTimed = false;
@@ -433,17 +438,22 @@ struct ShadowLightRecord
   std::array<std::array<int, 2>, 6> atlasOffsets = {};
   std::array<EngineMat4, 6> shadowV = {};
   std::array<EngineMat4, 6> shadowP = {};
+  // LP3.4 (D156, K53): a tile of the light drawn this frame is provisional
+  bool provisional = false;
 
   bool placed() const { return imageSize[0] != -1 && imageSize[1] != -1; }
 };
 
 // LP3.3 (C61): what a tile's draws made: the casters drawn, and whether every draw was
 // made (none skipped for a pending pipeline or dropped for the budget) and every caster's
-// light triangles were known (a Pending caster is drawn whole: the tile is drawn again)
+// light triangles were known (a Pending caster is drawn whole: the tile is drawn again);
+// LP3.4 (D156, K53): and whether a perforated caster was drawn with its stage image not
+// complete or its material or registers pending (the tile provisional)
 struct ShadowTileDraws
 {
   std::size_t draws = 0;
   bool complete = true;
+  bool provisional = false;
 };
 
 /**
@@ -825,6 +835,30 @@ private:
   void recordPrepass(Frame& frame);
   // FillDepthBufferGeneric over surfaces
   bool genericDepth(Frame& frame, const std::vector<const LitSurface*>& surfaces);
+  // LP3.4 (D155): what bindDepthStageDraw leaves for a draw
+  struct DepthStageBinding
+  {
+    int program = 0;
+    // false: not drawn (a texture_color stage without an image; retry: a bump image not
+    // written yet, the frame unconverged and the draw tried again)
+    bool drawable = true;
+    bool retry = false;
+    // the stage's image is not complete (its slot Pending or Loading: _default or the
+    // levels at hand bound; a cube not written: the zero cube)
+    bool pending = false;
+  };
+  /**
+   * LP3.4 (D155, D156): what a draw of the generic depth path (FillDepthBufferGeneric,
+   * RenderBackend.cpp:832-866) or of the perforated shadow pass (ShadowMapPassPerforated
+   * :3322-3352) binds for surface before it is drawn: GL_Color and ALPHA_TEST when the
+   * draw sets them, and for an alpha-tested stage's draw texture_color's (or LP5.2b's
+   * replacing program's) units, SVC_IGNORE's vertex colour parms, the texture matrix and
+   * the texgen (TG_SCREEN's planes from the space's modelViewMatrix and the view's
+   * projection, as the engine's PrepareStageTexturing reads them in both passes); the
+   * program to draw with. Render thread.
+   */
+  DepthStageBinding bindDepthStageDraw(
+    Frame& frame, const LitSurface& surface, const PrepassDraw& draw);
   void recordInteractions(Frame& frame);
   // LP4.2a (C34): AmbientPass( fillGbuffer false ) on the probe path; LP4.3 (C36): and
   // on the light-grid path for a surface with a grid area (RenderBackend.cpp:1196-1305)
@@ -875,8 +909,15 @@ private:
    * CULL_TWOSIDED with slope r_shadowMapPolygonFactor and int bias
    * r_vkShadowMapPolygonOffset, depth LessOrEqual, written, its MVP the side's raster
    * pair times the model matrix (spot: windowToClip first); TranslucentCaster nothing
-   * (:3506-3509); Perforated nothing until LP3.4; a caster outside the side's true
-   * frustum (engineShadowCasterCulled) is not drawn. False when the pass is disabled.
+   * (:3506-3509); a caster outside the side's true frustum (engineShadowCasterCulled) is
+   * not drawn. LP3.4 (D155, D156, K52, K53): then ShadowMapPassPerforated (:3171-3388),
+   * which the fast pass calls after its opaque surfaces (:3576-3581): the Perforated
+   * casters in the preview's chunk and instance order, each by
+   * enginePerforatedShadowDraws of the registers the gathering carried (the side's state
+   * carried from caster to caster from the opening on) through bindDepthStageDraw, culled
+   * as the opaque ones, each draw counted; a material or registers pending: drawn solid
+   * as an opaque caster; an image not complete or registers pending or not current make
+   * the tile provisional (drawn.provisional). False when the pass is disabled.
    */
   bool shadowMapPass(
     Frame& frame,

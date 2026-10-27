@@ -2078,6 +2078,8 @@ TEST_CASE("LitPasses: the shadow records' versions and caster hash (LP3.3, C61, 
     std::uint64_t hash = 0;
     std::size_t count = 0;
     std::uint64_t light = 0;
+    // LP3.4 (C61, P3.6): the perforated casters' sum
+    std::uint64_t perforated = 0;
   };
   const auto seen = [&](const FlowScene& s) {
     const auto lists = flowListsOf(*f, s, camera);
@@ -2088,11 +2090,16 @@ TEST_CASE("LitPasses: the shadow records' versions and caster hash (LP3.3, C61, 
     // the hash and count describe the casters the light keeps
     CHECK(light->casterCount == light->casters.size());
     return Seen{
-      light->casterHash, light->casterCount, shadowLightVersion(*light->record)};
+      light->casterHash,
+      light->casterCount,
+      shadowLightVersion(*light->record),
+      light->perforatedHash};
   };
   const auto base = seen(scene);
   CHECK(base.count == 2u);
   CHECK(base.hash != 0u);
+  // no perforated caster: nothing in the perforated sum
+  CHECK(base.perforated == 0u);
   // the same scene: the same versions (pure, whatever the order the casters come in)
   CHECK(seen(scene).hash == base.hash);
   CHECK(seen(scene).light == base.light);
@@ -2219,6 +2226,150 @@ TEST_CASE("LitPasses: the shadow records' versions and caster hash (LP3.3, C61, 
     }
     chunk.appearanceVersion += 1;
     CHECK(seen(dragged).hash == base.hash);
+  }
+
+  SECTION(
+    "LP3.4 (C61, P3.6, D160): a perforated caster's registers and material revision "
+    "move key.perforated; an opaque caster's appearance does not")
+  {
+    // a grate (the fixture's textures/lp1b/grate: perforated, alphaTest 0.5) of the box
+    // entity, inside the light's volume
+    auto perforated = scene;
+    addChunk(perforated, 1, Box, {-3, -3, -3}, {3, 3, 3}, "textures/lp1b/grate");
+    const auto grateKey = ChunkKey{1, Box, "textures/lp1b/grate", {0, 0, 0}, 0};
+    perforated.chunks.at(grateKey).castClass = CastClass::Perforated;
+    const auto withGrate = seen(perforated);
+    CHECK(withGrate.count == base.count + 1);
+    CHECK(withGrate.perforated != 0u);
+    // the caster carries the registers the gathering evaluated (D155: no evaluation per
+    // side), and they are current
+    {
+      const auto lists = flowListsOf(*f, perforated, camera);
+      const auto* light = viewLightOf(lists, 20);
+      REQUIRE(light);
+      const auto grate = std::ranges::find_if(light->casters, [](const LitSurface& c) {
+        return c.chunk->castClass == CastClass::Perforated;
+      });
+      REQUIRE(grate != light->casters.end());
+      CHECK(grate->registers != nullptr);
+      CHECK_FALSE(grate->provisional);
+      CHECK_FALSE(lists.pending);
+      // the opaque casters carry none (their registers reach no tile)
+      for (const auto& caster : light->casters)
+      {
+        if (caster.chunk->castClass == CastClass::Opaque)
+        {
+          CHECK(caster.registers == nullptr);
+        }
+      }
+    }
+
+    // a material re-parsed under its name: its entry (and revision) in the table
+    const auto reparsed = [&](const std::string& text) {
+      const auto result = f->decls->reparse("textures/lp1b/grate", text);
+      INFO(result.error);
+      REQUIRE(result.state == MaterialReparse::State::Parsed);
+      auto found = f->decls->lookup("textures/lp1b/grate");
+      REQUIRE(found);
+      auto entry = std::make_shared<MaterialEntry>(**found.value);
+      // the text's alpha-tested stage there (its coverage stage)
+      CHECK(
+        std::ranges::count_if(entry->stages, &MaterialStage::hasAlphaTest)
+        == std::ptrdiff_t{1});
+      f->table->materials = f->table->materials.set(
+        "textures/lp1b/grate",
+        std::make_shared<const MaterialSlot>(MaterialSlot{entry, {}}));
+      return std::shared_ptr<const MaterialEntry>{entry};
+    };
+    const auto before = f->table->find("textures/lp1b/grate")->entry;
+    REQUIRE(before);
+    // the registers of an entry, evaluated while it is the registry's (an entry made
+    // before a re-parse is refused afterwards)
+    const auto registersOf = [&](
+                               const MaterialEntry& material, const ShaderParms& parms) {
+      auto evaluated = f->decls->evaluate(material, parms, 0.0f);
+      REQUIRE(evaluated);
+      return *evaluated.value;
+    };
+    const auto parms = engineWorldShaderParms();
+    const auto half = registersOf(*before, parms);
+
+    // an alphaTest value: the re-parse moves the registers and the revision
+    const auto quarter = reparsed(
+      "{\n twoSided\n qer_editorimage textures/lp1b/grate.tga\n { blend diffusemap map "
+      "textures/lp1b/grate.tga alphaTest 0.25 }\n}\n");
+    CHECK(quarter->revision != before->revision);
+    const auto edited = seen(perforated);
+    CHECK(edited.perforated != withGrate.perforated);
+    // the caster hash does not see registers (its caster version: positions, class,
+    // flags, st and the material's name)
+    CHECK(edited.hash == withGrate.hash);
+    // the term, the register alone (the same revision) and the revision alone
+    {
+      const auto quarterRegisters = registersOf(*quarter, parms);
+      auto sameRevision = *quarter;
+      sameRevision.revision = before->revision;
+      const auto termOf = [&](
+                            const MaterialEntry& material, const EvaluatedRegisters& r) {
+        return shadowPerforatedTerm(grateKey, false, &material, &r);
+      };
+      CHECK(termOf(*before, half) == termOf(*before, half));
+      CHECK(termOf(sameRevision, quarterRegisters) != termOf(*before, half));
+      auto bumped = *before;
+      bumped.revision += 1;
+      CHECK(termOf(bumped, half) != termOf(*before, half));
+      // pending (no material or registers): a term of its own
+      CHECK(
+        shadowPerforatedTerm(grateKey, false, nullptr, nullptr) != termOf(*before, half));
+      // its id is in it
+      const auto otherKey = ChunkKey{1, World, "textures/lp1b/grate", {0, 0, 0}, 0};
+      CHECK(
+        shadowPerforatedTerm(otherKey, false, before.get(), &half)
+        != termOf(*before, half));
+    }
+
+    // a condition-feeding shaderParm: parm4 switches the stage on and off
+    reparsed(
+      "{\n twoSided\n qer_editorimage textures/lp1b/grate.tga\n { if parm4 blend "
+      "diffusemap "
+      "map textures/lp1b/grate.tga alphaTest 0.5 }\n}\n");
+    const auto off = seen(perforated);
+    auto switchedOn = perforated;
+    switchedOn.entities.at(Box).parms.shaderParms[4] = 1.0f;
+    const auto on = seen(switchedOn);
+    CHECK(on.perforated != off.perforated);
+    CHECK(on.hash == off.hash);
+
+    // an opaque caster's appearance (the world chunk's UV drag) moves neither; the
+    // perforated caster's _color, which none of its stages reads, moves nothing either
+    auto dragged = switchedOn;
+    auto& chunk = dragged.chunks.at(worldKey);
+    for (auto& vert : chunk.verts)
+    {
+      vert.st[0] = std::uint16_t(vert.st[0] + 64u);
+    }
+    chunk.appearanceVersion += 1;
+    const auto drag = seen(dragged);
+    CHECK(drag.hash == on.hash);
+    CHECK(drag.perforated == on.perforated);
+    auto coloured = switchedOn;
+    coloured.entities.at(Box).parms.shaderParms[0] = 0.25f;
+    const auto colour = seen(coloured);
+    CHECK(colour.hash == on.hash);
+    CHECK(colour.perforated == on.perforated);
+  }
+
+  SECTION("LP3.4 (C61, D156, K53): a stage image's term: its slot's completeness")
+  {
+    const auto complete = shadowPerforatedImageTerm(3, true, 5);
+    CHECK(complete == shadowPerforatedImageTerm(3, true, 5));
+    // another slot, a new version while complete (a reload's swap), not complete
+    CHECK(shadowPerforatedImageTerm(4, true, 5) != complete);
+    CHECK(shadowPerforatedImageTerm(3, true, 6) != complete);
+    CHECK(shadowPerforatedImageTerm(3, false, 5) != complete);
+    // a slot still loading: its versions (each level written) move nothing
+    CHECK(
+      shadowPerforatedImageTerm(3, false, 5) == shadowPerforatedImageTerm(3, false, 9));
   }
 
   SECTION("the shadow cvars by value, and the records' drop paths (A46, P3.26)")

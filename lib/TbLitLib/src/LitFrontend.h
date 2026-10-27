@@ -161,7 +161,8 @@ struct ViewLight
    * chunk order then instance order; each with its space (a shadow-only entity's too:
    * R_SetEntityDefViewEntity, FAL:694-698), its material and its light triangles (null:
    * all; Pending: not known yet). A TranslucentCaster counts and is never drawn (P3.17).
-   * Nothing draws them before LP3.1.
+   * Nothing draws them before LP3.1. LP3.4 (D155): a Perforated caster also carries its
+   * registers and provisional flag (perforatedHash below).
    */
   std::vector<LitSurface> casters;
   /**
@@ -173,6 +174,15 @@ struct ViewLight
    */
   std::uint64_t casterHash = 0;
   std::size_t casterCount = 0;
+  /**
+   * LP3.4 (C61, P3.6, D155): the sum of shadowPerforatedTerm (ShadowCache.h) over the
+   * light's Perforated casters, added in the same loop; each such caster carries the
+   * registers the gathering evaluated for it at view time (LitSurface::registers, its
+   * entity's shaderParms, once per build: no evaluation per side) and is provisional
+   * while its material or registers are pending or not current (D77, D52). 0 without one.
+   * Pass 6 adds its stage images' terms and keeps the sum as the record's key.perforated.
+   */
+  std::uint64_t perforatedHash = 0;
 };
 
 // LP5.3 (C45, C49): the kind of a light of this shader (ViewLightKind's rule). Pure.

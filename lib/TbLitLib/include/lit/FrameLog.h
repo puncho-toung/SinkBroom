@@ -185,10 +185,10 @@ struct FrameLogRow
   // pass 6's (LitFrameStats): the casters' depth draws; the tiles drawn (each cleared by
   // its far-plane quad first), the rects cleared because last run's tiles left them
   // (vacated, P3.3), and the tiles relocated, cached and provisional (LP3.3's and
-  // LP3.4's: 0 until then); the lights that took tiles, placed and unplaced by the atlas;
-  // the perforated casters not drawn until LP3.4; the atlas bytes the tiles cover (tiles
-  // × size² × 4); its GPU time and its CPU record time; set 11's writes (the shadow-atlas
-  // interactions' volatile constant buffer)
+  // LP3.4's); the lights that took tiles, placed and unplaced by the atlas; the
+  // perforated casters whose stage pass 6 cannot draw (LP3.4); the atlas bytes the tiles
+  // cover (tiles × size² × 4); its GPU time and its CPU record time; set 11's writes (the
+  // shadow-atlas interactions' volatile constant buffer)
   std::optional<std::uint64_t> shadowDraws;
   std::optional<std::uint64_t> tilesDrawn;
   std::optional<std::uint64_t> tilesCleared;
@@ -221,6 +221,9 @@ struct FrameLogRow
   std::optional<std::uint64_t> casters;
   std::optional<double> casterMs;
   std::optional<std::uint64_t> lightTriangleEntries;
+  // LP3.4 (D155): the perforated casters' draws among shadow_draws
+  // (LitFrameStats::perforatedShadowDraws), the last column
+  std::optional<std::uint64_t> perforatedDraws;
 };
 
 // the CSV header line, ending in a newline

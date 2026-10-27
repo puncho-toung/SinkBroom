@@ -1060,6 +1060,12 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
     bool resolved = false;
     std::optional<std::size_t> space;
     std::shared_ptr<const MaterialEntry> material;
+    // LP3.4 (D155, C61, P3.6): a Perforated candidate's registers at view time (its
+    // entity's shaderParms, as the surfaces' :712-723), whether they or its material are
+    // pending or not current, and its term of the lights' perforatedHash
+    std::shared_ptr<const EvaluatedRegisters> registers;
+    bool provisional = false;
+    std::uint64_t perforatedTerm = 0;
   };
   auto candidates = std::vector<CasterCandidate>{};
   if (anyCaster)
@@ -1138,9 +1144,37 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       {
         candidate.resolved = true;
         candidate.space = space(candidate.key->entity);
+        auto materialPending = false;
         if (candidate.space && inputs.material)
         {
-          candidate.material = inputs.material(candidate.key->material).entry;
+          const auto answer = inputs.material(candidate.key->material);
+          candidate.material = answer.entry;
+          materialPending = answer.pending;
+        }
+        if (candidate.space && candidate.chunk->castClass == CastClass::Perforated)
+        {
+          // LP3.4 (D155): the registers its stages draw by, evaluated once per build (the
+          // surfaces' rule, :712-723); pending ones keep the lists pending (D77): the
+          // table that answers them builds the lists again
+          if (candidate.material && inputs.registers)
+          {
+            const auto registers = inputs.registers(
+              candidate.key->entity,
+              *candidate.material,
+              lists.spaces[*candidate.space].shaderParms);
+            candidate.registers = registers.registers;
+            candidate.provisional = !registers.registers || !registers.current;
+          }
+          else
+          {
+            candidate.provisional = materialPending || !inputs.registers;
+          }
+          lists.pending = lists.pending || candidate.provisional;
+          candidate.perforatedTerm = shadowPerforatedTerm(
+            *candidate.key,
+            candidate.instance != nullptr,
+            candidate.material.get(),
+            candidate.registers.get());
         }
       }
       if (!candidate.space)
@@ -1196,6 +1230,14 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
         candidate.chunk->castClass,
         candidate.areaSurface);
       ++viewLight.casterCount;
+      // LP3.4 (C61, P3.6): a Perforated caster's registers ride on its entry, its term in
+      // the light's perforatedHash
+      if (candidate.chunk->castClass == CastClass::Perforated)
+      {
+        caster.registers = candidate.registers;
+        caster.provisional = candidate.provisional;
+        viewLight.perforatedHash += candidate.perforatedTerm;
+      }
       viewLight.casters.push_back(std::move(caster));
       ++lists.casters;
     }
