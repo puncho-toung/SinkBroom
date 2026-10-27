@@ -15462,10 +15462,10 @@
           "file": "neo/renderer/tr_frontend_addlights.cpp",
           "lines": [
             286,
-            389
+            469
           ],
           "anchor": "R_AddSingleLight, masked occlusion culling and the shadow LOD",
-          "sha256": "274887e149a2e1a799b6b1d0b2d40b0f2ef6ed5b2353f6684a426ddcbf73ca59"
+          "sha256": "369b4418f5edf8bbbd500a1902032d115e84fa24643dec86ec7b7747627e1ec8"
         },
         {
           "file": "neo/renderer/tr_frontend_addmodels.cpp",
@@ -15485,9 +15485,13 @@
         {
           "file": "lib/TbLitLib/src/ViewFlow.cpp",
           "symbol": "flowView (LP4.0; wired into buildFrontendLists in LP4.1)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineLight.cpp",
+          "symbol": "engineShadowLod (LP3.0)"
         }
       ],
-      "note": "LP2.2a (D67, K22, P2.26): what the frontend does not do yet. Closed for the LP4 items in LP4.1: the portal rects and the \"area not connected to the view\" cull, mirrored since LP4.0 (lit/ViewFlow.h flowView, M-FLOW-01 to M-FLOW-06), are wired into buildFrontendLists (C33: the scissor is the flow's rect intersected with the projected bounds, M-FRONT-01; the pairing through shared, connected areas, M-FRONT-02, M-FLOW-09), and K22's missing half is there. What remains: r_useMaskedOcclusionCulling's light and surface tests (lights and surfaces it would cull are drawn; their pixels fail DEPTHFUNC_EQUAL), material LODs, and the shadow LOD (K26, LP3) remain. The static interactions' light triangles, which P2.26 counted here (\"its triangles outside the volume add nothing\"), are mirrored since the LP2 fix round (DX.2, M-INTER-01): LP2.3 found the volume boundary's LIGHT_CLIP_EPSILON dropping whole faces the preview lit. U3.9 corrected (SC371, LP4.0): a light whose scissor comes out empty is skipped (LitFrontend.cpp), and so it is in the engine: R_AddSingleModel takes no contacted light whose scissor is empty (tr_frontend_addmodels.cpp:362-367), so it gets no interaction and the backend never draws it; the skip is the engine's, not a difference, and LP4.1's portal rects are what can make it empty"
+      "note": "LP2.2a (D67, K22, P2.26): what the frontend does not do yet. Closed for the LP4 items in LP4.1: the portal rects and the \"area not connected to the view\" cull, mirrored since LP4.0 (lit/ViewFlow.h flowView, M-FLOW-01 to M-FLOW-06), are wired into buildFrontendLists (C33: the scissor is the flow's rect intersected with the projected bounds, M-FRONT-01; the pairing through shared, connected areas, M-FRONT-02, M-FLOW-09), and K22's missing half is there. What remains: r_useMaskedOcclusionCulling's light and surface tests (lights and surfaces it would cull are drawn; their pixels fail DEPTHFUNC_EQUAL), and material LODs remain. LP3.0 (SC760): the engine range runs on to :469, the shadow LOD its anchor names, which is mirrored since LP3.0 (engineShadowLod on the light scissor's projected box, M-SHADOW-01; computed for every casting light, never after a MOC cull, which the preview does not make: K51). The static interactions' light triangles, which P2.26 counted here (\"its triangles outside the volume add nothing\"), are mirrored since the LP2 fix round (DX.2, M-INTER-01): LP2.3 found the volume boundary's LIGHT_CLIP_EPSILON dropping whole faces the preview lit. U3.9 corrected (SC371, LP4.0): a light whose scissor comes out empty is skipped (LitFrontend.cpp), and so it is in the engine: R_AddSingleModel takes no contacted light whose scissor is empty (tr_frontend_addmodels.cpp:362-367), so it gets no interaction and the backend never draws it; the skip is the engine's, not a difference, and LP4.1's portal rects are what can make it empty; LP3.0 (D148): such a light, and one left without a surface, still enters the light sort with its shrunk area (M-SHADOW-ORDER-01), and is skipped after it"
     },
     {
       "id": "M-FRONT-DIFF-03",
