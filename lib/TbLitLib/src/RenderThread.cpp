@@ -158,7 +158,7 @@ bool FrameConvergence::settled() const
          && !imagesPending && !provisionalChunks && !lutPending && !entityDefsPending
          && !modelsPending && !lightsProvisional && !geometryInFlight && !drawsOverflowed
          && !lightTrianglesPending && !probeImagesPending && !gridImagesPending
-         && !probesInFlight && !feedBehind;
+         && !probesInFlight && !feedBehind && !shadowsPending;
 }
 
 bool FrameConvergence::retriggers() const
@@ -339,6 +339,8 @@ void RenderThread::setCamera(const CameraState& camera)
     m_camera = camera;
     m_cameraSet = true;
     m_pacer.trigger();
+    // LP3.0 (D151): the still timer counts from the last move
+    m_pacer.cameraMoved(FrameClock::now());
   }
   m_wake.notify_all();
 }
@@ -640,6 +642,12 @@ bool RenderThread::lastFrameSettled() const
   return m_lastSettled;
 }
 
+std::uint64_t RenderThread::stillTimerFirings() const
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  return m_pacer.stillTimerFirings();
+}
+
 SessionStatus RenderThread::status() const
 {
   const auto lock = std::scoped_lock{m_statusMutex};
@@ -686,6 +694,8 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
   convergence.drawsOverflowed = lit.lightsOverflowed > 0 || lit.overflowedDraws > 0;
   // DX.2
   convergence.lightTrianglesPending = lit.lightTrianglesPending;
+  // LP3.0 (D151): the shadows' term, false until LP3.3
+  convergence.shadowsPending = lit.shadowsPending;
   // LP4.2a (D88)
   convergence.probeImagesPending = lit.probeImagesPending;
   // LP4.3 (D88)
@@ -1640,10 +1650,25 @@ void RenderThread::runLoop()
         // D77: an unconverged pass is a frame trigger
         m_pacer.trigger();
       }
+      // LP3.0 (D151, C62): whether a settle wants the still timer (LP3.3's held LOD or
+      // pending cascade budget; never before)
+      m_pacer.setSettleWanted(m_passes.lastStats().shadowSettleWanted);
       continue;
     }
 
     auto deadline = next.value_or(FrameClock::time_point::max());
+
+    // LP3.0 (D151, C62, P3.13): the still timer, a frame trigger once the camera has been
+    // still for StillTimerDelay while a settle is wanted; inert before LP3.3
+    if (const auto still = m_pacer.stillTimerTime(); still && canDraw())
+    {
+      if (*still <= now)
+      {
+        m_pacer.stillTimerFired();
+        continue;
+      }
+      deadline = std::min(deadline, *still);
+    }
 
     // the chunk jobs: a finished batch is applied, the inbox may be taken again, and a
     // newer material table is adopted (R2.2: tableChanged wakes the thread for it);

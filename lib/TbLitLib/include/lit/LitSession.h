@@ -605,6 +605,8 @@ public:
    * skipped; a settled session draws nothing until a trigger.
    */
   bool lastFrameSettledForTesting() const;
+  // LP3.0 (D151), any thread: the still timer's firings so far (none before LP3.3)
+  std::uint64_t stillTimerFiringsForTesting() const;
   // the swapchain generations made so far; GUI thread
   std::uint64_t swapchainGenerations() const;
   // the camera the next frame draws with

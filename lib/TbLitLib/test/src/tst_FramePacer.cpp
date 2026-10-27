@@ -42,6 +42,48 @@ TEST_CASE("FramePacer")
     CHECK_FALSE(pacer.nextFrameTime(true));
   }
 
+  SECTION("the still timer is inert without a settle wanted (LP3.0, D151, P3.13)")
+  {
+    CHECK(StillTimerDelay == 200ms);
+    // a camera that moved and stopped: no settle wanted (LP3.0: never), so no firing
+    pacer.trigger();
+    pacer.cameraMoved(t0);
+    pacer.frameStarted(t0);
+    CHECK_FALSE(pacer.settleWanted());
+    CHECK_FALSE(pacer.stillTimerTime());
+    CHECK_FALSE(pacer.pending());
+    CHECK(pacer.drawReason() == FrameDrawReason::Trigger);
+    CHECK(pacer.stillTimerFirings() == 0u);
+  }
+
+  SECTION("the still timer with a settle wanted fires once per stop (LP3.3's scope)")
+  {
+    pacer.trigger();
+    pacer.cameraMoved(t0);
+    pacer.frameStarted(t0);
+    pacer.setSettleWanted(true);
+    const auto at = pacer.stillTimerTime();
+    REQUIRE(at);
+    CHECK(*at == t0 + StillTimerDelay);
+    pacer.stillTimerFired();
+    CHECK(pacer.pending());
+    CHECK(pacer.drawReason() == FrameDrawReason::StillTimer);
+    CHECK(pacer.stillTimerFirings() == 1u);
+    // spent until the camera moves again
+    CHECK_FALSE(pacer.stillTimerTime());
+    pacer.frameStarted(*at);
+    CHECK_FALSE(pacer.stillTimerTime());
+    pacer.cameraMoved(t0 + 1s);
+    REQUIRE(pacer.stillTimerTime());
+    CHECK(*pacer.stillTimerTime() == t0 + 1s + StillTimerDelay);
+    // a trigger's reason is the trigger's
+    pacer.trigger();
+    CHECK(pacer.drawReason() == FrameDrawReason::Trigger);
+    // no settle wanted: no timer
+    pacer.setSettleWanted(false);
+    CHECK_FALSE(pacer.stillTimerTime());
+  }
+
   SECTION("a trigger draws at once after idle")
   {
     pacer.trigger();

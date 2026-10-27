@@ -158,7 +158,9 @@ TEST_CASE(
          // LP4.2b step 0: the probe build's collection is the trigger
          {&FrameConvergence::probesInFlight, false},
          // LP7.2 (D124): the table that answers is the trigger
-         {&FrameConvergence::modelsPending, false}})
+         {&FrameConvergence::modelsPending, false},
+         // LP3.0 (D151, C62): the shadows' term, false until LP3.3
+         {&FrameConvergence::shadowsPending, false}})
   {
     auto convergence = FrameConvergence{};
     convergence.*term = true;
@@ -169,6 +171,11 @@ TEST_CASE(
   auto disabled = FrameConvergence{};
   disabled.passesDisabled = true;
   CHECK(disabled.settled());
+  // LP3.0 (D151): the shadows are converged before LP3.3, and no settle wants the still
+  // timer: the frame stats leave both terms false
+  CHECK_FALSE(FrameConvergence{}.shadowsPending);
+  CHECK_FALSE(LitFrameStats{}.shadowsPending);
+  CHECK_FALSE(LitFrameStats{}.shadowSettleWanted);
 }
 
 TEST_CASE("LitSession: the panel's status line (D9, LP2.3)")
@@ -547,6 +554,9 @@ constexpr auto StopBound = 2000ms;
 
 void teardown(LitSession& session)
 {
+  // LP3.0 (D151): the still timer never fires on these fixtures (no settle is wanted
+  // before LP3.3), so no case's frame counts move
+  CHECK(session.stillTimerFiringsForTesting() == 0u);
   // a stop the render thread misses fails the check instead of hanging the join
   // (plans/lit-preview/19-LITGPU-HANG.md); stopRenderThread requests it again
   session.requestStop();
@@ -5470,6 +5480,9 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
       std::this_thread::sleep_for(1000ms);
       CHECK(session->framesPresented() == idleFrames + 1);
       CHECK(session->lastFrameSettledForTesting());
+      // LP3.0 (D151): the still timer, 200 ms after that change, did not fire (no settle
+      // is wanted before LP3.3)
+      CHECK(session->stillTimerFiringsForTesting() == 0u);
       std::cout << "LP2.2b idle: " << idleFrames << " frames before 3 s of idling, "
                 << session->framesPresented() << " after it and one camera change\n";
 

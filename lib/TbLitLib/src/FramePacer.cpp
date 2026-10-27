@@ -30,6 +30,7 @@ FramePacer::FramePacer(const FrameClock::duration minInterval)
 void FramePacer::trigger()
 {
   m_pending = true;
+  m_drawReason = FrameDrawReason::Trigger;
 }
 
 bool FramePacer::pending() const
@@ -59,6 +60,49 @@ void FramePacer::frameStarted(const FrameClock::time_point now)
 void FramePacer::frameSkipped()
 {
   m_pending = true;
+}
+
+void FramePacer::cameraMoved(const FrameClock::time_point at)
+{
+  m_lastCameraMove = at;
+  m_stillTimerSpent = false;
+}
+
+void FramePacer::setSettleWanted(const bool wanted)
+{
+  m_settleWanted = wanted;
+}
+
+bool FramePacer::settleWanted() const
+{
+  return m_settleWanted;
+}
+
+std::optional<FrameClock::time_point> FramePacer::stillTimerTime() const
+{
+  if (!m_settleWanted || m_stillTimerSpent || !m_lastCameraMove)
+  {
+    return std::nullopt;
+  }
+  return *m_lastCameraMove + StillTimerDelay;
+}
+
+void FramePacer::stillTimerFired()
+{
+  m_stillTimerSpent = true;
+  ++m_stillTimerFirings;
+  m_pending = true;
+  m_drawReason = FrameDrawReason::StillTimer;
+}
+
+std::uint64_t FramePacer::stillTimerFirings() const
+{
+  return m_stillTimerFirings;
+}
+
+FrameDrawReason FramePacer::drawReason() const
+{
+  return m_drawReason;
 }
 
 } // namespace tb::lit

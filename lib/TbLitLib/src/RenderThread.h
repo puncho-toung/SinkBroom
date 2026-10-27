@@ -199,6 +199,11 @@ struct FrameConvergence
   bool feedBehind = false;
   // D9: a pass is disabled (counts as converged)
   bool passesDisabled = false;
+  // LP3.0 (D151, C62): the frame's shadows are not settled (a tile not drawn against its
+  // light's record at the exact LOD, a provisional tile, a cascade budget pending, a
+  // caster's light triangles unknown); LP3.3 fills it (LitFrameStats::shadowsPending),
+  // false before: shadows are always converged
+  bool shadowsPending = false;
 
   bool settled() const;
   // the frame triggers the next one itself (D77's unconverged pass)
@@ -621,6 +626,8 @@ public:
   std::uint64_t renderTargetGeneration() const;
   // LP2.2b, any thread: the last frame drawn was settled (D77)
   bool lastFrameSettled() const;
+  // LP3.0 (D151), any thread: the still timer's firings so far
+  std::uint64_t stillTimerFirings() const;
   // LP2.3 (D9), any thread: the last frame shown, for the panel's status line
   SessionStatus status() const;
   // any thread: every frame runs hook on the render thread (as runInFrame) until an

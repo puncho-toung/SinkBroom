@@ -579,6 +579,11 @@ bool LitSession::lastFrameSettledForTesting() const
   return m_renderThread && m_renderThread->lastFrameSettled();
 }
 
+std::uint64_t LitSession::stillTimerFiringsForTesting() const
+{
+  return m_renderThread ? m_renderThread->stillTimerFirings() : 0;
+}
+
 std::uint64_t LitSession::swapchainGenerations() const
 {
   return m_swapchainCount;

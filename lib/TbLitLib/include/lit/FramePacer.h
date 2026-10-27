@@ -22,6 +22,7 @@
 #include "lit/LitConfig.h"
 
 #include <chrono>
+#include <cstdint>
 #include <optional>
 
 namespace tb::lit
@@ -37,6 +38,21 @@ constexpr auto MinFrameInterval = std::chrono::nanoseconds{
 // §3.1: garbage is also collected, and timer queries polled, this long after the last
 // frame
 constexpr auto IdleCollectInterval = std::chrono::seconds{1};
+
+// LP3.0 (D151, C62, P3.13): the still timer's delay, the camera still this long
+constexpr auto StillTimerDelay = std::chrono::milliseconds{200};
+
+/**
+ * LP3.0 (A49): the reasons a frame is started, §3.10's list as the pacer sees them: a
+ * trigger (a camera change, requestFrame, an arrival, an unconverged pass), or the still
+ * timer's firing (D151). The pacer records the last; nothing reads it before LP3.3, and
+ * the still timer never fires before it (no settle is wanted).
+ */
+enum class FrameDrawReason
+{
+  Trigger,
+  StillTimer,
+};
 
 /**
  * Decides when the render thread starts a frame (§3.10, R5.25). A frame is drawn only
@@ -66,10 +82,41 @@ public:
   // at the next slot the limiter grants, or after the next trigger
   void frameSkipped();
 
+  // ----- LP3.0 (D151, C62, P3.13): the still timer, inert until LP3.3 -----
+
+  // the camera moved at this time: the still timer counts from it again
+  void cameraMoved(FrameClock::time_point at);
+  /**
+   * whether a settle wants the still timer: some light's held LOD differs from its exact
+   * LOD, or a cascade budget is pending (C62's scope); LP3.3 sets it from the frame's
+   * shadows, nothing before (LitFrameStats::shadowSettleWanted is false), so the timer
+   * never fires and no frame count changes
+   */
+  void setSettleWanted(bool wanted);
+  bool settleWanted() const;
+  /**
+   * When the still timer fires: StillTimerDelay after the last camera move, while a
+   * settle is wanted and the timer has not fired since that move; empty otherwise
+   * (always, before LP3.3).
+   */
+  std::optional<FrameClock::time_point> stillTimerTime() const;
+  // the still timer fired: a frame trigger whose reason is StillTimer, spent until the
+  // camera moves again
+  void stillTimerFired();
+  std::uint64_t stillTimerFirings() const;
+  // the reason of the pending (or last started) frame
+  FrameDrawReason drawReason() const;
+
 private:
   FrameClock::duration m_minInterval;
   std::optional<FrameClock::time_point> m_lastFrameStart;
   bool m_pending = false;
+  // LP3.0 (D151)
+  std::optional<FrameClock::time_point> m_lastCameraMove;
+  bool m_settleWanted = false;
+  bool m_stillTimerSpent = false;
+  std::uint64_t m_stillTimerFirings = 0;
+  FrameDrawReason m_drawReason = FrameDrawReason::Trigger;
 };
 
 } // namespace tb::lit
