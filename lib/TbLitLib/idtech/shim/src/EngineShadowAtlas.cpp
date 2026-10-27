@@ -140,7 +140,7 @@ std::vector<EngineAtlasPlacement> engineShadowAtlasLayout(
 
     const auto size = sizes[shadowIndex];
 
-    int area = Max(size.x, size.y);
+    const int area = Max(size.x, size.y);
 
     const auto tile = tileMap.getTile(float(area));
 
@@ -150,7 +150,7 @@ std::vector<EngineAtlasPlacement> engineShadowAtlasLayout(
     }
     else
     {
-      int imageSize = int(tile->size * float(atlasSize));
+      const int imageSize = int(tile->size * float(atlasSize));
 
       // convert from [-1..-1] -> [0..1] and flip y
       idVec2 uvPos;

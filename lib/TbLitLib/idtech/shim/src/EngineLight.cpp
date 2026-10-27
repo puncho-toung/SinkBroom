@@ -465,7 +465,7 @@ EngineShadowLod engineShadowLod(
   // compute projected bounding sphere
   // and use that as a criteria for selecting LOD
   const auto box = toId(projected);
-  idVec3 center = box.GetCenter();
+  const idVec3 center = box.GetCenter();
   projectedRadius = box.GetRadius(center);
   if (projectedRadius > 1.0f)
   {
