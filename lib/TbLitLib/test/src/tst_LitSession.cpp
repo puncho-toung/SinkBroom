@@ -6695,13 +6695,15 @@ bool parityCountHolds(const JsonValue& expected, const std::size_t actual)
 std::optional<std::size_t> parityShadowCount(
   const LitFrameStats& lit, const std::string_view key)
 {
-  const auto counts = std::array<std::pair<std::string_view, std::size_t>, 10>{{
+  const auto counts = std::array<std::pair<std::string_view, std::size_t>, 11>{{
     {"lights_casting", lit.lightsCasting},
     {"lights_placed", lit.lightsPlaced},
     {"lights_unplaced", lit.lightsUnplaced},
     {"tiles_drawn", lit.layoutTiles},
     {"shadow_draws", lit.layoutShadowDraws},
     {"perforated_skipped", lit.perforatedCastersSkipped},
+    // LP3.4 (D156, K53): the settled frame's own provisional tiles (0)
+    {"tiles_provisional", lit.tilesProvisional},
     {"atlas_bytes_written", std::size_t(lit.layoutAtlasBytes)},
     {"sm_draws_local", lit.smDrawsLocal},
     {"sm_draws_global", lit.smDrawsGlobal},
@@ -7168,14 +7170,16 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
       const auto shadowStats = fmt::format(
         "\"lights_casting\": {}, \"lights_placed\": {}, \"lights_unplaced\": {}, "
         "\"tiles_drawn\": {}, \"shadow_draws\": {}, \"perforated_skipped\": {}, "
-        "\"atlas_bytes_written\": {}, \"sm_draws_local\": {}, \"sm_draws_global\": {}, "
-        "\"sm_draws_translucent\": {}, \"unplaced_lights\": [{}]",
+        "\"tiles_provisional\": {}, \"atlas_bytes_written\": {}, \"sm_draws_local\": {}, "
+        "\"sm_draws_global\": {}, \"sm_draws_translucent\": {}, \"unplaced_lights\": "
+        "[{}]",
         lit.lightsCasting,
         lit.lightsPlaced,
         lit.lightsUnplaced,
         lit.layoutTiles,
         lit.layoutShadowDraws,
         lit.perforatedCastersSkipped,
+        lit.tilesProvisional,
         lit.layoutAtlasBytes,
         lit.smDrawsLocal,
         lit.smDrawsGlobal,
