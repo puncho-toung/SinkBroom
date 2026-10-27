@@ -6672,7 +6672,12 @@ bool parityCountHolds(const JsonValue& expected, const std::size_t actual)
 }
 
 // LP3.2 (D157 extended, SC709): the shadow counters a parity row's "expect" can pin (a
-// number or {"min": n}), by key, from the settled frame's stats; none for another key
+// number or {"min": n}), by key, from the settled frame's stats; none for another key.
+// LP3.3 (C61, D146): tiles_drawn, shadow_draws and atlas_bytes_written are the layout's
+// (the tiles the settled frame samples, with the draws and bytes each was last drawn
+// with), so that a row's counts do not depend on whether its settled frame drew its tiles
+// or kept them from an earlier frame of the row (LP3.2's counts, every tile drawn every
+// frame, are these)
 std::optional<std::size_t> parityShadowCount(
   const LitFrameStats& lit, const std::string_view key)
 {
@@ -6680,10 +6685,10 @@ std::optional<std::size_t> parityShadowCount(
     {"lights_casting", lit.lightsCasting},
     {"lights_placed", lit.lightsPlaced},
     {"lights_unplaced", lit.lightsUnplaced},
-    {"tiles_drawn", lit.tilesDrawn},
-    {"shadow_draws", lit.shadowDraws},
+    {"tiles_drawn", lit.layoutTiles},
+    {"shadow_draws", lit.layoutShadowDraws},
     {"perforated_skipped", lit.perforatedCastersSkipped},
-    {"atlas_bytes_written", std::size_t(lit.atlasBytesWritten)},
+    {"atlas_bytes_written", std::size_t(lit.layoutAtlasBytes)},
     {"sm_draws_local", lit.smDrawsLocal},
     {"sm_draws_global", lit.smDrawsGlobal},
     {"sm_draws_translucent", lit.smDrawsTranslucent},
@@ -7139,7 +7144,8 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
       }
       // LP3.2 (D157 extended, SC709, P3.10): pass 6's counters a row can pin, the
       // per-list shadow-atlas interaction draws, and the lights the atlas left unshadowed
-      // (their "name" keys, in viewLights order: H11's two, D162)
+      // (their "name" keys, in viewLights order: H11's two, D162); LP3.3 (C61, D146): the
+      // tiles, draws and bytes are the layout's, as parityShadowCount's
       auto unplaced = std::vector<std::string>{};
       for (const auto& name : lit.unplacedLights)
       {
@@ -7153,10 +7159,10 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
         lit.lightsCasting,
         lit.lightsPlaced,
         lit.lightsUnplaced,
-        lit.tilesDrawn,
-        lit.shadowDraws,
+        lit.layoutTiles,
+        lit.layoutShadowDraws,
         lit.perforatedCastersSkipped,
-        lit.atlasBytesWritten,
+        lit.layoutAtlasBytes,
         lit.smDrawsLocal,
         lit.smDrawsGlobal,
         lit.smDrawsTranslucent,
@@ -15754,8 +15760,10 @@ TEST_CASE("LitSession shadows on a GPU (LP3.1)", "[.][litgpu2]")
     CHECK(frame.stats.lightsCasting == 1u);
     CHECK(frame.stats.lightsPlaced == 1u);
     CHECK(frame.stats.lightsUnplaced == 0u);
-    CHECK(frame.stats.tilesDrawn == 6u);
-    CHECK(frame.stats.shadowDraws > 0u);
+    // LP3.3 (D146): the settled frame drew its tiles or kept them from the frame that did
+    CHECK(frame.stats.tilesDrawn + frame.stats.tilesCached == 6u);
+    CHECK(frame.stats.layoutTiles == 6u);
+    CHECK(frame.stats.layoutShadowDraws > 0u);
     CHECK(frame.stats.perforatedCastersSkipped == 0u);
     CHECK(frame.atlasMade);
     CHECK(frame.atlasBytes == 8192ull * 8192ull * 4ull);
@@ -15796,8 +15804,8 @@ TEST_CASE("LitSession shadows on a GPU (LP3.1)", "[.][litgpu2]")
     }
     std::cout << fmt::format(
       "LP3.1 (a): tiles {}, shadow draws {}, culled {}, sides drawn {}\n",
-      frame.stats.tilesDrawn,
-      frame.stats.shadowDraws,
+      frame.stats.layoutTiles,
+      frame.stats.layoutShadowDraws,
       frame.stats.shadowCastersCulled,
       fmt::join(boxSides, " "));
     // the atlas: the box's and the anchor's footprints below 1.0, the far clear elsewhere
@@ -15839,8 +15847,9 @@ TEST_CASE("LitSession shadows on a GPU (LP3.1)", "[.][litgpu2]")
     const auto& frame = *shadowed;
     CHECK(frame.stats.lightsCasting == 1u);
     CHECK(frame.stats.lightsPlaced == 1u);
-    CHECK(frame.stats.tilesDrawn == 1u);
-    CHECK(frame.stats.shadowDraws > 0u);
+    CHECK(frame.stats.tilesDrawn + frame.stats.tilesCached == 1u);
+    CHECK(frame.stats.layoutTiles == 1u);
+    CHECK(frame.stats.layoutShadowDraws > 0u);
     REQUIRE(frame.records.size() == 1u);
     const auto& record = frame.records[0];
     CHECK(record.type == ShadowLightType::Spot);
@@ -15864,7 +15873,7 @@ TEST_CASE("LitSession shadows on a GPU (LP3.1)", "[.][litgpu2]")
       "LP3.1 (b): tile ({}, {}), shadow draws {}, texels below 1.0 {}\n",
       record.placements[0].x,
       record.placements[0].y,
-      frame.stats.shadowDraws,
+      frame.stats.layoutShadowDraws,
       nearer[0]);
     CHECK(nearer[0] > 0u);
     saveAtlasPng(frame.atlas, "lp31_b_spot");
@@ -15896,8 +15905,9 @@ TEST_CASE("LitSession shadows on a GPU (LP3.1)", "[.][litgpu2]")
     const auto& frame = *shadowed;
     CHECK(frame.stats.lightsCasting == 1u);
     CHECK(frame.stats.lightsPlaced == 1u);
-    CHECK(frame.stats.tilesDrawn == 4u);
-    CHECK(frame.stats.shadowDraws > 0u);
+    CHECK(frame.stats.tilesDrawn + frame.stats.tilesCached == 4u);
+    CHECK(frame.stats.layoutTiles == 4u);
+    CHECK(frame.stats.layoutShadowDraws > 0u);
     REQUIRE(frame.records.size() == 1u);
     const auto& record = frame.records[0];
     CHECK(record.type == ShadowLightType::Parallel);
@@ -15927,7 +15937,7 @@ TEST_CASE("LitSession shadows on a GPU (LP3.1)", "[.][litgpu2]")
     const auto nearer = checkTiles(frame, record, {box, anchor}, box);
     std::cout << fmt::format(
       "LP3.1 (c): shadow draws {}, culled {}, texels below 1.0 per cascade {}\n",
-      frame.stats.shadowDraws,
+      frame.stats.layoutShadowDraws,
       frame.stats.shadowCastersCulled,
       fmt::join(nearer, " "));
     CHECK(nearer[0] > 0u);
@@ -15961,8 +15971,10 @@ TEST_CASE("LitSession shadows on a GPU (LP3.1)", "[.][litgpu2]")
     // but it draws nothing into them (RB:3506-3509)
     CHECK(frame.stats.lightsCasting == 1u);
     CHECK(frame.stats.lightsPlaced == 1u);
-    CHECK(frame.stats.tilesDrawn == 6u);
+    CHECK(frame.stats.tilesDrawn + frame.stats.tilesCached == 6u);
+    CHECK(frame.stats.layoutTiles == 6u);
     CHECK(frame.stats.shadowDraws == 0u);
+    CHECK(frame.stats.layoutShadowDraws == 0u);
     REQUIRE(frame.records.size() == 1u);
     for (const auto program : interactionPrograms(frame.drawLog))
     {
@@ -15977,8 +15989,8 @@ TEST_CASE("LitSession shadows on a GPU (LP3.1)", "[.][litgpu2]")
     CHECK(std::ranges::all_of(nearer, [](const auto n) { return n == 0u; }));
     std::cout << fmt::format(
       "LP3.1 (d): tiles {}, shadow draws {}, texels below 1.0 {}\n",
-      frame.stats.tilesDrawn,
-      frame.stats.shadowDraws,
+      frame.stats.layoutTiles,
+      frame.stats.layoutShadowDraws,
       fmt::join(nearer, " "));
     saveAtlasPng(frame.atlas, "lp31_d_translucent");
     saveHdrPng(frame.hdr, "lp31_d_translucent");
@@ -16192,6 +16204,300 @@ TEST_CASE("LitSession shadows on a GPU (LP3.1)", "[.][litgpu2]")
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
   teardown(*session);
   messages.print("LP3.1 shadows, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+}
+
+namespace
+{
+
+// LP3.3: a map's text with every line of an entity's block (its keys and brushes, found
+// by its "name") passed through edit
+std::string withEntityLines(
+  const std::string& text,
+  const std::string& name,
+  const std::function<std::string(const std::string&)>& edit)
+{
+  auto lines = std::vector<std::string>{};
+  {
+    auto stream = std::istringstream{text};
+    auto line = std::string{};
+    while (std::getline(stream, line))
+    {
+      lines.push_back(line);
+    }
+  }
+  const auto nameLine = fmt::format("\"name\" \"{}\"", name);
+  const auto at = std::ranges::find(lines, nameLine);
+  REQUIRE(at != lines.end());
+  auto open = std::size_t(at - lines.begin());
+  while (open > 0 && lines[open] != "{")
+  {
+    --open;
+  }
+  auto depth = 0;
+  for (auto i = open; i < lines.size(); ++i)
+  {
+    if (lines[i] == "{")
+    {
+      ++depth;
+    }
+    else if (lines[i] == "}")
+    {
+      if (--depth == 0)
+      {
+        break;
+      }
+    }
+    else
+    {
+      lines[i] = edit(lines[i]);
+    }
+  }
+  auto out = std::string{};
+  for (const auto& line : lines)
+  {
+    out += line;
+    out += '\n';
+  }
+  return out;
+}
+
+// a brush line's three points moved by d, and an "origin" key with them
+std::string movedLine(const std::string& line, const EngineVec3& d)
+{
+  if (line.starts_with("\"origin\" \""))
+  {
+    auto stream = std::istringstream{line.substr(10)};
+    auto x = 0.0f;
+    auto y = 0.0f;
+    auto z = 0.0f;
+    stream >> x >> y >> z;
+    return fmt::format("\"origin\" \"{} {} {}\"", x + d[0], y + d[1], z + d[2]);
+  }
+  if (!line.starts_with("( "))
+  {
+    return line;
+  }
+  auto out = std::string{};
+  auto rest = std::string_view{line};
+  for (auto p = 0; p < 3; ++p)
+  {
+    const auto open = rest.find("( ");
+    const auto close = rest.find(" )");
+    REQUIRE(open != std::string_view::npos);
+    REQUIRE(close != std::string_view::npos);
+    auto stream =
+      std::istringstream{std::string{rest.substr(open + 2, close - open - 2)}};
+    auto x = 0.0f;
+    auto y = 0.0f;
+    auto z = 0.0f;
+    stream >> x >> y >> z;
+    out += fmt::format("( {} {} {} ) ", x + d[0], y + d[1], z + d[2]);
+    rest = rest.substr(close + 3);
+  }
+  return out + std::string{rest};
+}
+
+// the draw log's tile clears and caster draws of a light (pass 6)
+std::size_t tileClearsOf(const std::vector<LitDrawRecord>& log, const PreviewId light)
+{
+  return std::size_t(std::ranges::count_if(log, [&](const LitDrawRecord& record) {
+    return record.pass == LitDrawRecord::Pass::ShadowClear && record.light == light;
+  }));
+}
+
+std::size_t shadowDrawsOf(const std::vector<LitDrawRecord>& log)
+{
+  return std::size_t(std::ranges::
+                       count_if(log, [](const LitDrawRecord& record) {
+                         return record.pass == LitDrawRecord::Pass::Shadow
+           || (record.pass == LitDrawRecord::Pass::ShadowClear
+               && record.light != NoPreviewId);
+                       }));
+}
+
+// whether the light has a kept record, after the last frame
+bool keptRecord(LitSession& session, const PreviewId light)
+{
+  auto kept = false;
+  REQUIRE(inFrame(session, [&](RenderFrameAccess& access) {
+    kept = access.passes.shadowCache().find(light) != nullptr;
+  }));
+  return kept;
+}
+
+} // namespace
+
+// LP3.3 (C61, C62, D146, D150-D152, D160, P3.4, P3.7, P3.26): the shadow records, the
+// cache, the relocation at settle and the held layout on the synthetic scenes
+// (fixture/lit/ maps/lp3, edited in the test's text). Hidden: it needs a GPU and the
+// engine's blobs.
+TEST_CASE("LitSession shadow records on a GPU (LP3.3)", "[.][litgpu2]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto started = std::chrono::steady_clock::now();
+  const auto root = assembleLp3Root(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  const auto instance = testInstance(true, false, messages);
+  REQUIRE(instance.valid());
+  REQUIRE(initInstanceDispatcher(instance.handles()));
+  auto service = rootService(root);
+  auto events = Events{};
+  auto session = rootSession(instance, events, *service, root, true, false, true);
+  session->setExposed(true);
+  REQUIRE(waitFor(
+    [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+  auto sequence = std::uint64_t{0};
+  const auto offer = [&](const std::string& text, const std::string& name) {
+    REQUIRE(session->offerSnapshot(lp3Snapshot(text, root, name, ++sequence)));
+    // the draw log of the new scene's frames alone
+    REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+      access.passes.setDrawLogForTesting(true);
+    }));
+  };
+  const auto clearLog = [&] {
+    REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+      access.passes.setDrawLogForTesting(true);
+    }));
+  };
+
+  // ---------------------------------------------------------------------------------
+  SECTION("(h) the cache: a still scene, cached-vs-fresh, a UV drag, a moved occluder")
+  {
+    const auto camera = litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1});
+    const auto text = lp3MapText("lp3_point.map");
+    offer(text, "lp3_point.map");
+    const auto first = settledShadowFrame(*session, camera, 1, true);
+    REQUIRE(first);
+    REQUIRE(first->records.size() == 1u);
+    const auto light = first->records[0].light;
+    CHECK(first->stats.layoutTiles == 6u);
+    CHECK(tileClearsOf(first->drawLog, light) >= 6u);
+    const auto drawsWhenDrawn = first->stats.layoutShadowDraws;
+
+    // a still scene draws no tile: the second settled frame keeps all six (D146)
+    clearLog();
+    const auto still = settledShadowFrame(*session, camera, 1, true);
+    REQUIRE(still);
+    CHECK(still->stats.tilesDrawn == 0u);
+    CHECK(still->stats.tilesCached == 6u);
+    CHECK(still->stats.shadowDraws == 0u);
+    CHECK(still->stats.atlasBytesWritten == 0u);
+    CHECK(shadowDrawsOf(still->drawLog) == 0u);
+    CHECK(still->stats.layoutTiles == 6u);
+    CHECK(still->stats.layoutShadowDraws == drawsWhenDrawn);
+    CHECK(still->atlas.depth == first->atlas.depth);
+    CHECK(still->hdr.rgba == first->hdr.rgba);
+    std::cout << fmt::format(
+      "LP3.3 (h) still: tiles drawn {}, cached {}, shadow draws {} (the drawing frame's "
+      "{}), atlas bytes equal {}\n",
+      still->stats.tilesDrawn,
+      still->stats.tilesCached,
+      still->stats.shadowDraws,
+      drawsWhenDrawn,
+      still->atlas.depth == first->atlas.depth);
+
+    // cached-vs-fresh (D160): every tile drawn again is byte-identical
+    REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+      access.passes.setDrawLogForTesting(true);
+      access.passes.invalidateShadowTilesForTesting();
+    }));
+    const auto fresh = settledShadowFrame(*session, camera, 1, true);
+    REQUIRE(fresh);
+    CHECK(tileClearsOf(fresh->drawLog, light) == 6u);
+    CHECK(fresh->atlas.depth.size() == first->atlas.depth.size());
+    CHECK(fresh->atlas.depth == first->atlas.depth);
+    CHECK(fresh->hdr.rgba == first->hdr.rgba);
+    std::cout << fmt::format(
+      "LP3.3 (h) fresh: {} tiles drawn again, {} texels, byte-identical {}\n",
+      tileClearsOf(fresh->drawLog, light),
+      fresh->atlas.depth.size(),
+      fresh->atlas.depth == first->atlas.depth);
+
+    // a UV drag on an opaque caster redraws no tile (S36: st is in the caster version of
+    // a perforated chunk alone)
+    const auto dragged = withEntityLines(text, "lp3_box", [](const std::string& line) {
+      auto out = line;
+      for (const auto& [from, to] : std::vector<std::pair<std::string, std::string>>{
+             {"[ 0 1 0 0 ]", "[ 0 1 0 8 ]"}, {"[ 1 0 0 0 ]", "[ 1 0 0 8 ]"}})
+      {
+        if (const auto at = out.find(from); at != std::string::npos)
+        {
+          out.replace(at, from.size(), to);
+        }
+      }
+      return out;
+    });
+    REQUIRE(dragged != text);
+    offer(dragged, "lp3_point.map");
+    const auto uv = settledShadowFrame(*session, camera, 1, true);
+    REQUIRE(uv);
+    CHECK(shadowDrawsOf(uv->drawLog) == 0u);
+    CHECK(uv->stats.tilesCached == 6u);
+    CHECK(uv->atlas.depth == first->atlas.depth);
+    std::cout << fmt::format(
+      "LP3.3 (h) UV drag: {} tile clears or caster draws since the edit\n",
+      shadowDrawsOf(uv->drawLog));
+
+    // a moved occluder redraws its light's tiles (its record's caster hash moved)
+    const auto moved = withEntityLines(dragged, "lp3_box", [](const std::string& line) {
+      return movedLine(line, EngineVec3{0, 8, 0});
+    });
+    offer(moved, "lp3_point.map");
+    const auto shifted = settledShadowFrame(*session, camera, 1, true);
+    REQUIRE(shifted);
+    CHECK(tileClearsOf(shifted->drawLog, light) >= 6u);
+    CHECK(shifted->stats.layoutShadowDraws > 0u);
+    CHECK(shifted->atlas.depth != first->atlas.depth);
+    std::cout << fmt::format(
+      "LP3.3 (h) moved occluder: {} tile clears since the move, layout draws {}\n",
+      tileClearsOf(shifted->drawLog, light),
+      shifted->stats.layoutShadowDraws);
+
+    // the light's noshadows: its record dropped, and made again when it casts once more
+    const auto toggled = [&](const std::string& value) {
+      return withEntityLines(moved, "lp3_point", [&](const std::string& line) {
+        return line == "\"noshadows\" \"0\"" ? fmt::format("\"noshadows\" \"{}\"", value)
+                                             : line;
+      });
+    };
+    offer(toggled("1"), "lp3_point.map");
+    const auto off = settledShadowFrame(*session, camera, 1, false);
+    REQUIRE(off);
+    CHECK(off->stats.lightsCasting == 0u);
+    CHECK(off->records.empty());
+    CHECK_FALSE(keptRecord(*session, light));
+    offer(toggled("0"), "lp3_point.map");
+    const auto on = settledShadowFrame(*session, camera, 1, true);
+    REQUIRE(on);
+    CHECK(on->stats.lightsPlaced == 1u);
+    CHECK(keptRecord(*session, light));
+    CHECK(tileClearsOf(on->drawLog, light) >= 6u);
+    CHECK(on->atlas.depth == shifted->atlas.depth);
+    std::cout << fmt::format(
+      "LP3.3 (h) noshadows: record kept {} while off, {} tile clears after it casts "
+      "again, "
+      "the atlas as before {}\n",
+      false,
+      tileClearsOf(on->drawLog, light),
+      on->atlas.depth == shifted->atlas.depth);
+    saveAtlasPng(on->atlas, "lp33_h_cache");
+    saveHdrPng(on->hdr, "lp33_h_cache");
+  }
+
+  std::cout << fmt::format(
+    "LP3.3 shadow records on a GPU: {:.1f} s\n",
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+  teardown(*session);
+  messages.print("LP3.3 shadow records, validation");
   CHECK(messages.errors == 0);
   CHECK(messages.warnings == 0);
 }

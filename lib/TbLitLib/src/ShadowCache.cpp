@@ -162,6 +162,17 @@ void ShadowCache::drop(const PreviewId light)
   m_records.erase(light);
 }
 
+void ShadowCache::invalidateTiles()
+{
+  for (auto& [light, record] : m_records)
+  {
+    for (auto& tile : record.tiles)
+    {
+      tile.valid = false;
+    }
+  }
+}
+
 const ShadowRecord* ShadowCache::find(const PreviewId light) const
 {
   const auto it = m_records.find(light);

@@ -1992,9 +1992,26 @@ void LitPasses::recordShadowAtlas(Frame& frame)
     placements.resize(sizes.size());
   }
 
+  // R_SetupSplitFrustums (tr_frontend_main.cpp:924: every view; a parallel light's
+  // cascades and the consumer's rpCascadeDistances read it)
+  const auto shadowView = shadowViewOf(frame.view);
+  m_splitFrustums = engineSetupSplitFrustums(shadowView);
+
   // loop 2's placements (:3798-3895): imageSize the light's first side's output size,
-  // imageAtlasOffset[ max( 0, side ) ] per side, x -1 when a side did not fit
-  auto tiles = std::vector<std::pair<std::size_t, int>>{};
+  // imageAtlasOffset[ max( 0, side ) ] per side, x -1 when a side did not fit. LP3.3
+  // (C61, D146): each placed side's tile is drawn when its light's record key differs
+  // from the one it was drawn against, its rect moved, it was not drawn whole, or its
+  // side's matrices differ (a parallel light's view follows the camera, P3.7; point and
+  // spot sides depend on the light alone); else it is cached: no clear, no draws
+  struct TileWork
+  {
+    std::size_t record = 0;
+    int side = 0;
+    AtlasRect rect;
+    bool draw = true;
+    EngineShadowSideMatrices matrices;
+  };
+  auto tiles = std::vector<TileWork>{};
   auto current = std::vector<AtlasRect>{};
   {
     auto shadowIndex = std::size_t{0};
@@ -2003,6 +2020,13 @@ void LitPasses::recordShadowAtlas(Frame& frame)
       auto& record = m_shadowRecords[r];
       const auto [first, stop] = shadowSides(record.type);
       record.imageSize = {placements[shadowIndex].size, placements[shadowIndex].size};
+      const auto known = m_shadowCache.find(record.light) != nullptr;
+      auto& kept = m_shadowCache.record(record.light);
+      const auto sameKey = known && kept.key == record.key;
+      kept.type = record.type;
+      kept.sides = record.sides;
+      kept.key = record.key;
+      kept.fadeOut = m_lists.lights[record.index].shadowFadeOut;
       auto fits = true;
       for (auto side = first; side < stop; ++side)
       {
@@ -2011,43 +2035,45 @@ void LitPasses::recordShadowAtlas(Frame& frame)
         record.placements[slice] = placement;
         record.atlasOffsets[slice] = {placement.x, placement.y};
         ++shadowIndex;
+        auto& tile = kept.tiles[slice];
         if (placement.x == -1 || placement.y == -1)
         {
           // didn't fit into atlas anymore
           fits = false;
+          tile = ShadowTileRecord{};
           continue;
         }
-        tiles.emplace_back(r, side);
-        current.push_back(AtlasRect{placement.x, placement.y, record.imageSize[0]});
+        const auto rect = AtlasRect{placement.x, placement.y, record.imageSize[0]};
+        // ShadowMapPassFast's SetupShadowMapMatrices (RB:3451-3453): its stores kept on
+        // the light's record as drawn (C61), its raster pair for the side's draws
+        auto work = TileWork{};
+        work.record = r;
+        work.side = side;
+        work.rect = rect;
+        work.matrices = engineShadowMapMatrices(
+          shadowLightOf(m_lists.lights[record.index]), side, shadowView, m_splitFrustums);
+        work.draw =
+          !(sameKey && tile.placed && tile.valid && tile.rect == rect
+            && tile.shadowV == work.matrices.shadowV
+            && tile.shadowP == work.matrices.shadowP);
+        if (work.draw)
+        {
+          tile = ShadowTileRecord{};
+          tile.placed = true;
+          tile.rect = rect;
+        }
+        tiles.push_back(work);
+        current.push_back(rect);
       }
       if (!fits)
       {
         record.imageSize[0] = -1;
       }
-      // LP3.3 (C61): the light's kept record, with its tiles' rects this frame
-      auto& kept = m_shadowCache.record(record.light);
-      kept.type = record.type;
-      kept.sides = record.sides;
-      kept.key = record.key;
-      kept.fadeOut = m_lists.lights[record.index].shadowFadeOut;
-      for (auto side = first; side < stop; ++side)
-      {
-        const auto slice = std::size_t(std::max(0, side));
-        const auto& placement = record.placements[slice];
-        auto& tile = kept.tiles[slice];
-        const auto placed = placement.x != -1 && placement.y != -1;
-        const auto rect = AtlasRect{placement.x, placement.y, record.imageSize[1]};
-        if (!placed || !tile.placed || tile.rect != rect)
-        {
-          tile = ShadowTileRecord{};
-        }
-        tile.placed = placed;
-        tile.rect = rect;
-      }
     }
   }
 
-  // P3.3: the rects last run's tiles occupied that this run's tiles do not cover
+  // P3.3: the rects last run's tiles occupied that this run's tiles do not cover (a
+  // cached tile's rect was its own last run, so none of them is inside one)
   auto vacated = std::vector<AtlasRect>{};
   for (const auto& rect : m_atlasOccupied)
   {
@@ -2082,9 +2108,11 @@ void LitPasses::recordShadowAtlas(Frame& frame)
     }
   }
 
-  // the lights placed and not, the latter by name (D157), at every way out
-  const auto countRecords = [&] {
-    for (const auto& record : m_shadowRecords)
+  // the lights placed and not, the latter by name (D157), at every way out; LP3.3 (C61,
+  // D146): the frame's records sample their kept tiles' matrices, and the tiles the
+  // frame's interactions sample are counted with what each was last drawn with
+  const auto finish = [&] {
+    for (auto& record : m_shadowRecords)
     {
       if (record.placed())
       {
@@ -2096,16 +2124,27 @@ void LitPasses::recordShadowAtlas(Frame& frame)
         m_stats.unplacedLights.emplace_back(
           spawnString(m_lists.lights[record.index].record->spawnArgs, "name"));
       }
+      const auto* kept = m_shadowCache.find(record.light);
+      if (!kept)
+      {
+        continue;
+      }
+      for (std::size_t slice = 0; slice < kept->tiles.size(); ++slice)
+      {
+        const auto& tile = kept->tiles[slice];
+        if (!tile.placed)
+        {
+          continue;
+        }
+        record.shadowV[slice] = tile.shadowV;
+        record.shadowP[slice] = tile.shadowP;
+        ++m_stats.layoutTiles;
+        m_stats.layoutShadowDraws += tile.draws;
+        m_stats.layoutAtlasBytes +=
+          std::uint64_t(tile.rect.size) * std::uint64_t(tile.rect.size) * sizeof(float);
+      }
     }
-  };
-  const auto unplaceAll = [&] {
-    for (auto& record : m_shadowRecords)
-    {
-      record.imageSize[0] = -1;
-    }
-  };
-  // LP3.3 (C61, A46): a light none of whose sides has a tile is not in the layout
-  const auto dropUnplaced = [&] {
+    // A46: a light none of whose sides has a tile is not in the layout
     for (const auto& record : m_shadowRecords)
     {
       const auto* kept = m_shadowCache.find(record.light);
@@ -2115,11 +2154,21 @@ void LitPasses::recordShadowAtlas(Frame& frame)
       }
     }
   };
-  if (tiles.empty() && vacated.empty())
+  const auto unplaceAll = [&] {
+    for (auto& record : m_shadowRecords)
+    {
+      record.imageSize[0] = -1;
+    }
+    // LP3.3: no record is kept
+    m_shadowCache.clear();
+  };
+  const auto anyDrawn = std::ranges::any_of(tiles, &TileWork::draw);
+  if (!anyDrawn && vacated.empty())
   {
-    m_atlasOccupied.clear();
-    dropUnplaced();
-    countRecords();
+    // nothing to record: every tile cached (or none placed)
+    m_stats.tilesCached = tiles.size();
+    m_atlasOccupied = std::move(current);
+    finish();
     return;
   }
 
@@ -2128,9 +2177,8 @@ void LitPasses::recordShadowAtlas(Frame& frame)
   {
     m_stats.shadowAtlasDisabled = true;
     m_atlasOccupied.clear();
-    m_shadowCache.clear();
     unplaceAll();
-    countRecords();
+    finish();
     return;
   }
 
@@ -2151,44 +2199,37 @@ void LitPasses::recordShadowAtlas(Frame& frame)
     ++m_stats.tilesVacated;
   }
 
-  // R_SetupSplitFrustums (tr_frontend_main.cpp:924: every view; a parallel light's
-  // cascades and the consumer's rpCascadeDistances read it)
-  const auto shadowView = shadowViewOf(frame.view);
-  m_splitFrustums = engineSetupSplitFrustums(shadowView);
-
-  // then each placed side, in loop 2's order: its far-plane clear, then its draws
+  // then each placed side, in loop 2's order: a cached one is left as it is; another gets
+  // its far-plane clear, then its draws
   for (auto t = std::size_t{0}; t < tiles.size() && !disabled; ++t)
   {
-    const auto [r, side] = tiles[t];
-    auto& record = m_shadowRecords[r];
-    const auto slice = std::size_t(std::max(0, side));
-    // ShadowMapPassFast's SetupShadowMapMatrices (RB:3451-3453): its stores kept on the
-    // light's record as drawn (C61), its raster pair for the side's draws
-    const auto matrices = engineShadowMapMatrices(
-      shadowLightOf(m_lists.lights[record.index]), side, shadowView, m_splitFrustums);
-    record.shadowV[slice] = matrices.shadowV;
-    record.shadowP[slice] = matrices.shadowP;
-    const auto rect = AtlasRect{
-      record.atlasOffsets[slice][0], record.atlasOffsets[slice][1], record.imageSize[1]};
-    if (!clearAtlasRect(atlasFrame, rect, record.light, side))
+    const auto& work = tiles[t];
+    auto& record = m_shadowRecords[work.record];
+    const auto slice = std::size_t(std::max(0, work.side));
+    if (!work.draw)
+    {
+      ++m_stats.tilesCached;
+      continue;
+    }
+    if (!clearAtlasRect(atlasFrame, work.rect, record.light, work.side))
     {
       disabled = true;
       break;
     }
     ++m_stats.tilesDrawn;
     m_stats.atlasBytesWritten +=
-      std::uint64_t(rect.size) * std::uint64_t(rect.size) * sizeof(float);
+      std::uint64_t(work.rect.size) * std::uint64_t(work.rect.size) * sizeof(float);
     auto drawn = ShadowTileDraws{};
-    if (!shadowMapPass(atlasFrame, record, side, matrices, drawn))
+    if (!shadowMapPass(atlasFrame, record, work.side, work.matrices, drawn))
     {
       disabled = true;
       break;
     }
     // LP3.3 (C61): the tile as drawn, against the record's key
     auto& tile = m_shadowCache.record(record.light).tiles[slice];
-    tile.valid = drawn.complete && !castersPending[r];
-    tile.shadowV = matrices.shadowV;
-    tile.shadowP = matrices.shadowP;
+    tile.valid = drawn.complete && !castersPending[work.record];
+    tile.shadowV = work.matrices.shadowV;
+    tile.shadowP = work.matrices.shadowP;
     tile.draws = drawn.draws;
     tile.drawnFrame = frame.inputs->frameIndex;
   }
@@ -2197,13 +2238,11 @@ void LitPasses::recordShadowAtlas(Frame& frame)
   if (disabled)
   {
     // D9: the pass is disabled; every light draws the plain interaction (programReport()
-    // says why); LP3.3: no record is kept
+    // says why)
     m_stats.shadowAtlasDisabled = true;
-    m_shadowCache.clear();
     unplaceAll();
   }
-  dropUnplaced();
-  countRecords();
+  finish();
 
   // :3910-3915: GL_State( GLS_DEFAULT ) (each draw's key carries its state), ALPHA_TEST
   // 0, ResetViewportAndScissorToDefaultCamera
@@ -4180,6 +4219,11 @@ void LitPasses::setSkipShadowsForTesting(const bool on)
 {
   // the lists' key holds it: they are built again when it changes
   m_skipShadows = on;
+}
+
+void LitPasses::invalidateShadowTilesForTesting()
+{
+  m_shadowCache.invalidateTiles();
 }
 
 void LitPasses::setDrawLogForTesting(const bool on)

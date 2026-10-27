@@ -311,16 +311,24 @@ struct LitFrameStats
   std::size_t lightsPlaced = 0;
   std::size_t lightsUnplaced = 0;
   std::vector<std::string> unplacedLights;
-  // the tiles cleared and drawn (every placed side, each its far-plane clear first) and
-  // the rects of last frame's tiles this frame's do not cover, cleared (vacated, P3.3);
-  // relocated, cached and provisional are LP3.3's and LP3.4's, 0 until then
+  // the tiles cleared and drawn (each its far-plane clear first) and the rects of last
+  // frame's tiles this frame's do not cover, cleared (vacated, P3.3); LP3.3 (C61, D146):
+  // the tiles left as they were (cached: their light's record key, rect and matrices
+  // unchanged), and those copied to their new rect (relocated); provisional is LP3.4's, 0
   std::size_t tilesDrawn = 0;
   std::size_t tilesVacated = 0;
   std::size_t tilesRelocated = 0;
   std::size_t tilesCached = 0;
   std::size_t tilesProvisional = 0;
-  // the atlas bytes the tiles' far-plane clears and draws cover (tiles × size² × 4)
+  // the atlas bytes the drawn tiles' far-plane clears and draws cover (tiles × size² × 4)
   std::uint64_t atlasBytesWritten = 0;
+  // LP3.3 (C61, D146): the tiles the frame's interactions sample (drawn, cached or
+  // relocated) and, over them, the casters' draws and the atlas bytes each was last
+  // drawn with: what the frame's shadows are made of, whichever frame drew them (the
+  // [.][parity] rows' tiles_drawn, shadow_draws and atlas_bytes_written)
+  std::size_t layoutTiles = 0;
+  std::size_t layoutShadowDraws = 0;
+  std::uint64_t layoutAtlasBytes = 0;
   // the casters' depth draws into the tiles, the (caster, side) pairs the per-side cull
   // left out (D149), and the perforated casters of the lights that take tiles, not drawn
   // until LP3.4 (D155: H04 and H08 are reported until then)
@@ -756,6 +764,9 @@ public:
   // caster), pass 6 is not recorded (RenderBackend.cpp:3605) and every light draws the
   // plain interaction (:1417, :1541); the lists are built again
   void setSkipShadowsForTesting(bool on);
+  // LP3.3 (C61, D160's cached-vs-fresh test): every kept tile is drawn again at the next
+  // frame that runs pass 6, as if its light's record had changed
+  void invalidateShadowTilesForTesting();
   const std::vector<LitDrawRecord>& drawLogForTesting() const;
   // the pipeline keys the draws asked for while the log was on, also those of skipped
   // draws (a pending pipeline)

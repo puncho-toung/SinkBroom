@@ -209,6 +209,8 @@ public:
   // the light's record, made empty for it when it has none
   ShadowRecord& record(PreviewId light);
   void drop(PreviewId light);
+  // every tile of every record is drawn again (tests: cached-vs-fresh)
+  void invalidateTiles();
   const ShadowRecord* find(PreviewId light) const;
   const Records& records() const;
   std::size_t size() const;
