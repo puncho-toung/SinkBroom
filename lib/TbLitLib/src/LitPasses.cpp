@@ -1898,10 +1898,22 @@ void LitPasses::recordShadowAtlas(Frame& frame)
 {
   m_shadowRecords.clear();
   m_shadowRecordOf.assign(m_lists.lights.size(), -1);
+  // LP3.3 (C61, D150): the bake the chunk set is built under, a new generation whenever
+  // the scene's tree or AreaData changes
+  if (
+    frame.inputs->procTree.get() != m_bakeTree
+    || frame.inputs->areas.get() != m_bakeAreas)
+  {
+    m_bakeTree = frame.inputs->procTree.get();
+    m_bakeAreas = frame.inputs->areas.get();
+    ++m_bakeGeneration;
+  }
   // ShadowAtlasPass (RenderBackend.cpp:3605): r_skipShadows, r_useShadowAtlas (always 1
-  // here: the arrays are K50's), no view lights
+  // here: the arrays are K50's), no view lights; LP3.3 (A46): no light takes tiles, so
+  // no record is kept (the rects their tiles held are cleared by the next run)
   if (m_skipShadows || EngineFrame.skipShadows || m_lists.lights.empty())
   {
+    m_shadowCache.clear();
     return;
   }
   static_assert(EngineFrame.useShadowAtlas == 1, "K50: the non-atlas path");
@@ -1932,6 +1944,13 @@ void LitPasses::recordShadowAtlas(Frame& frame)
     record.index = i;
     record.type = shadowLightType(light);
     record.lod = light.shadowLod;
+    // LP3.3 (C61, D150): the light's record key, its casters' hash the frontend's
+    record.key.lightVersion = shadowLightVersion(*light.record);
+    record.key.lod = light.shadowLod;
+    record.key.casterHash = light.casterHash;
+    record.key.casterCount = light.casterCount;
+    record.key.cvars = shadowCvarsOf(EngineFrame);
+    record.key.generation = m_bakeGeneration * 2 + (m_lists.flowed ? 1 : 0);
     const auto [first, stop] = shadowSides(record.type);
     record.sides = stop - first;
     const auto resolution = EngineShadowMapResolutions[std::size_t(light.shadowLod)];
@@ -1943,6 +1962,16 @@ void LitPasses::recordShadowAtlas(Frame& frame)
     m_shadowRecords.push_back(record);
   }
   m_stats.lightsCasting = m_shadowRecords.size();
+  // LP3.3 (C61, A46): the records of lights that take no tiles this frame go
+  {
+    auto casting = std::vector<PreviewId>{};
+    casting.reserve(m_shadowRecords.size());
+    for (const auto& record : m_shadowRecords)
+    {
+      casting.push_back(record.light);
+    }
+    m_shadowCache.beginFrame(casting);
+  }
 
   // :3718-3783: the engine's packing (D145)
   if (!m_tileMapReady)
@@ -1995,6 +2024,26 @@ void LitPasses::recordShadowAtlas(Frame& frame)
       {
         record.imageSize[0] = -1;
       }
+      // LP3.3 (C61): the light's kept record, with its tiles' rects this frame
+      auto& kept = m_shadowCache.record(record.light);
+      kept.type = record.type;
+      kept.sides = record.sides;
+      kept.key = record.key;
+      kept.fadeOut = m_lists.lights[record.index].shadowFadeOut;
+      for (auto side = first; side < stop; ++side)
+      {
+        const auto slice = std::size_t(std::max(0, side));
+        const auto& placement = record.placements[slice];
+        auto& tile = kept.tiles[slice];
+        const auto placed = placement.x != -1 && placement.y != -1;
+        const auto rect = AtlasRect{placement.x, placement.y, record.imageSize[1]};
+        if (!placed || !tile.placed || tile.rect != rect)
+        {
+          tile = ShadowTileRecord{};
+        }
+        tile.placed = placed;
+        tile.rect = rect;
+      }
     }
   }
 
@@ -2012,14 +2061,23 @@ void LitPasses::recordShadowAtlas(Frame& frame)
       vacated.push_back(rect);
     }
   }
-  // the perforated casters a light that takes tiles leaves out until LP3.4 (D155)
-  for (const auto& record : m_shadowRecords)
+  // the perforated casters a light that takes tiles leaves out until LP3.4 (D155);
+  // LP3.3 (C61): the lights with a caster whose light triangles are not known yet (it is
+  // drawn whole: its tiles are drawn again once they are)
+  auto castersPending = std::vector<bool>(m_shadowRecords.size(), false);
+  for (std::size_t r = 0; r < m_shadowRecords.size(); ++r)
   {
-    for (const auto& caster : m_lists.lights[record.index].casters)
+    for (const auto& caster : m_lists.lights[m_shadowRecords[r].index].casters)
     {
       if (caster.chunk && caster.chunk->castClass == CastClass::Perforated)
       {
         ++m_stats.perforatedCastersSkipped;
+      }
+      if (
+        caster.lightTriangles
+        && caster.lightTriangles->state == LightTriangles::State::Pending)
+      {
+        castersPending[r] = true;
       }
     }
   }
@@ -2046,9 +2104,21 @@ void LitPasses::recordShadowAtlas(Frame& frame)
       record.imageSize[0] = -1;
     }
   };
+  // LP3.3 (C61, A46): a light none of whose sides has a tile is not in the layout
+  const auto dropUnplaced = [&] {
+    for (const auto& record : m_shadowRecords)
+    {
+      const auto* kept = m_shadowCache.find(record.light);
+      if (kept && std::ranges::none_of(kept->tiles, &ShadowTileRecord::placed))
+      {
+        m_shadowCache.drop(record.light);
+      }
+    }
+  };
   if (tiles.empty() && vacated.empty())
   {
     m_atlasOccupied.clear();
+    dropUnplaced();
     countRecords();
     return;
   }
@@ -2058,6 +2128,7 @@ void LitPasses::recordShadowAtlas(Frame& frame)
   {
     m_stats.shadowAtlasDisabled = true;
     m_atlasOccupied.clear();
+    m_shadowCache.clear();
     unplaceAll();
     countRecords();
     return;
@@ -2107,21 +2178,31 @@ void LitPasses::recordShadowAtlas(Frame& frame)
     ++m_stats.tilesDrawn;
     m_stats.atlasBytesWritten +=
       std::uint64_t(rect.size) * std::uint64_t(rect.size) * sizeof(float);
-    if (!shadowMapPass(atlasFrame, record, side, matrices))
+    auto drawn = ShadowTileDraws{};
+    if (!shadowMapPass(atlasFrame, record, side, matrices, drawn))
     {
       disabled = true;
       break;
     }
+    // LP3.3 (C61): the tile as drawn, against the record's key
+    auto& tile = m_shadowCache.record(record.light).tiles[slice];
+    tile.valid = drawn.complete && !castersPending[r];
+    tile.shadowV = matrices.shadowV;
+    tile.shadowP = matrices.shadowP;
+    tile.draws = drawn.draws;
+    tile.drawnFrame = frame.inputs->frameIndex;
   }
   m_atlasOccupied = std::move(current);
 
   if (disabled)
   {
     // D9: the pass is disabled; every light draws the plain interaction (programReport()
-    // says why)
+    // says why); LP3.3: no record is kept
     m_stats.shadowAtlasDisabled = true;
+    m_shadowCache.clear();
     unplaceAll();
   }
+  dropUnplaced();
   countRecords();
 
   // :3910-3915: GL_State( GLS_DEFAULT ) (each draw's key carries its state), ALPHA_TEST
@@ -2271,7 +2352,8 @@ bool LitPasses::shadowMapPass(
   Frame& frame,
   const ShadowLightRecord& record,
   const int side,
-  const EngineShadowSideMatrices& matrices)
+  const EngineShadowSideMatrices& matrices,
+  ShadowTileDraws& drawn)
 {
   // ShadowMapPassFast (RenderBackend.cpp:3395-3584) into the side's tile (its viewport
   // and scissor set by the tile's clear): GLS_POLYGON_OFFSET, then
@@ -2343,25 +2425,28 @@ bool LitPasses::shadowMapPass(
     {
     case DrawOutcome::Drawn:
       ++m_stats.shadowDraws;
+      ++drawn.draws;
       if (m_logDraws)
       {
-        auto drawn = LitDrawRecord{};
-        drawn.pass = LitDrawRecord::Pass::Shadow;
-        drawn.light = record.light;
-        drawn.chunk = caster.chunk->key;
-        drawn.program = EngineBuiltinDepth;
-        drawn.state = stateBits;
-        drawn.scissor = m_scissor;
-        drawn.side = side;
-        m_drawLog.push_back(std::move(drawn));
+        auto logged = LitDrawRecord{};
+        logged.pass = LitDrawRecord::Pass::Shadow;
+        logged.light = record.light;
+        logged.chunk = caster.chunk->key;
+        logged.program = EngineBuiltinDepth;
+        logged.state = stateBits;
+        logged.scissor = m_scissor;
+        logged.side = side;
+        m_drawLog.push_back(std::move(logged));
       }
       break;
     case DrawOutcome::Disabled:
       return false;
     case DrawOutcome::Overflowed:
+      drawn.complete = false;
       drawOverflowed(frame);
       break;
     case DrawOutcome::Skipped:
+      drawn.complete = false;
       break;
     }
   }
@@ -4019,6 +4104,11 @@ const std::vector<ShadowLightRecord>& LitPasses::shadowLights() const
   return m_shadowRecords;
 }
 
+const ShadowCache& LitPasses::shadowCache() const
+{
+  return m_shadowCache;
+}
+
 nvrhi::ITexture* LitPasses::shadowAtlas() const
 {
   return m_atlas.Get();
@@ -4039,6 +4129,10 @@ void LitPasses::releaseAll()
   m_atlasOccupied.clear();
   m_shadowRecords.clear();
   m_shadowRecordOf.clear();
+  // LP3.3 (C61, A46): the records go with the session (documentWasLoaded stops it, D41)
+  m_shadowCache.clear();
+  m_bakeTree = nullptr;
+  m_bakeAreas = nullptr;
   m_clearQuadVertices = nullptr;
   m_clearQuadIndexes = nullptr;
   m_constantBuffers.clear();

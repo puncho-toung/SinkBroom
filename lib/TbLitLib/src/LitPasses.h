@@ -40,6 +40,7 @@
 #include "PipelineCompiler.h"
 #include "RenderParms.h"
 #include "SamplerSet.h"
+#include "ShadowCache.h"
 #include "ViewProbes.h"
 #include "base/Macros.h"
 #include "lit/EngineShadowAtlas.h"
@@ -376,25 +377,6 @@ struct LitDrawRecord
   int side = -1;
 };
 
-// LP3.1 (C59): an atlas rect, its top-left pixel and its side
-struct AtlasRect
-{
-  int x = 0;
-  int y = 0;
-  int size = 0;
-
-  bool operator==(const AtlasRect&) const = default;
-};
-
-// LP3.1 (C58, C59): the shadow map type of a light (vLight->parallel, then pointLight,
-// else a spot light: RenderBackend.cpp:3676-3700)
-enum class ShadowLightType
-{
-  Point,
-  Spot,
-  Parallel,
-};
-
 /**
  * LP3.1 (C59, C61, SC719-SC720): a casting light's record of the frame's pass 6, the
  * viewLight_t fields ShadowAtlasPass writes (RenderBackend.cpp:3798-3895): imageSize (the
@@ -407,6 +389,8 @@ enum class ShadowLightType
 struct ShadowLightRecord
 {
   PreviewId light = NoPreviewId;
+  // LP3.3 (C61): the light's record key this frame (its tiles drawn or kept against it)
+  ShadowRecordKey key;
   // its index in FrontendLists::lights
   std::size_t index = 0;
   ShadowLightType type = ShadowLightType::Point;
@@ -420,6 +404,15 @@ struct ShadowLightRecord
   std::array<EngineMat4, 6> shadowP = {};
 
   bool placed() const { return imageSize[0] != -1 && imageSize[1] != -1; }
+};
+
+// LP3.3 (C61): what a tile's draws made: the casters drawn, and whether every draw was
+// made (none skipped for a pending pipeline or dropped for the budget) and every caster's
+// light triangles were known (a Pending caster is drawn whole: the tile is drawn again)
+struct ShadowTileDraws
+{
+  std::size_t draws = 0;
+  bool complete = true;
 };
 
 /**
@@ -686,6 +679,14 @@ private:
   // record (-1: none)
   std::vector<ShadowLightRecord> m_shadowRecords;
   std::vector<int> m_shadowRecordOf;
+  // LP3.3 (C61, D150): the records that persist across frames, one per light whose tiles
+  // are in the layout (ShadowCache), and the bake generation they are drawn under: a
+  // count moved whenever the scene's tree or AreaData pointer changes (a bake arriving,
+  // changing or going)
+  ShadowCache m_shadowCache;
+  std::uint64_t m_bakeGeneration = 0;
+  const void* m_bakeTree = nullptr;
+  const void* m_bakeAreas = nullptr;
   // LP3.1 (C58): the frame's split frustums (R_SetupSplitFrustums), made by pass 6
   EngineSplitFrustums m_splitFrustums;
   // D147's far-plane quad (z = w = 1) as a vertex and an index buffer of this session's,
@@ -727,6 +728,8 @@ public:
   // LP3.1 (C59), render thread: the shadow atlas, or null before the first frame that
   // places a tile (tests read it back)
   nvrhi::ITexture* shadowAtlas() const;
+  // LP3.3 (C61), render thread: the records kept across frames (tests)
+  const ShadowCache& shadowCache() const;
 
   // teardown step 2: every handle
   void releaseAll();
@@ -811,7 +814,8 @@ private:
     Frame& frame,
     const ShadowLightRecord& record,
     int side,
-    const EngineShadowSideMatrices& matrices);
+    const EngineShadowSideMatrices& matrices,
+    ShadowTileDraws& drawn);
   // LP3.1 (C59, SC719): GL_ViewportAndScissor( x, y, size, size ) on the atlas: the
   // frame's viewport and m_scissor (RenderBackend_NVRHI.cpp:2176-2193)
   void setAtlasViewport(Frame& frame, const AtlasRect& rect);

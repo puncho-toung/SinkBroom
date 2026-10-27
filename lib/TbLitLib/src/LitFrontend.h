@@ -164,6 +164,15 @@ struct ViewLight
    * Nothing draws them before LP3.1.
    */
   std::vector<LitSurface> casters;
+  /**
+   * LP3.3 (C61, D150, P3.27): the running, order-independent hash over casters: the sum
+   * of each caster's shadowCasterTerm (ShadowCache.h: its key, caster version, space's
+   * model matrix, cast class and AreaSurface), added in the gathering's loop as the
+   * caster is kept, after the rule admitted it, so that it describes the set the tiles
+   * are drawn from (no second walk); and their count. 0 for a light that gathers none.
+   */
+  std::uint64_t casterHash = 0;
+  std::size_t casterCount = 0;
 };
 
 // LP5.3 (C45, C49): the kind of a light of this shader (ViewLightKind's rule). Pure.

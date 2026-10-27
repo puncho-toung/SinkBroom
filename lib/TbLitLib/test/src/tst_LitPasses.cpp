@@ -23,6 +23,7 @@
 #include "LitTestUtils.h"
 #include "LitView.h"
 #include "RenderParms.h"
+#include "ShadowCache.h"
 #include "ViewFlow.h"
 #include "lit/AreaData.h"
 #include "lit/BprocModel.h"
@@ -2040,6 +2041,214 @@ TEST_CASE("LitPasses: the casters of a casting light, on screen or off (LP3.0, C
   REQUIRE(viewLightOf(quietLists, 20));
   CHECK(viewLightOf(quietLists, 20)->casters.size() == 1u);
   CHECK(quietLists.casterPairs == 1u);
+}
+
+TEST_CASE("LitPasses: the shadow records' versions and caster hash (LP3.3, C61, D150)")
+{
+  auto f = frontendFixture();
+  const auto tree =
+    readProcFile(readTextFile(
+      litFixtureFolder() / "goldens" / "lp1b_geometry" / "lp1b_geometry.proc"))
+    | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  const auto areas = buildAreaData(tree);
+  REQUIRE(areas.areas.size() == 2u);
+  constexpr auto World = PreviewId{1};
+  constexpr auto Box = PreviewId{5};
+
+  // a casting point light around the eye in area 1, a world chunk ahead of it and a
+  // brush entity's box beside it (references {1}), both inside its volume
+  auto scene = FlowScene{};
+  scene.tree = &tree;
+  scene.areas = &areas;
+  addChunk(scene, 1, World, {-185, -10, 40}, {-175, 10, 56});
+  addEntity(
+    scene,
+    Box,
+    {-200, 20, 48},
+    EngineBounds{EngineVec3{-4, -4, -4}, EngineVec3{4, 4, 4}},
+    {1});
+  addChunk(scene, 1, Box, {-4, -4, -4}, {4, 4, 4}, "textures/lp1b/floor");
+  const auto keys = EntityKeys{{"origin", "-200 0 48"}, {"light_radius", "50 50 50"}};
+  addLight(scene, *f, 20, keys);
+  const auto camera = cameraAt({-200, 0, 48}, {1, 0, 0});
+
+  struct Seen
+  {
+    std::uint64_t hash = 0;
+    std::size_t count = 0;
+    std::uint64_t light = 0;
+  };
+  const auto seen = [&](const FlowScene& s) {
+    const auto lists = flowListsOf(*f, s, camera);
+    REQUIRE(lists.flowed);
+    const auto* light = viewLightOf(lists, 20);
+    REQUIRE(light);
+    REQUIRE(light->shadowLod >= 0);
+    // the hash and count describe the casters the light keeps
+    CHECK(light->casterCount == light->casters.size());
+    return Seen{
+      light->casterHash, light->casterCount, shadowLightVersion(*light->record)};
+  };
+  const auto base = seen(scene);
+  CHECK(base.count == 2u);
+  CHECK(base.hash != 0u);
+  // the same scene: the same versions (pure, whatever the order the casters come in)
+  CHECK(seen(scene).hash == base.hash);
+  CHECK(seen(scene).light == base.light);
+  const auto worldKey = ChunkKey{1, World, "textures/lp1b/wall", {0, 0, 0}, 0};
+  const auto boxKey = ChunkKey{1, Box, "textures/lp1b/floor", {0, 0, 0}, 0};
+
+  SECTION("the hash moves with a caster's version")
+  {
+    auto edited = scene;
+    edited.chunks.at(worldKey).casterVersion = 77;
+    const auto after = seen(edited);
+    CHECK(after.hash != base.hash);
+    CHECK(after.count == base.count);
+    CHECK(after.light == base.light);
+  }
+
+  SECTION("the hash moves with a caster's transform (SC739), not its caster version")
+  {
+    // the entity moved 2 units, rotated, scaled (modelscale is the axis's scale): its
+    // chunk and its caster version unchanged
+    for (const auto& axis :
+         {EngineMat3{1, 0, 0, 0, 1, 0, 0, 0, 1},
+          EngineMat3{0, 1, 0, -1, 0, 0, 0, 0, 1},
+          EngineMat3{2, 0, 0, 0, 2, 0, 0, 0, 2}})
+    {
+      auto edited = scene;
+      auto& state = edited.entities.at(Box);
+      state.parms.axis = axis;
+      if (axis == EngineMat3{1, 0, 0, 0, 1, 0, 0, 0, 1})
+      {
+        state.modelOrigin = EngineVec3{-200, 22, 48};
+      }
+      const auto after = seen(edited);
+      CHECK(after.hash != base.hash);
+      CHECK(after.count == base.count);
+      CHECK(
+        edited.chunks.at(boxKey).casterVersion == scene.chunks.at(boxKey).casterVersion);
+    }
+  }
+
+  SECTION("the hash moves with a caster's cast class (C57)")
+  {
+    auto edited = scene;
+    edited.chunks.at(worldKey).castClass = CastClass::Perforated;
+    CHECK(seen(edited).hash != base.hash);
+    edited.chunks.at(worldKey).castClass = CastClass::TranslucentCaster;
+    CHECK(seen(edited).hash != base.hash);
+    // a class of None leaves the set
+    edited.chunks.at(worldKey).castClass = CastClass::None;
+    const auto none = seen(edited);
+    CHECK(none.hash != base.hash);
+    CHECK(none.count == base.count - 1);
+  }
+
+  SECTION("the hash moves with the membership (C57, LP3.2-FIX's items)")
+  {
+    // the entity without references: the outside set, never a caster of a light with
+    // references (C57 rev 2.3)
+    auto outside = scene;
+    outside.entities.at(Box).areas = {};
+    const auto left = seen(outside);
+    CHECK(left.count == base.count - 1);
+    CHECK(left.hash != base.hash);
+    // a caster entering the light's set
+    auto entered = scene;
+    addChunk(entered, 1, World, {-215, -10, 40}, {-210, 10, 56}, "textures/lp1b/floor");
+    const auto more = seen(entered);
+    CHECK(more.count == base.count + 1);
+    CHECK(more.hash != base.hash);
+  }
+
+  SECTION("the light's version moves with its origin, volume, noshadows and areas")
+  {
+    auto moved = scene;
+    addLight(
+      moved, *f, 20, EntityKeys{{"origin", "-198 0 48"}, {"light_radius", "50 50 50"}});
+    CHECK(seen(moved).light != base.light);
+    auto grown = scene;
+    addLight(
+      grown, *f, 20, EntityKeys{{"origin", "-200 0 48"}, {"light_radius", "52 50 50"}});
+    CHECK(seen(grown).light != base.light);
+    // noshadows: the light casts no more (no LOD, no caster: its record is dropped), and
+    // its version moves
+    auto record = *scene.lights.find(20);
+    record.light.parms.noShadows = true;
+    CHECK(shadowLightVersion(record) != base.light);
+    // the area references, the list itself (an area portal crossed) and none (the hull)
+    record = *scene.lights.find(20);
+    record.derived.areas = {0, 1};
+    CHECK(shadowLightVersion(record) != base.light);
+    record.derived.areas = {};
+    CHECK(shadowLightVersion(record) != base.light);
+    record = *scene.lights.find(20);
+    record.derived.areaNum = 0;
+    CHECK(shadowLightVersion(record) != base.light);
+    // not its colour, nor its record's version (a build of the same light)
+    auto coloured = scene;
+    auto colouredKeys = keys;
+    colouredKeys.emplace_back("_color", "1 0.5 0.25");
+    addLight(coloured, *f, 20, colouredKeys);
+    const auto lit = seen(coloured);
+    CHECK(lit.light == base.light);
+    CHECK(lit.hash == base.hash);
+    record = *scene.lights.find(20);
+    record.version = 9;
+    CHECK(shadowLightVersion(record) == base.light);
+  }
+
+  SECTION("not with an appearance-only edit of an opaque caster (S36)")
+  {
+    // its _color: the entity's shaderParms
+    auto coloured = scene;
+    coloured.entities.at(Box).parms.shaderParms[0] = 0.25f;
+    coloured.entities.at(Box).parms.shaderParms[2] = 0.5f;
+    CHECK(seen(coloured).hash == base.hash);
+    // a UV drag: st and the appearance version move, the caster version (positions,
+    // class, flags) does not for an opaque chunk (ChunkBuilder.cpp:1186-1213)
+    auto dragged = scene;
+    auto& chunk = dragged.chunks.at(worldKey);
+    for (auto& vert : chunk.verts)
+    {
+      // st is half floats (idDrawVert's halfFloat_t pair)
+      vert.st[0] = std::uint16_t(vert.st[0] + 64u);
+    }
+    chunk.appearanceVersion += 1;
+    CHECK(seen(dragged).hash == base.hash);
+  }
+
+  SECTION("the shadow cvars by value, and the records' drop paths (A46, P3.26)")
+  {
+    CHECK(shadowCvarsOf(EngineFrame) == shadowCvarsOf(EngineFrame));
+    auto frame = EngineFrame;
+    frame.shadowMapSamples = 8;
+    CHECK(shadowCvarsOf(frame) != shadowCvarsOf(EngineFrame));
+    CHECK(shadowCvarsOf(EngineFrame).shadowMapSplits == 3);
+
+    auto cache = ShadowCache{};
+    for (const auto light : {PreviewId{20}, PreviewId{21}, PreviewId{22}})
+    {
+      cache.record(light).key.lightVersion = light;
+    }
+    CHECK(cache.size() == 3u);
+    // 21 stops casting (or left the view, or was removed): its record goes
+    const auto casting = std::vector<PreviewId>{20, 22};
+    cache.beginFrame(casting);
+    CHECK(cache.size() == 2u);
+    CHECK_FALSE(cache.find(21));
+    REQUIRE(cache.find(22));
+    CHECK(cache.find(22)->key.lightVersion == 22u);
+    // a light whose sides have no tile is dropped by the pass (dropUnplaced)
+    cache.drop(22);
+    CHECK(cache.size() == 1u);
+    // a stop (documentWasLoaded stops the session, D41) or teardown: none
+    cache.clear();
+    CHECK(cache.size() == 0u);
+  }
 }
 
 TEST_CASE("LitPasses: a spectrum light's forced noShadows (LP3.0, C57, P3.16)")

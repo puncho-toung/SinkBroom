@@ -31,6 +31,7 @@
 #include "LitFrontend.h"
 
 #include "LitStages.h"
+#include "ShadowCache.h"
 #include "ViewFlow.h"
 #include "lit/AreaData.h"
 #include "lit/EngineTables.h"
@@ -1186,6 +1187,15 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       {
         caster.lightTriangles = triangles;
       }
+      // LP3.3 (C61, D150): the light's caster hash, over the casters it keeps
+      viewLight.casterHash += shadowCasterTerm(
+        *candidate.key,
+        candidate.instance != nullptr,
+        candidate.chunk->casterVersion,
+        litSpace.modelMatrix,
+        candidate.chunk->castClass,
+        candidate.areaSurface);
+      ++viewLight.casterCount;
       viewLight.casters.push_back(std::move(caster));
       ++lists.casters;
     }
