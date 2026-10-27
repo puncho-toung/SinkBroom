@@ -506,10 +506,22 @@ ShadowRelocationPlan planShadowRelocation(
   return plan;
 }
 
-void ShadowCache::beginFrame(const std::span<const PreviewId> casting)
+void ShadowCache::beginFrame(
+  const std::span<const PreviewId> casting, std::vector<AtlasRect>& released)
 {
   std::erase_if(m_records, [&](const auto& entry) {
-    return std::ranges::find(casting, entry.first) == casting.end();
+    if (std::ranges::find(casting, entry.first) != casting.end())
+    {
+      return false;
+    }
+    for (const auto& tile : entry.second.tiles)
+    {
+      if (tile.placed)
+      {
+        released.push_back(tile.rect);
+      }
+    }
+    return true;
   });
 }
 
@@ -537,6 +549,12 @@ void ShadowCache::invalidateTiles()
 }
 
 const ShadowRecord* ShadowCache::find(const PreviewId light) const
+{
+  const auto it = m_records.find(light);
+  return it != m_records.end() ? &it->second : nullptr;
+}
+
+ShadowRecord* ShadowCache::find(const PreviewId light)
 {
   const auto it = m_records.find(light);
   return it != m_records.end() ? &it->second : nullptr;

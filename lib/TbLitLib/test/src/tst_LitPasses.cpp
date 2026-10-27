@@ -2234,11 +2234,16 @@ TEST_CASE("LitPasses: the shadow records' versions and caster hash (LP3.3, C61, 
     {
       cache.record(light).key.lightVersion = light;
     }
+    cache.record(21).tiles[3].placed = true;
+    cache.record(21).tiles[3].rect = AtlasRect{512, 7680, 512};
     CHECK(cache.size() == 3u);
-    // 21 stops casting (or left the view, or was removed): its record goes
+    // 21 stops casting (or left the view, or was removed): its record goes, its tiles'
+    // rects back to the held layout
     const auto casting = std::vector<PreviewId>{20, 22};
-    cache.beginFrame(casting);
+    auto released = std::vector<AtlasRect>{};
+    cache.beginFrame(casting, released);
     CHECK(cache.size() == 2u);
+    CHECK(released == std::vector<AtlasRect>{AtlasRect{512, 7680, 512}});
     CHECK_FALSE(cache.find(21));
     REQUIRE(cache.find(22));
     CHECK(cache.find(22)->key.lightVersion == 22u);

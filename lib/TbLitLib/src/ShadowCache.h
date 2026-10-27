@@ -293,8 +293,16 @@ struct ShadowRecord
   int sides = 0;
   ShadowRecordKey key;
   float fadeOut = 0.0f;
+  // D152: the frames in a row whose exact LOD differed from key.lod while the camera
+  // moved (at 3 the exact one is taken)
+  int lodMismatchFrames = 0;
   std::array<ShadowTileRecord, 6> tiles = {};
 };
+
+// D152 (Q38's default): the parallel cascades redrawn at most per frame while the camera
+// moves, and the frames in a row an exact LOD must differ before a held one changes
+inline constexpr auto MovingCascadeBudget = std::size_t{2};
+inline constexpr auto LodHysteresisFrames = 3;
 
 /**
  * LP3.3 (C61, D146, A46, P3.26): the shadow records of the lights whose tiles are in the
@@ -314,14 +322,16 @@ private:
 
 public:
   // a frame's casting lights (those of pass 6's loop 1): every record of a light not
-  // among them is dropped (its tiles' rects are vacated: LitPasses clears them)
-  void beginFrame(std::span<const PreviewId> casting);
+  // among them is dropped, its placed tiles' rects appended to released (vacated:
+  // LitPasses clears them and gives them back to the held layout)
+  void beginFrame(std::span<const PreviewId> casting, std::vector<AtlasRect>& released);
   // the light's record, made empty for it when it has none
   ShadowRecord& record(PreviewId light);
   void drop(PreviewId light);
   // every tile of every record is drawn again (tests: cached-vs-fresh)
   void invalidateTiles();
   const ShadowRecord* find(PreviewId light) const;
+  ShadowRecord* find(PreviewId light);
   const Records& records() const;
   std::size_t size() const;
   void clear();

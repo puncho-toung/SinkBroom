@@ -127,6 +127,9 @@ struct LitFrameInputs
   // LP3.3 (D146, P3.4a): the device copies D32 images (GpuChoice::depthCopySupported):
   // a tile relocated at settle is copied through the scratch; else it is drawn again
   bool depthCopy = false;
+  // LP3.3 (C62, D152): the camera moves (FramePacer::cameraMoving at the frame's start):
+  // pass 6 holds the layout and the LODs; else the frame settles them
+  bool shadowsMoving = false;
   // LP5.2a (C47, D9): the game folder whose renderprogs2/spirv holds a newStage
   // program's blobs (SessionOptions::gamePath)
   std::filesystem::path gamePath;
@@ -332,6 +335,14 @@ struct LitFrameStats
   std::size_t layoutTiles = 0;
   std::size_t layoutShadowDraws = 0;
   std::uint64_t layoutAtlasBytes = 0;
+  // LP3.3 (C62, D152): the frame held the layout and the LODs (the camera moves), some
+  // light's held LOD differs from its exact one, the parallel cascades left stale by the
+  // budget (sampled with the matrices they were drawn with: counted among the cached),
+  // and the held layout differs from the engine's packing of the frame's sides
+  bool shadowsMoving = false;
+  bool shadowLodHeld = false;
+  std::size_t cascadesStale = 0;
+  bool shadowLayoutDrift = false;
   // the casters' depth draws into the tiles, the (caster, side) pairs the per-side cull
   // left out (D149), and the perforated casters of the lights that take tiles, not drawn
   // until LP3.4 (D155: H04 and H08 are reported until then)
@@ -402,8 +413,12 @@ struct LitDrawRecord
 struct ShadowLightRecord
 {
   PreviewId light = NoPreviewId;
-  // LP3.3 (C61): the light's record key this frame (its tiles drawn or kept against it)
+  // LP3.3 (C61): the light's record key this frame (its tiles drawn or kept against it);
+  // its exact LOD (engineShadowLod's: lod is the held one while the camera moves, D152)
+  // and the fade of lod (the consumer's shadowFadeOut)
   ShadowRecordKey key;
+  int exactLod = -1;
+  float fadeOut = 0.0f;
   // its index in FrontendLists::lights
   std::size_t index = 0;
   ShadowLightType type = ShadowLightType::Point;
@@ -702,6 +717,10 @@ private:
   // with it; the copy switched off (a test's: the fallback's redraw)
   nvrhi::TextureHandle m_relocationScratch;
   bool m_depthCopyOff = false;
+  // LP3.3 (C62, D152): the held layout's free space (the atlas's nodes the kept records'
+  // tiles take), made at the first frame that packs; a test's moving or settling frames
+  std::optional<ShadowTileAllocator> m_heldLayout;
+  std::optional<bool> m_shadowsMovingForTesting;
   std::uint64_t m_bakeGeneration = 0;
   const void* m_bakeTree = nullptr;
   const void* m_bakeAreas = nullptr;
@@ -783,6 +802,9 @@ public:
   // LP3.3 (D146, P3.4a): off, a tile relocated at settle is drawn again instead of copied
   // (the fallback of a device that cannot copy D32 images)
   void setShadowDepthCopyForTesting(bool on);
+  // LP3.3 (C62): the frames' pass 6 moving (true: the layout and LODs held) or settling
+  // (false) whatever the camera does; nullopt: the camera's (LitFrameInputs)
+  void setShadowsMovingForTesting(std::optional<bool> moving);
   const std::vector<LitDrawRecord>& drawLogForTesting() const;
   // the pipeline keys the draws asked for while the log was on, also those of skipped
   // draws (a pending pipeline)
@@ -834,7 +856,10 @@ private:
   // LP3.1 (D147): a far-plane quad over rect of the atlas, under builtin/depth with the
   // identity MVP, DEPTHFUNC_ALWAYS | CULL_TWOSIDED and no offset: depth 1.0 under the
   // rect's viewport and scissor; false when the pass is disabled
-  bool clearAtlasRect(Frame& frame, const AtlasRect& rect, PreviewId light, int side);
+  // LP3.3 (C61): cleared, whether the quad was drawn (a pending pipeline skips it: the
+  // rect is cleared again, its tile drawn again, at the next frame)
+  bool clearAtlasRect(
+    Frame& frame, const AtlasRect& rect, PreviewId light, int side, bool& cleared);
   /**
    * LP3.1 (C59, D149, SC721-SC722, SC749): ShadowMapPassFast( globalShadows, vLight,
    * side, atlas ) (RenderBackend.cpp:3395-3584) into the side's tile: every caster of the

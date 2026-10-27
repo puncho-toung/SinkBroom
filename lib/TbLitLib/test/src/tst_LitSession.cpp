@@ -15317,7 +15317,8 @@ std::optional<AtlasRect> regionOf(
  * The first frame of camera that is settled by the product's rule (D77) with at least
  * minLights lights in its lists: its HDR target, its records and stats, and (readAtlas)
  * the atlas over its tiles' bounds and extra, copied after its tonemap passes and read in
- * the next frame; nullopt at the deadline.
+ * the next frame; nullopt at the deadline. LP3.3: unsettled, the first frame of camera
+ * drawn after the call whatever its convergence (a moving frame's).
  */
 std::optional<ShadowFrame> settledShadowFrame(
   LitSession& session,
@@ -15326,7 +15327,8 @@ std::optional<ShadowFrame> settledShadowFrame(
   const bool readAtlas,
   const std::vector<AtlasRect>& extra = {},
   const std::optional<AtlasRect> regionOverride = std::nullopt,
-  const std::chrono::milliseconds timeout = 60000ms)
+  const std::chrono::milliseconds timeout = 60000ms,
+  const bool requireSettled = true)
 {
   struct State
   {
@@ -15345,14 +15347,17 @@ std::optional<ShadowFrame> settledShadowFrame(
     auto done = std::make_shared<std::promise<void>>();
     auto future = done->get_future();
     session.runAfterTonemapForTesting(
-      [state, done, camera, minLights, readAtlas, extra, regionOverride](
+      [state, done, camera, minLights, readAtlas, extra, regionOverride, requireSettled](
         RenderFrameAccess& access) {
         const auto& stats = access.passes.lastStats();
         const auto& lists = access.passes.lists();
-        state->settled = stats.camera == camera && !stats.unconverged
-                         && access.images.pending() == 0 && !access.images.hasLoading()
-                         && !lists.drawSurfs.empty() && lists.lights.size() >= minLights
-                         && !access.arenas.pending() && access.convergence.settled();
+        state->settled =
+          stats.camera == camera && !lists.drawSurfs.empty()
+          && lists.lights.size() >= minLights
+          && (!requireSettled
+              || (!stats.unconverged && access.images.pending() == 0
+                  && !access.images.hasLoading() && !access.arenas.pending()
+                  && access.convergence.settled()));
         if (state->settled)
         {
           auto& frame = state->frame;
@@ -16684,6 +16689,210 @@ TEST_CASE("LitSession shadow records on a GPU (LP3.3)", "[.][litgpu2]")
     REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
       access.passes.setShadowDepthCopyForTesting(true);
     }));
+  }
+
+  // ---------------------------------------------------------------------------------
+  SECTION("(j) moving: the held layout and LOD, the cascade budget, H11's overflow")
+  {
+    const auto setMoving = [&](const std::optional<bool> moving) {
+      REQUIRE(inFrame(*session, [moving](RenderFrameAccess& access) {
+        access.passes.setShadowsMovingForTesting(moving);
+        access.passes.setDrawLogForTesting(true);
+      }));
+    };
+    const auto clearedSides = [](const std::vector<LitDrawRecord>& log) {
+      auto sides = std::set<int>{};
+      for (const auto& record : log)
+      {
+        if (
+          record.pass == LitDrawRecord::Pass::ShadowClear && record.light != NoPreviewId)
+        {
+          sides.insert(record.side);
+        }
+      }
+      return sides;
+    };
+
+    const auto samePlacements = [](
+                                  const ShadowLightRecord& a,
+                                  const ShadowLightRecord& b) {
+      for (std::size_t s = 0; s < 6; ++s)
+      {
+        const auto& pa = a.placements[s];
+        const auto& pb = b.placements[s];
+        if (pa.placed != pb.placed || pa.x != pb.x || pa.y != pb.y || pa.size != pb.size)
+        {
+          return false;
+        }
+      }
+      return true;
+    };
+    // every frame's stats, records and draws, read at the start of the next frame
+    struct Seen
+    {
+      LitFrameStats stats;
+      std::vector<ShadowLightRecord> records;
+      std::vector<LitDrawRecord> log;
+    };
+    auto seen = std::make_shared<std::vector<Seen>>();
+    auto seenMutex = std::make_shared<std::mutex>();
+    // the frames of camera, set now, of the n frames asked for after it (the last one's
+    // not read)
+    const auto framesOf = [&](const CameraState& camera, const int n) {
+      session->setEveryFrameHookForTesting([seen, seenMutex](RenderFrameAccess& access) {
+        const auto lock = std::scoped_lock{*seenMutex};
+        seen->push_back(Seen{
+          access.passes.lastStats(),
+          access.passes.shadowLights(),
+          access.passes.drawLogForTesting()});
+        access.passes.setDrawLogForTesting(true);
+      });
+      session->setCamera(camera);
+      for (auto i = 0; i < n; ++i)
+      {
+        REQUIRE(inFrame(*session, [](RenderFrameAccess&) {}));
+      }
+      session->setEveryFrameHookForTesting({});
+      const auto lock = std::scoped_lock{*seenMutex};
+      auto frames = std::vector<Seen>{};
+      for (const auto& frame : *seen)
+      {
+        if (frame.stats.camera == camera)
+        {
+          frames.push_back(frame);
+        }
+      }
+      seen->clear();
+      return frames;
+    };
+
+    // a parallel light: while the camera moves, MovingCascadeBudget (2) cascades a frame,
+    // the stalest first; the others stale, sampled with the matrices they were drawn
+    // with (P3.7: the frame's record holds them, the consumer reads nothing else)
+    const auto c0 = litCamera({-112, 0, 96}, {1, 0, 0}, {0, 0, 1});
+    offer(lp3MapText("lp3_parallel.map"), "lp3_parallel.map");
+    const auto rest = settledShadowFrame(*session, c0, 1, false);
+    REQUIRE(rest);
+    REQUIRE(rest->records.size() == 1u);
+    REQUIRE(rest->records[0].sides == 4);
+    setMoving(true);
+    const auto atC1 = framesOf(litCamera({-112, 6, 96}, {1, 0, 0}, {0, 0, 1}), 3);
+    REQUIRE(atC1.size() >= 2u);
+    const auto& a = atC1[0];
+    const auto& b = atC1[1];
+    REQUIRE(a.records.size() == 1u);
+    CHECK(a.stats.shadowsMoving);
+    CHECK(a.stats.tilesDrawn == 2u);
+    CHECK(a.stats.cascadesStale == 2u);
+    CHECK(samePlacements(a.records[0], rest->records[0]));
+    const auto drawnA = clearedSides(a.log);
+    CHECK(drawnA.size() == 2u);
+    for (std::size_t s = 0; s < 4; ++s)
+    {
+      CAPTURE(s);
+      if (drawnA.contains(int(s)))
+      {
+        CHECK(a.records[0].shadowV[s] != rest->records[0].shadowV[s]);
+      }
+      else
+      {
+        CHECK(a.records[0].shadowV[s] == rest->records[0].shadowV[s]);
+        CHECK(a.records[0].shadowP[s] == rest->records[0].shadowP[s]);
+      }
+    }
+    // the same camera's next frame: the two left stale
+    const auto drawnB = clearedSides(b.log);
+    CHECK(b.stats.tilesDrawn == 2u);
+    CHECK(b.stats.cascadesStale == 0u);
+    for (const auto side : drawnB)
+    {
+      CHECK_FALSE(drawnA.contains(side));
+    }
+    // a second move: the stalest first, those drawn at the first frame
+    const auto atC2 = framesOf(litCamera({-112, 12, 96}, {1, 0, 0}, {0, 0, 1}), 3);
+    REQUIRE(atC2.size() >= 2u);
+    CHECK(clearedSides(atC2[0].log) == drawnA);
+    CHECK(atC2[0].stats.cascadesStale == 2u);
+    CHECK(clearedSides(atC2[1].log) == drawnB);
+    CHECK(atC2[1].stats.cascadesStale == 0u);
+    std::cout << fmt::format(
+      "LP3.3 (j) cascades while moving: frames drew {} / {} ({} / {} stale), after a "
+      "second "
+      "move {} / {} ({} / {} stale)\n",
+      a.stats.tilesDrawn,
+      b.stats.tilesDrawn,
+      a.stats.cascadesStale,
+      b.stats.cascadesStale,
+      atC2[0].stats.tilesDrawn,
+      atC2[1].stats.tilesDrawn,
+      atC2[0].stats.cascadesStale,
+      atC2[1].stats.cascadesStale);
+
+    // a point light's LOD held while the camera moves away: it changes on the third frame
+    // in a row whose exact LOD differs (D152)
+    setMoving(std::nullopt);
+    const auto inside = litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1});
+    offer(lp3MapText("lp3_point.map"), "lp3_point.map");
+    const auto nearFrame = settledShadowFrame(*session, inside, 1, false);
+    REQUIRE(nearFrame);
+    REQUIRE(nearFrame->records.size() == 1u);
+    REQUIRE(nearFrame->records[0].lod == 1);
+    setMoving(true);
+    const auto atFar = framesOf(litCamera({-1400, 0, 128}, {1, 0, 0}, {0, 0, 1}), 4);
+    REQUIRE(atFar.size() >= 3u);
+    auto lods = std::vector<std::pair<int, int>>{};
+    for (std::size_t i = 0; i < 3; ++i)
+    {
+      REQUIRE(atFar[i].records.size() == 1u);
+      lods.emplace_back(atFar[i].records[0].lod, atFar[i].records[0].exactLod);
+      CHECK(atFar[i].stats.shadowLodHeld == (i < 2));
+    }
+    REQUIRE(lods[0].second != 1);
+    CHECK(lods[0].first == 1);
+    CHECK(lods[1].first == 1);
+    CHECK(lods[2].first == lods[2].second);
+    CHECK(atFar[2].stats.tilesDrawn == 6u);
+    std::cout << fmt::format(
+      "LP3.3 (j) LOD while moving away: held {} {} then {} (exact {}), {} tiles drawn "
+      "then\n",
+      lods[0].first,
+      lods[1].first,
+      lods[2].first,
+      lods[2].second,
+      atFar[2].stats.tilesDrawn);
+
+    // H11's overflow while moving: the two unplaced lights stay unplaced, no tile moves
+    setMoving(std::nullopt);
+    offer(lp3MapText("lp3_overflow.map"), "lp3_overflow.map");
+    const auto full = settledShadowFrame(
+      *session, litCamera({0, 0, 128}, {1, 0, 0}, {0, 0, 1}), 43, false);
+    REQUIRE(full);
+    REQUIRE(full->stats.lightsUnplaced == 2u);
+    setMoving(true);
+    const auto nudged = framesOf(litCamera({0, 2, 128}, {1, 0, 0}, {0, 0, 1}), 2);
+    REQUIRE_FALSE(nudged.empty());
+    const auto& n = nudged.front();
+    CHECK(n.stats.shadowsMoving);
+    CHECK(n.stats.lightsUnplaced == 2u);
+    CHECK(n.stats.unplacedLights == full->stats.unplacedLights);
+    CHECK(n.stats.tilesDrawn == 0u);
+    CHECK(n.stats.tilesRelocated == 0u);
+    CHECK(n.stats.layoutTiles == 256u);
+    REQUIRE(n.records.size() == full->records.size());
+    auto held = true;
+    for (std::size_t r = 0; r < full->records.size(); ++r)
+    {
+      held = held && n.records[r].light == full->records[r].light
+             && samePlacements(n.records[r], full->records[r]);
+    }
+    CHECK(held);
+    std::cout << fmt::format(
+      "LP3.3 (j) 43 lights while moving: {} unplaced ({}), {} tiles drawn, {} kept\n",
+      n.stats.lightsUnplaced,
+      fmt::join(n.stats.unplacedLights, ", "),
+      n.stats.tilesDrawn,
+      n.stats.tilesCached);
+    setMoving(std::nullopt);
   }
 
   std::cout << fmt::format(
