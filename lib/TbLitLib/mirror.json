@@ -15580,7 +15580,7 @@
           "symbol": "engineGenericDepthDraws"
         }
       ],
-      "note": "LP2.2a step 3 (SC216-SC219, D74, D75, P2.21): the leading SS_SUBVIEW surfaces through the generic path one at a time (DST_COLOR / ZERO, LESS, colour 1, the colour program when no alpha-tested stage drew); the opaque ones with depth (63) and GLS_DEFAULT, the MVP on a space change, no polygon offset; translucent ones skipped; the perforated ones after, through the generic path: per alpha-tested stage whose condition is on, alpha = regs[ color.registers[3] ] (skipped at <= 0 but counted as tried), privatePolygonOffset, GL_Color's clamp, ALPHA_TEST, texture_color (15) with SVC_IGNORE and unit 0 the stage's image through its own sampler, then PrepareStageTexturing; MF_POLYGONOFFSET: GLS_POLYGON_OFFSET with r_offsetfactor 0 and r_offsetunits -600 * polygonOffset; the GLS_ALPHAMASK depth draw when no alpha-tested stage was tried; ALPHA_TEST 0 at the end. depth.ps writes (0, 0, 0, 1), so the prepass paints black"
+      "note": "LP2.2a step 3 (SC216-SC219, D74, D75, P2.21): the leading SS_SUBVIEW surfaces through the generic path one at a time (DST_COLOR / ZERO, LESS, colour 1, the colour program when no alpha-tested stage drew); the opaque ones with depth (63) and GLS_DEFAULT, the MVP on a space change, no polygon offset; translucent ones skipped; the perforated ones after, through the generic path: per alpha-tested stage whose condition is on, alpha = regs[ color.registers[3] ] (skipped at <= 0 but counted as tried), privatePolygonOffset, GL_Color's clamp, ALPHA_TEST, texture_color (15) with SVC_IGNORE and unit 0 the stage's image through its own sampler, then PrepareStageTexturing; MF_POLYGONOFFSET: GLS_POLYGON_OFFSET with r_offsetfactor 0 and r_offsetunits -600 * polygonOffset; the GLS_ALPHAMASK depth draw when no alpha-tested stage was tried; ALPHA_TEST 0 at the end. depth.ps writes (0, 0, 0, 1), so the prepass paints black LP3.4 (D155): the per-draw binding (GL_Color, ALPHA_TEST, unit 0, PrepareStageTexturing) is LitPasses::bindDepthStageDraw, shared with pass 6's perforated draws, and the texgen switch prepareAlphaTestedStage, shared with enginePerforatedShadowDraws; the prepass's draws unchanged"
     },
     {
       "id": "M-PASS-02",
@@ -20912,7 +20912,7 @@
           "symbol": "the [.][feed] tag comment (in none of the [.][litgpu*] suites)"
         }
       ],
-      "note": "LP5.0 step 6 (RUN.md, the director's decisions after LPF.1 (5); P6.24), test only, no engine counterpart: the hidden GPU cases run in two suites, each under the 180 s wall clock in Debug: [.][litgpu] LP0-LP2's (on a GPU, pipelines, GPU resources, lit passes, tonemap and blit; 5 cases, 95.5 / 97.8 / 99.1 s at LP5.0) and [.][litgpu2] LP4's and later ones (ambient pass, light-grid path, live feed, LP5's programs; 4 cases, 59.7 / 59.8 / 60.4 s); LPF.2's host cases stay [.][feed]. Each case makes its own instance, device and session, bounds its waits (H.1) and resets the dispatcher, so either suite runs alone and in any order. The gate measures both and a third tag comes once one passes 150 s. TbUiLib's [.][litgpu] cases are not split LP7.0 step 1 (D134, C56): a third tag, [.][litgpu3], takes LP5's seven cases (LP5.0 programs, LP5.1 math, LP5.2a pass 8, LP5.2b texgens, LP5.F sizes, LP5.3 fog, LP5.G reload); [.][litgpu2] keeps LP4.2a, LP4.3 and LPF.1; [.][litgpu] is unchanged. Debug wall clocks at the split: [litgpu] 92.3 / 95.5 / 92.7 s (5 cases), [litgpu2] 59.1 / 59.4 / 59.0 s (3), [litgpu3] 77.9 / 78.5 / 77.7 s (7). LP7's cases join [litgpu3] until it passes 150 s, then a fourth. The GPU cases' frame-log field count is one constant, FrameLogFields (69 since LP7.0). LP7.4: the first of LP7's, LitSession the .proc's triangles adopted on a GPU, joins [litgpu3] (8 cases, 78.8 s at its first run); LPF.1's frame-log check reads the four adoption counts as numbers, the model and dress counts still 0. LP3.1 step 6 (D160, D161): LitSession shadows on a GPU (LP3.1) joins [litgpu2] (4 cases; the suite's Debug wall clock with it 66.9 / 66.6 / 67.2 s, the case 7.1 / 7.0 / 7.4 s over its seven sections), no fourth tag; FrameLogFields is 91 since LP3.1. LP3.2 (C63): the shadows map's 26 shots join [.][parity] (36,468 assertions; Debug 87 s at LP3.2's run and again at LP3.2-FIX's; 88 and 90 s with 28,685 at the efb290089 and d0d8d8f11 gates), under its 180 s bound; FrameLogFields is 94 since LP3.2 (the per-list shadow-atlas draws, M-SHADOW-STAT-01); LP3.3 (D161): LitSession shadow records on a GPU (LP3.3) joins [litgpu2] (5 cases, 81-82 s at LP3.3's runs), no fourth tag; [.][parity] 87 s (36,468 assertions); FrameLogFields stays 94 (tiles_relocated and tiles_cached are counted now)"
+      "note": "LP5.0 step 6 (RUN.md, the director's decisions after LPF.1 (5); P6.24), test only, no engine counterpart: the hidden GPU cases run in two suites, each under the 180 s wall clock in Debug: [.][litgpu] LP0-LP2's (on a GPU, pipelines, GPU resources, lit passes, tonemap and blit; 5 cases, 95.5 / 97.8 / 99.1 s at LP5.0) and [.][litgpu2] LP4's and later ones (ambient pass, light-grid path, live feed, LP5's programs; 4 cases, 59.7 / 59.8 / 60.4 s); LPF.2's host cases stay [.][feed]. Each case makes its own instance, device and session, bounds its waits (H.1) and resets the dispatcher, so either suite runs alone and in any order. The gate measures both and a third tag comes once one passes 150 s. TbUiLib's [.][litgpu] cases are not split LP7.0 step 1 (D134, C56): a third tag, [.][litgpu3], takes LP5's seven cases (LP5.0 programs, LP5.1 math, LP5.2a pass 8, LP5.2b texgens, LP5.F sizes, LP5.3 fog, LP5.G reload); [.][litgpu2] keeps LP4.2a, LP4.3 and LPF.1; [.][litgpu] is unchanged. Debug wall clocks at the split: [litgpu] 92.3 / 95.5 / 92.7 s (5 cases), [litgpu2] 59.1 / 59.4 / 59.0 s (3), [litgpu3] 77.9 / 78.5 / 77.7 s (7). LP7's cases join [litgpu3] until it passes 150 s, then a fourth. The GPU cases' frame-log field count is one constant, FrameLogFields (69 since LP7.0). LP7.4: the first of LP7's, LitSession the .proc's triangles adopted on a GPU, joins [litgpu3] (8 cases, 78.8 s at its first run); LPF.1's frame-log check reads the four adoption counts as numbers, the model and dress counts still 0. LP3.1 step 6 (D160, D161): LitSession shadows on a GPU (LP3.1) joins [litgpu2] (4 cases; the suite's Debug wall clock with it 66.9 / 66.6 / 67.2 s, the case 7.1 / 7.0 / 7.4 s over its seven sections), no fourth tag; FrameLogFields is 91 since LP3.1. LP3.2 (C63): the shadows map's 26 shots join [.][parity] (36,468 assertions; Debug 87 s at LP3.2's run and again at LP3.2-FIX's; 88 and 90 s with 28,685 at the efb290089 and d0d8d8f11 gates), under its 180 s bound; FrameLogFields is 94 since LP3.2 (the per-list shadow-atlas draws, M-SHADOW-STAT-01); LP3.3 (D161): LitSession shadow records on a GPU (LP3.3) joins [litgpu2] (5 cases, 81-82 s at LP3.3's runs), no fourth tag; [.][parity] 87 s (36,468 assertions); FrameLogFields stays 94 (tiles_relocated and tiles_cached are counted now) LP3.4 (D161): two cases join [.][litgpu2] (LitSession perforated shadows on a GPU (LP3.4): (m) (n) (o); LitSession shadow debug views on the shadows map (LP3.4), which needs TB_LIT_PARITY_ROOT and writes PNGs), 7 cases, its Debug wall clock about 90 s, no fourth tag; FrameLogFields is 95 since LP3.4 (perforated_draws)"
     },
     {
       "id": "M-INTER-02",
@@ -31960,37 +31960,6 @@
       "note": "LP3.1 step 1 (C59, A49): the engine makes _shadowMapAtlas at init and keeps it; the preview makes it at the first frame that places a tile (A49: 256 MB from then on, in the session's VRAM account), clears it whole once then, and releases it in teardown step 2, so a session whose lights never cast holds none and the stop row's allocations are the start's. A failed creation warns once (\"The lit preview cannot make its shadow atlas ...\") and the session draws every light unshadowed"
     },
     {
-      "id": "M-SHADOW-DIFF-06",
-      "kind": "difference",
-      "engine": [
-        {
-          "file": "neo/renderer/RenderBackend.cpp",
-          "lines": [
-            3511,
-            3517
-          ],
-          "anchor": "ShadowMapPassFast: MC_PERFORATED surfaces saved for later",
-          "sha256": "6077eedf0df9bbc965155b2b423300d91e8af061a284c44934ad794625d9555f"
-        },
-        {
-          "file": "neo/renderer/RenderBackend.cpp",
-          "lines": [
-            3577,
-            3581
-          ],
-          "anchor": "ShadowMapPassPerforated( perforatedSurfaces, ... )",
-          "sha256": "71957297b33650a5d24924eda6c3ec276bedb91939dacaf8adcdbc24028ebeaa"
-        }
-      ],
-      "sinkbroom": [
-        {
-          "file": "lib/TbLitLib/src/LitPasses.cpp",
-          "symbol": "LitPasses::shadowMapPass (CastClass::Opaque only), recordShadowAtlas (perforatedCastersSkipped)"
-        }
-      ],
-      "note": "D155 (LP3.1): a Perforated caster (M-SHADOW-CAST-01) is not drawn into the tiles until LP3.4 mirrors ShadowMapPassPerforated (its alpha-tested stages and the !didDraw fallback, K52, K53); each one a placed light leaves out is counted per side (LitFrameStats::perforatedCastersSkipped, the frame log's perforated_skipped). A picture with a perforated caster in a casting light lacks its shadow until then; no parity row has one (every parity light is noshadows 1, K26)"
-    },
-    {
       "id": "M-SHADOW-DIFF-07",
       "kind": "difference",
       "engine": [
@@ -32129,7 +32098,7 @@
           "symbol": "DepthOnlyOutputId (counted as mirrored)"
         }
       ],
-      "note": "LP3.1 (C59): builtin/depth's pixel shader writes a colour at location 0, and the shadow atlas's framebuffer has only its depth attachment, so each pipeline of it there (the tile draw's and the far-plane clear's) makes Vulkan's validation layer report the warning Undefined-Value-ShaderOutputNotConsumed, as it does for the engine under r_useValidationLayers; the write is discarded and nothing else changes. The preview keeps the engine's program; the GPU cases count these warnings apart (2 per session with shadows), like M-PIPE-DEFECT-01's, and every other validation message is 0"
+      "note": "LP3.1 (C59): builtin/depth's pixel shader writes a colour at location 0, and the shadow atlas's framebuffer has only its depth attachment, so each pipeline of it there (the tile draw's and the far-plane clear's) makes Vulkan's validation layer report the warning Undefined-Value-ShaderOutputNotConsumed, as it does for the engine under r_useValidationLayers; the write is discarded and nothing else changes. The preview keeps the engine's program; the GPU cases count these warnings apart (2 per session with shadows), like M-PIPE-DEFECT-01's, and every other validation message is 0 LP3.4: texture_color (15), the perforated shadow pass's program, writes a colour into the atlas too, so its pipelines there make the same warning, counted the same way"
     },
     {
       "id": "M-SHADOW-TABLE-03",
@@ -32291,7 +32260,7 @@
           "symbol": "LitSession parity rows: parityShadowCount, the row .json's shadow counters and unplaced_lights"
         }
       ],
-      "note": "LP3.2 (C63, section 5; SC741-SC746; P3.8-P3.12, P3.20, P3.21, P3.28), test only: the shadows parity map, the sixth of MAPS, maps/test/litpreview_shadows.map with materials/lp3_parity.mtr and textures/lp3p/ (the LP2 map's wall, floor, crate and light images; LP3.1's synthetic lp3_shadows.mtr and textures/lp3/ are other files), shot after the models map with r_skipAmbient 1: thirteen sealed rooms 1024 apart, each with an entity, the first parity lights that cast (noshadows 0; every other map's stay noshadows 1, SC744), every occluder an entity 16 or more from a point light's origin, every camera at EYE inside its light's volume but H10's, every light, register and stage time-invariant (F4). H01 a point light and a func_static box (six tiles at 512: a point light never takes LOD 0), H02 a spot (one tile at 512, the camera off its origin), H03 a parallel light (light_center -200 30 160, its box ending 12 below the ceiling, SC744; the camera at x 160 looking east, the far wall 224 deep, every lit receiver nearer than cascade 0's split 270.8: four cascades at 1024, cascade 0 alone sampled), H04 and H08 perforated grates (M-PARITY-07), H05 a noSelfShadow far wall on the local list (SC709), H06 a noshadows box, H07 LP7.2's n01.obj, H09 a translucent panel across the box's shadow (D154: shadowed; a caster that draws nothing), H10 LOD 2 from outside a small volume (six tiles at 256, atlas_bytes_written 1,572,864; MOC off, M-PARITY-04), H11 the overflow (M-PARITY-06), H12 P03's shadowing variant on a sealed pair (the shared wall's room-A face lp3p/wall_noshadows, the panel's side face lit through A, B's walls black), H13 P04's out-of-view caster on a doorway pair (M-PARITY-08); controls CH01-CH13 black on the lights-off variant. The row table's expect adds pass 6's counters (lights_casting, lights_placed, lights_unplaced, tiles_drawn, shadow_draws, perforated_skipped, atlas_bytes_written: tiles x size^2 x 4, which pins the LOD) and the per-list shadow-atlas draws (M-SHADOW-STAT-01). The preview's dress rehearsal before the run (single-room scratch maps, the BSP root for H12/H13) changed H11's colour to 0.012. The one engine run of LP3 (2026-10-27 06:25-06:48: bake 130 s, run-a 466 s, run-b 467 s; the game folder's proof listing 21,261 before and after every process; engine_repeat_max 0 for all 210 shots); parity.cfg 53,397 bytes under the 56 KB bound (MAX_CMD_BUFFER 64 KB). Compare at LP3.2-FIX: 206 of 206 gated rows pass, 4 reported; H01-H03, H05-H07 and H09-H13 exact (max 0; H03 since C57 rev 2.3, M-SHADOW-DIFF-08), thresholds lit_min alone; H05 against H01 240 pixels at max 1 in both the engine's and the preview's shots (P3.10: two rooms, not bit-equal); the 184 older rows identical to the gate's compare at d0d8d8f11"
+      "note": "LP3.2 (C63, section 5; SC741-SC746; P3.8-P3.12, P3.20, P3.21, P3.28), test only: the shadows parity map, the sixth of MAPS, maps/test/litpreview_shadows.map with materials/lp3_parity.mtr and textures/lp3p/ (the LP2 map's wall, floor, crate and light images; LP3.1's synthetic lp3_shadows.mtr and textures/lp3/ are other files), shot after the models map with r_skipAmbient 1: thirteen sealed rooms 1024 apart, each with an entity, the first parity lights that cast (noshadows 0; every other map's stay noshadows 1, SC744), every occluder an entity 16 or more from a point light's origin, every camera at EYE inside its light's volume but H10's, every light, register and stage time-invariant (F4). H01 a point light and a func_static box (six tiles at 512: a point light never takes LOD 0), H02 a spot (one tile at 512, the camera off its origin), H03 a parallel light (light_center -200 30 160, its box ending 12 below the ceiling, SC744; the camera at x 160 looking east, the far wall 224 deep, every lit receiver nearer than cascade 0's split 270.8: four cascades at 1024, cascade 0 alone sampled), H04 and H08 perforated grates (M-PARITY-07), H05 a noSelfShadow far wall on the local list (SC709), H06 a noshadows box, H07 LP7.2's n01.obj, H09 a translucent panel across the box's shadow (D154: shadowed; a caster that draws nothing), H10 LOD 2 from outside a small volume (six tiles at 256, atlas_bytes_written 1,572,864; MOC off, M-PARITY-04), H11 the overflow (M-PARITY-06), H12 P03's shadowing variant on a sealed pair (the shared wall's room-A face lp3p/wall_noshadows, the panel's side face lit through A, B's walls black), H13 P04's out-of-view caster on a doorway pair (M-PARITY-08); controls CH01-CH13 black on the lights-off variant. The row table's expect adds pass 6's counters (lights_casting, lights_placed, lights_unplaced, tiles_drawn, shadow_draws, perforated_skipped, atlas_bytes_written: tiles x size^2 x 4, which pins the LOD) and the per-list shadow-atlas draws (M-SHADOW-STAT-01). The preview's dress rehearsal before the run (single-room scratch maps, the BSP root for H12/H13) changed H11's colour to 0.012. The one engine run of LP3 (2026-10-27 06:25-06:48: bake 130 s, run-a 466 s, run-b 467 s; the game folder's proof listing 21,261 before and after every process; engine_repeat_max 0 for all 210 shots); parity.cfg 53,397 bytes under the 56 KB bound (MAX_CMD_BUFFER 64 KB). Compare at LP3.2-FIX: 206 of 206 gated rows pass, 4 reported; H01-H03, H05-H07 and H09-H13 exact (max 0; H03 since C57 rev 2.3, M-SHADOW-DIFF-08), thresholds lit_min alone; H05 against H01 240 pixels at max 1 in both the engine's and the preview's shots (P3.10: two rooms, not bit-equal); the 184 older rows identical to the gate's compare at d0d8d8f11 LP3.4 (D155, D156): H04 and H08 are exact rows since LP3.4 step 3 (max 0 against LP3.2's shots, no second engine run; thresholds lit_min 360067 each), their expect perforated_skipped 0 and tiles_provisional 0 in the row table; rows.json's copy of the expect, written by parity.py run, still holds LP3.2's perforated_skipped {\"min\": 1} until the next run (or the director's refresh), which [.][parity] and compare read"
     },
     {
       "id": "M-PARITY-04",
@@ -32393,33 +32362,6 @@
       "note": "LP3.2 (D162, D148, D145; P3.1), test only: H11 is D162's test of the order mirror against the game. 43 point lights at 512 in one area (a 4 x 4 x 3 grid of origins, the first 43 in spawn order, every volume holding the camera, so every scissor is the whole view and every area ties), each _color 0.012: the copied TileMap and idSort_Quick over the mirrored viewLights order leave viewLights 0 and 21 without a tile, lp3p_h11_42 and lp3p_h11_21 (the first acceptances prepended: the last spawned light is viewLights 0), drawn with the plain program while their placed sides are still drawn (SC720); lights_placed 41, lights_unplaced 2, tiles_drawn 256, and the engine shot agrees: exact (max 0), D162's diagnostic fallback not taken. The engine prints nothing about the overflow (failedNum's line is commented out). A C library other than the UCRT may order the ties its own way (K48, M-SHADOW-DIFF-01)"
     },
     {
-      "id": "M-PARITY-07",
-      "kind": "temporary",
-      "testOnly": true,
-      "engine": [
-        {
-          "file": "neo/renderer/tr_frontend_addmodels.cpp",
-          "lines": [
-            1018,
-            1154
-          ],
-          "anchor": "R_AddSingleModel: a perforated material casts whatever its noShadows (r_forceShadowMapsOnAlphaTestedSurfaces)",
-          "sha256": "a2bf3656e607376e6874d512bc43ddf9dd207d3cf8f60806718bceccb10c8fc6"
-        }
-      ],
-      "sinkbroom": [
-        {
-          "file": "TOOLS/lit-preview/parity.py",
-          "symbol": "the rows H04 and H08 (diagnostic), lp3p/grate and lp3p/grate_noshadows"
-        },
-        {
-          "file": "lib/TbLitLib/src/LitPasses.cpp",
-          "symbol": "LitPasses::shadowMapPass (perforatedCastersSkipped, M-SHADOW-DIFF-06)"
-        }
-      ],
-      "note": "LP3.2 (D155, C57, SC738), test only, until LP3.4: H04 (a one-sided perforated grate, lp3p/grate: alpha test 0.5, no polygonOffset, nopicmip, a 64 x 64 image) and H08 (the same with noShadows, lp3p/grate_noshadows: a perforated material casts whatever its noShadows says, r_forceShadowMapsOnAlphaTestedSurfaces 1) are diagnostic rows: the engine's shots, taken in LP3.2's one run, have the grate's shadow over the far wall; the preview skips perforated casters (perforated_skipped 1, M-SHADOW-DIFF-06), max 123 on both rows, their controls black and gated. LP3.4 mirrors the perforated path and gates both rows on these shots, without a new engine run"
-    },
-    {
       "id": "M-PARITY-08",
       "kind": "difference",
       "testOnly": true,
@@ -32482,7 +32424,7 @@
           "symbol": "the header and the row (94 fields)"
         }
       ],
-      "note": "LP3.2 step 1 (D157 extended; SC709, P3.10): LitFrameStats counts per list the interaction draws whose program is a shadow-atlas one (interactionSM, builtins 39-49 of engineInteractionProgram, beside engineShadowAtlasProgram): smDrawsLocal, smDrawsGlobal, smDrawsTranslucent (countInteractionDraw, on the render thread as the draws are recorded); the plain draws are the rest of interaction_draws. The frame log gains sm_draws_local, sm_draws_global and sm_draws_translucent after set11_writes (91 to 94 columns; FrameLogFields 94; TbUiLib's column counts in tst_LitPreviewPanel.cpp and tst_LitMeasure.cpp), the [.][parity] row .json the shadow counters a row can pin with the atlas's unplaced lights by name, the expect chain the same keys (a number or a minimum). The CPU test: a placed light with a surface on each list counts 1 / 1 / 1, an unplaced light none (K26), interactionAmbient none. SC709 shown on H05: the far wall's noSelfShadow surface drawn on the local list with the shadow-atlas program (sm_draws_local 1, global 6), H09's translucent panel on the translucent list (1). On admin (Release, LP3.2-FIX's measurement) the settled start view draws 41 / 628 / 4 of its 828 interactions with the shadow-atlas programs, the orbit p95 43 / 691-692 / 4"
+      "note": "LP3.2 step 1 (D157 extended; SC709, P3.10): LitFrameStats counts per list the interaction draws whose program is a shadow-atlas one (interactionSM, builtins 39-49 of engineInteractionProgram, beside engineShadowAtlasProgram): smDrawsLocal, smDrawsGlobal, smDrawsTranslucent (countInteractionDraw, on the render thread as the draws are recorded); the plain draws are the rest of interaction_draws. The frame log gains sm_draws_local, sm_draws_global and sm_draws_translucent after set11_writes (91 to 94 columns; FrameLogFields 94; TbUiLib's column counts in tst_LitPreviewPanel.cpp and tst_LitMeasure.cpp), the [.][parity] row .json the shadow counters a row can pin with the atlas's unplaced lights by name, the expect chain the same keys (a number or a minimum). The CPU test: a placed light with a surface on each list counts 1 / 1 / 1, an unplaced light none (K26), interactionAmbient none. SC709 shown on H05: the far wall's noSelfShadow surface drawn on the local list with the shadow-atlas program (sm_draws_local 1, global 6), H09's translucent panel on the translucent list (1). On admin (Release, LP3.2-FIX's measurement) the settled start view draws 41 / 628 / 4 of its 828 interactions with the shadow-atlas programs, the orbit p95 43 / 691-692 / 4 LP3.4 (D155): perforated_draws, the perforated casters' shadow draws (LitFrameStats::perforatedShadowDraws), the 95th and last column (FrameLogFields 95; TbUiLib's counts 95)"
     },
     {
       "id": "M-SHADOW-DIFF-08",
@@ -32581,7 +32523,7 @@
           "symbol": "LitSession shadow records on a GPU (LP3.3): (h), (l)"
         }
       ],
-      "note": "LP3.3 steps 1 and 2 (C61, D146, D150; P3.6, P3.7, P3.27; S36): the engine clears the whole atlas and draws every placed side every frame; the preview keeps one record per light whose tiles are in the layout (ShadowCache, keyed by its preview id) with its key: shadowLightVersion (the projection, origin, axis, lightCenter and radius, pointLight and parallel, noShadows as UpdateLightDef leaves it, the casting shader's flags and spectrum, hasVolume, areaNum, hasAreaTree and the derived.areas list; never the colour or the record's version), the LOD, the caster hash and count (the sum of shadowCasterTerm over ViewLight::casters: the chunk's or instance's key and which, its caster version, its space's model matrix (SC739: the entity transform, origin, axis, modelscale), its cast class and its AreaSurface's kind, area and whether its references are empty, added in the frontend's gathering as each caster is kept, after lightReachesCaster, the volume's cull, the spectrum and the light triangles admitted it), a reserved perforated field (P3.6, LP3.4's), the nineteen shadow cvars by value (ShadowCvars) and the bake generation (LitPasses' count of the tree and AreaData pointers, tree presence in its low bit); per side the tile's rect, whether it was drawn whole, the shadowV / shadowP it was drawn with, its draws and its frame. A tile is drawn again when the key differs, it was not drawn whole (a draw or its clear skipped, a draw dropped for the budget, a caster's light triangles pending: drawn whole, drawn again once known) or its side's matrices differ; else cached (no clear, no draws), byte-identical to a fresh draw. Layers and filters reach the key through the caster set (a hidden entity has no space, a hidden light leaves the layout). A record goes when its light takes no tiles (it stopped casting, left the view, or was removed: nodesWereRemoved reaches the frame as the light's absence from the table), when none of its sides has a tile, and on Stop (documentWasLoaded stops the session, D41); releaseAll clears it. LitFrameStats::layoutTiles, layoutShadowDraws and layoutAtlasBytes (the tiles a frame samples, with what each was last drawn with) are what [.][parity]'s rows report as tiles_drawn, shadow_draws and atlas_bytes_written, so a row's counts do not depend on which of its frames settled: compare 206 of 206 gated rows, cmpident 0 differences over 210 rows against the gate at cba91682b. The CPU test moves the hash with a caster's version, transform (move, rotation, scale), cast class and membership (an entity without references, a caster entering) and the light version with its origin, radius, noshadows, area references and areaNum, never with the light's colour, a caster's _color or a UV drag; [.][litgpu2] case (h): a still scene's second settled frame 0 tiles drawn, 6 cached, 0 shadow draws, the atlas and the picture equal; every tile drawn again byte-identical (4,194,304 texels); a UV drag 0 tile clears or draws; a moved occluder 12 tile clears (the first frame's casters pending, then known); noshadows drops the record, casting again remakes it. Admin (Release x2): the settled start view 66 tiles cached and 0 shadow draws (LP3.2-FIX: 66 drawn, 1,059 draws); the orbit's tiles cached per frame median 12, p95 96, max 120, drawn median 0, p95 6, max 36, shadow draws median 0, p95 127 / 119, max 522 (296 / 1,429 / 1,454 before), pass 6's CPU p95 0.41 / 0.35 ms (2.34 / 2.40), the CPU record p95 22.28 / 20.12 ms (25.09 / 24.78; the 10 ms budget still missed, LP6)"
+      "note": "LP3.3 steps 1 and 2 (C61, D146, D150; P3.6, P3.7, P3.27; S36): the engine clears the whole atlas and draws every placed side every frame; the preview keeps one record per light whose tiles are in the layout (ShadowCache, keyed by its preview id) with its key: shadowLightVersion (the projection, origin, axis, lightCenter and radius, pointLight and parallel, noShadows as UpdateLightDef leaves it, the casting shader's flags and spectrum, hasVolume, areaNum, hasAreaTree and the derived.areas list; never the colour or the record's version), the LOD, the caster hash and count (the sum of shadowCasterTerm over ViewLight::casters: the chunk's or instance's key and which, its caster version, its space's model matrix (SC739: the entity transform, origin, axis, modelscale), its cast class and its AreaSurface's kind, area and whether its references are empty, added in the frontend's gathering as each caster is kept, after lightReachesCaster, the volume's cull, the spectrum and the light triangles admitted it), a reserved perforated field (P3.6, LP3.4's), the nineteen shadow cvars by value (ShadowCvars) and the bake generation (LitPasses' count of the tree and AreaData pointers, tree presence in its low bit); per side the tile's rect, whether it was drawn whole, the shadowV / shadowP it was drawn with, its draws and its frame. A tile is drawn again when the key differs, it was not drawn whole (a draw or its clear skipped, a draw dropped for the budget, a caster's light triangles pending: drawn whole, drawn again once known) or its side's matrices differ; else cached (no clear, no draws), byte-identical to a fresh draw. Layers and filters reach the key through the caster set (a hidden entity has no space, a hidden light leaves the layout). A record goes when its light takes no tiles (it stopped casting, left the view, or was removed: nodesWereRemoved reaches the frame as the light's absence from the table), when none of its sides has a tile, and on Stop (documentWasLoaded stops the session, D41); releaseAll clears it. LitFrameStats::layoutTiles, layoutShadowDraws and layoutAtlasBytes (the tiles a frame samples, with what each was last drawn with) are what [.][parity]'s rows report as tiles_drawn, shadow_draws and atlas_bytes_written, so a row's counts do not depend on which of its frames settled: compare 206 of 206 gated rows, cmpident 0 differences over 210 rows against the gate at cba91682b. The CPU test moves the hash with a caster's version, transform (move, rotation, scale), cast class and membership (an entity without references, a caster entering) and the light version with its origin, radius, noshadows, area references and areaNum, never with the light's colour, a caster's _color or a UV drag; [.][litgpu2] case (h): a still scene's second settled frame 0 tiles drawn, 6 cached, 0 shadow draws, the atlas and the picture equal; every tile drawn again byte-identical (4,194,304 texels); a UV drag 0 tile clears or draws; a moved occluder 12 tile clears (the first frame's casters pending, then known); noshadows drops the record, casting again remakes it. Admin (Release x2): the settled start view 66 tiles cached and 0 shadow draws (LP3.2-FIX: 66 drawn, 1,059 draws); the orbit's tiles cached per frame median 12, p95 96, max 120, drawn median 0, p95 6, max 36, shadow draws median 0, p95 127 / 119, max 522 (296 / 1,429 / 1,454 before), pass 6's CPU p95 0.41 / 0.35 ms (2.34 / 2.40), the CPU record p95 22.28 / 20.12 ms (25.09 / 24.78; the 10 ms budget still missed, LP6) LP3.4 (C61, P3.6): the key's perforated field is filled (M-SHADOW-COPY-08): the frontend's sum of shadowPerforatedTerm and pass 6's image terms"
     },
     {
       "id": "M-SHADOW-DIFF-10",
@@ -32734,6 +32676,295 @@
         }
       ],
       "note": "LP3.3 step 4 (D152, K13, P3.7, Q38's default): the engine sets every side's matrices up from the current view and draws every cascade every frame; while the camera moves the preview redraws at most MovingCascadeBudget (2) parallel cascades a frame whose matrices alone changed, the stalest first (the tile drawn longest ago, then viewLights order and side), the others stale and sampled with the shadowV / shadowP they were drawn with (the frame's record holds them, setInteractionSpace reads nothing else; rpCascadeDistances are the current view's), counted among the cached (LitFrameStats::cascadesStale); a record change redraws every cascade, a settling frame every stale one. Case (j): after a move two cascades drawn and two stale with their stored matrices, the two stale ones in the next frame; after a second move the two drawn longest ago first"
+    },
+    {
+      "id": "M-SHADOW-COPY-08",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3171,
+            3388
+          ],
+          "anchor": "ShadowMapPassPerforated",
+          "sha256": "f7400677719b8d300211cd7f7e16b271e8bdbe1b37c9c8121c9be319833cd5f5"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3511,
+            3517
+          ],
+          "anchor": "ShadowMapPassFast: a perforated surface saved for later drawing",
+          "sha256": "6077eedf0df9bbc965155b2b423300d91e8af061a284c44934ad794625d9555f"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3576,
+            3581
+          ],
+          "anchor": "ShadowMapPassFast: ShadowMapPassPerforated after the side's opaque surfaces",
+          "sha256": "6930d580ec29d1f6b76fc3e9873ffa603d4b2c7ab3c28abee027395a6e68d19e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.h",
+          "symbol": "PerforatedShadowState, enginePerforatedShadowOpening, enginePerforatedShadowDraws"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "enginePerforatedShadowOpening, enginePerforatedShadowDraws, prepareAlphaTestedStage (shared with engineGenericDepthDraws)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::shadowMapPass (the perforated loop after the opaque one), bindDepthStageDraw (shared with genericDepth), recordShadowAtlas (loop 1: the perforated casters' part of the key, perforatedCastersSkipped)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (a Perforated caster's registers, provisional flag and term of ViewLight::perforatedHash)"
+        },
+        {
+          "file": "lib/TbLitLib/src/ShadowCache.h",
+          "symbol": "ShadowRecordKey::perforated, shadowPerforatedTerm, shadowPerforatedImageTerm, ShadowTileRecord::provisional"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitStagePass.cpp",
+          "symbol": "LitStagePass: the perforated shadow pass's stage draws (LP3.4, D155, K52)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitPasses.cpp",
+          "symbol": "LitPasses: the shadow records' versions and caster hash (LP3.3, C61, D150): the LP3.4 sections"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession perforated shadows on a GPU (LP3.4): (m), (n)"
+        }
+      ],
+      "note": "LP3.4 steps 1 and 2 (D155, D156, C57, C61; SC723, SC737; P3.6, P3.23): the shadow pass's perforated half as the engine runs it, nothing copied. Per side, after the light's opaque casters, the light's Perforated casters (the fast pass saves them and calls ShadowMapPassPerforated after its loop, :3576-3581) in the preview's chunk and instance order (K52, M-SHADOW-DIFF-14), each culled by D149 as the opaque ones and drawn with the opaque casters' MVP rule. enginePerforatedShadowDraws( material, registers, carried ) mirrors the surface loop :3272-3385: the surface state 0 (FRONTSIDED, LESS, depth written, no shadow offset: E-LIT-12, M-SHADOW-DEFECT-02); MF_POLYGONOFFSET adds GLS_POLYGON_OFFSET with GL_PolygonOffset( r_offsetFactor, r_offsetUnits x polygonOffset ) set at the surface's start; per stage hasAlphaTest alone, a condition register of 0 skips it, once one is tried didDraw is set, the colour ( 0, 0, 0, the alpha register ), an alpha <= 0 skips its draw, privatePolygonOffset for the stage then the surface's offset again; texture_color (15; never 17, no skinned model, P3.24e) with ALPHA_TEST, SVC_IGNORE, unit 0 the stage's image and PrepareStageTexturing's texture matrix and texgen (a cube or sky texgen's program replacing it as LP5.2b's prepass rule: none of them clips, the stage writes the whole surface; TG_REFLECT_CUBE2 not drawn, M-STAGE-DIFF-05); no alpha-tested stage tried: one depth (63) draw under the state the side's call carries (the last GL_State's bits and GL_PolygonOffset), which opens as the engine's call does (:3191-3222: GLS_POLYGON_OFFSET and r_shadowMapOccluderFacing 2's TWOSIDED with ( 2, 1 ), the opaque casters' state; enginePerforatedShadowOpening). The parse moves a diffuse map's alpha test onto its SL_COVERAGE stage (Material.cpp:2297-2330, TD_COVERAGE), which is the stage drawn. The registers are the gathering's at view time, carried on the caster entry (evaluated once per build with the entity's shaderParms, as the surfaces' are); a caster whose material or registers are pending is drawn solid as an opaque caster and its tile provisional (D77, K53, M-SHADOW-DIFF-15). The record key's perforated field (C61, P3.6) is the frontend's sum of shadowPerforatedTerm (the id, the material entry's revision, the draws the registers decide) plus each alpha-tested stage image's completeness and version while complete; an opaque caster's appearance stays out (S36). perforatedCastersSkipped counts the perforated casters whose on stage pass 6 cannot draw (a texture_color stage without an image, TG_REFLECT_CUBE2), once per light and frame; the frame log's perforated_draws (the 95th column) the perforated casters' draws. Tests: the truth table on H04's and H08's grates and seven cases; the hash's register, revision and condition-parm edits; the grate's tile read back (bars at the drawn face's depth, holes at the far clear, 53.5 % bars, the noShadows grate texel-identical). H04 and H08 are exact against LP3.2's shots (max 0)"
+    },
+    {
+      "id": "M-SHADOW-DEFECT-02",
+      "kind": "known-defect",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3333,
+            3333
+          ],
+          "anchor": "ShadowMapPassPerforated: GL_State( stageGLState )",
+          "sha256": "c3505f2d7f7feb193e5a8d7c9ea594e3362f52226afbd7f17402aa864994bc7a"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3372,
+            3384
+          ],
+          "anchor": "ShadowMapPassPerforated: the !didDraw fallback under the state left",
+          "sha256": "1dbbd95b5fbfd9dab1676e6156e5cc98b2660b1d457714510d05cd64a7ffaec8"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "enginePerforatedShadowDraws (the stage's state, the carried fallback state)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::shadowMapPass (carried from caster to caster in a side)"
+        }
+      ],
+      "note": "LP3.4 (D155, E-LIT-12, SC723): GL_State( stageGLState ) replaces the pass's state for a perforated stage's draw: the shadow polygon offset and the two-sided cull of the opaque casters are gone (FRONTSIDED, no offset unless MF_POLYGONOFFSET or privatePolygonOffset), so a grate draws one face only into the tile (case (m): the face away from the light, bars at its depth exactly) and with no slope bias; the !didDraw fallback draws builtin/depth under whatever GL_State and GL_PolygonOffset the call left, the previous perforated surface's stage state or the call's opening state, which depends on the order of the side's surfaces (K52). The preview keeps both as the engine has them"
+    },
+    {
+      "id": "M-SHADOW-DIFF-14",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3372,
+            3384
+          ],
+          "anchor": "ShadowMapPassPerforated: the !didDraw fallback",
+          "sha256": "1dbbd95b5fbfd9dab1676e6156e5cc98b2660b1d457714510d05cd64a7ffaec8"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3511,
+            3517
+          ],
+          "anchor": "ShadowMapPassFast: the perforated surfaces in the light's chain order",
+          "sha256": "6077eedf0df9bbc965155b2b423300d91e8af061a284c44934ad794625d9555f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::shadowMapPass (ViewLight::casters' order: chunk order, then instance order)"
+        }
+      ],
+      "note": "LP3.4 (K52, D155, P3.23): the engine's side call walks the perforated surfaces in the order of the light's interaction chain; the preview walks the light's casters in its own chunk and instance order, so the state a !didDraw fallback inherits (M-SHADOW-DEFECT-02) can differ where two perforated casters share a side and the second has no alpha-tested stage on. H04's and H08's single grate never reaches the fallback"
+    },
+    {
+      "id": "M-SHADOW-DIFF-15",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3348,
+            3350
+          ],
+          "anchor": "ShadowMapPassPerforated: the stage's image bound (loaded before the engine draws)",
+          "sha256": "896f0412212c8c073ad4fff929e9e9795bdf875a52f261c3f2a6a9d11cf54737"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::bindDepthStageDraw (the slot's completeness), shadowMapPass (drawn.provisional), recordShadowAtlas (tilesProvisional, the tile's provisional flag)"
+        },
+        {
+          "file": "lib/TbLitLib/src/ShadowCache.h",
+          "symbol": "ShadowTileRecord::provisional, shadowPerforatedImageTerm"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession perforated shadows on a GPU (LP3.4): (n)"
+        }
+      ],
+      "note": "LP3.4 (K53, D156, D88), no engine counterpart: the engine loads its images before it draws; the preview draws a perforated caster with what its stage image's slot binds while the slot is not complete (Pending or Loading: the usage's intrinsic or the levels written so far; Default is final) or while the caster's material or registers are pending (drawn solid) or not current, and marks the tile provisional: not valid, so drawn again at the next pass 6, counted by tilesProvisional apart from LP3.3's other reasons a tile is not valid, the light's frame record flagged, shadowsPending set (the frame unconverged; the uploads or the table's answer trigger the next). A complete image moves the key's image term, so the light's tiles are drawn once more and then kept. Never a settled picture with a provisional tile. Case (n): the grate's slot dropped with uploads off: three frames with the grate's tile provisional (its stand-in's alpha 0: no bars), then uploads on: each of the light's six tiles drawn once, the grate's texels as before, then all kept"
+    },
+    {
+      "id": "M-SHADOW-DIFF-16",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            218,
+            218
+          ],
+          "anchor": "r_showShadowMaps: declared, read nowhere",
+          "sha256": "b49af705dfcde7f73a110007f84b5e556318b26c7bc75c1d900aa591bbfe8359"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            1115,
+            1117
+          ],
+          "anchor": "BindShader_DebugShadowMap: called nowhere",
+          "sha256": "4e489adec35790d9beeac4c95d94adf150216b1f1cda407b039a80263c976ac6"
+        },
+        {
+          "file": "neo/shaders/builtin/debug/debug_shadowmap.vs.hlsl",
+          "lines": [
+            44,
+            47
+          ],
+          "anchor": "debug_shadowmap.vs: VS_OUT's position on POSITION, not SV_Position",
+          "sha256": "e9c36d2f6de7db03b2f93b65f58856ff0ab35063d57826a2df73058ecf8fa6d3"
+        },
+        {
+          "file": "neo/shaders/builtin/debug/debug_shadowmap.ps.hlsl",
+          "lines": [
+            36,
+            38
+          ],
+          "anchor": "debug_shadowmap.ps: t_t1 at set 1 t0, LinearSampler at set 2 s0",
+          "sha256": "e8d49f5cb966a4f07baa3376526042f7802bb6ab624dbf604bf508a39e9a0d6d"
+        },
+        {
+          "file": "neo/shaders/builtin/debug/debug_shadowmap.ps.hlsl",
+          "lines": [
+            52,
+            58
+          ],
+          "anchor": "debug_shadowmap.ps: SampleLevel( tc.xy, rpScreenCorrectionFactor.x )",
+          "sha256": "3f71f288c7386621b45fcb0cb6ee65a561f73ce66ea319e857cbc3b86dddd7ac"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            2331,
+            2331
+          ],
+          "anchor": "BindShader_Texture: builtin/texture in use by the engine",
+          "sha256": "df53e5676b92f47f74db880075f90f00aa23e6b0cfb7d5c19c25b940156f9e50"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/LitSession.h",
+          "symbol": "DebugView, LitSession::setDebugView, debugView"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordDebugView, bindingSets (the atlas at the TEXTURE layout's t0)"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::recordTonemap (beforeBlit), setDebugView"
+        },
+        {
+          "file": "lib/TbLitLib/src/TonemapPasses.cpp",
+          "symbol": "TonemapPasses::record (beforeBlit between the tonemap pass and the blit)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineBuiltins.h",
+          "symbol": "EngineBuiltinDebugShadowMap, EngineBuiltinTextured"
+        },
+        {
+          "file": "lib/TbUiLib/src/LitPreviewPanel.cpp",
+          "symbol": "the debug-view combo box beside the status line"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession perforated shadows on a GPU (LP3.4): (o); LitSession shadow debug views on the shadows map (LP3.4)"
+        }
+      ],
+      "note": "LP3.4 step 4 (D158, R5.15, D7), no engine counterpart: the engine at 285ea4d1 declares r_showShadowMaps and BUILTIN_DEBUG_SHADOWMAP but draws neither. The preview's debug views, chosen in the Lit panel (none by default, never by [.][parity] or [.][measure]), draw into ldrFBO after the tonemap pass and before the blit. ShadowAtlas: the 8192² atlas fitted to the view's largest centred square by debug_shadowmap's contract (D147's clip-space quad, the identity MVP, texcoords 0..1 by TEXGEN_0 from its positions with the atlas's first row at the top, level 0, the atlas at set 1 t0, the linear clamp at set 2 s0): each texel's depth in red. It is drawn with the engine's builtin/texture (14, BINDING_LAYOUT_TEXTURE: the same vertex shader, tex.Sample( samp0 ) times rpColor 1), because debug_shadowmap itself cannot draw on Vulkan: its vertex shader writes the clip position to POSITION, not SV_Position, so the SPIR-V has no gl_Position and a vec4 output at location 0 where the fragment shader reads a vec2 (validation VUID-RuntimeSpirv-maintenance4-06817 at the pipeline's creation; nothing rasterized) - an engine defect for the user (E-LIT-15), seen in LP3.4's first run of case (o). TileAge: that picture and every kept tile's rect through builtin/color (1) at alpha 0.5: provisional magenta, relocated this frame blue, drawn this frame green, cached from yellow (age 1) to red (age 64 and more) by log2( age ) / 6. Case (o) checks both pixel by pixel against the atlas's read-back; the PNGs of H01 and H11 are the director's"
+    },
+    {
+      "id": "M-SHADOW-DIFF-17",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            3882,
+            3897
+          ],
+          "anchor": "ShadowAtlasPass: failedNum counted, its print commented out",
+          "sha256": "b613d02d4e0df5eed9c27a2c4a95ea6b52767154a3120dbcd44160691bb8a16f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/LitSession.h",
+          "symbol": "SessionStatus::lightsUnshadowed, unshadowedLights; sessionStatusTooltip"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitSession.cpp",
+          "symbol": "sessionStatusLine (', N unshadowed (atlas full)'), sessionStatusTooltip"
+        },
+        {
+          "file": "lib/TbUiLib/src/LitPreviewPanel.cpp",
+          "symbol": "the status label's tooltip"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession: the panel's status line (D9, LP2.3)"
+        }
+      ],
+      "note": "LP3.4 step 5 (D158, P3.25, Q40's default), no engine counterpart: the engine says nothing of the lights the atlas leaves without a tile (E-LIT-13); the Lit panel's one status line says ', N unshadowed (atlas full)' after its lights clause and its tooltip names them on a second line ('unshadowed: <names>', viewLights order), from LitFrameStats::lightsUnplaced and unplacedLights"
     }
   ],
   "retired": [
@@ -32781,6 +33012,16 @@
       "id": "M-SHADOW-TEMP-01",
       "commit": "127fb457b",
       "reason": "the settle scaffolding is live since LP3.3 step 5: the still timer's scope (shadowSettleWanted) and the shadows' convergence term (shadowsPending) are filled by pass 6, and FramePacer::cameraMoving decides the moving frames (M-SHADOW-DIFF-12)"
+    },
+    {
+      "id": "M-PARITY-07",
+      "commit": "ff48315c6",
+      "reason": "LP3.4 step 3 (D155): H04 and H08 are exact rows on LP3.2's shots (max 0), the perforated path mirrored (M-SHADOW-COPY-08); the gated rows are M-PARITY-03's"
+    },
+    {
+      "id": "M-SHADOW-DIFF-06",
+      "commit": "6f033953f",
+      "reason": "LP3.4 step 2 (D155): perforated casters are drawn into the tiles (M-SHADOW-COPY-08); perforatedCastersSkipped counts only the stages pass 6 cannot draw"
     }
   ]
 }
