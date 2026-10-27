@@ -2504,6 +2504,7 @@
 "num_styles" "1"
 "light_style0" "m"
 "math_style" "0"
+"ls_frametime" "1"
 "texture" "lights/lp2/round"
 "_color" "1 1 1"
 "noshadows" "1"
