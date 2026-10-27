@@ -904,13 +904,34 @@ private:
     ImageSlots& images, const MaterialImageKey& key);
   // C47, D9: a newStage stage's program row, looked up once per name (null: missing)
   const EngineMaterialProgram* materialProgram(Frame& frame, const MaterialStage& stage);
-  // RenderInteractions for one list; false when the pass is disabled
+  // RenderInteractions for one list; false when the pass is disabled. LP3.1 (C60):
+  // shadow is the light's record when pass 6 placed it in the atlas (shadowRecordOf)
   bool renderInteractions(
     Frame& frame,
     const ViewLight& light,
+    const ShadowLightRecord* shadow,
     const std::vector<LitSurface>& surfaces,
     InteractionList list,
     std::uint64_t depthFunc);
+  /**
+   * LP3.1 (C60, SC727): RenderInteractions' shadow parms (RenderBackend.cpp:1784-1866)
+   * under !r_skipShadows && shadowLOD > -1, placed or not: jitterTexOffset ( 1 / 512, 1 /
+   * 512, 0, 0 ) (the jitter pinned), a parallel light's rpCascadeDistances the split
+   * distances; placed: screenCorrection ( 1 / ( 128 · N ), 1 / 128, 1 / 8192, bias ),
+   * jitterTexScale ( r_shadowMapJitterScale, imageSize.x / 8192, shadowFadeOut, N ) and
+   * the six rpShadowAtlasOffsets ( offset · ( 1 / 8192 ), 0, 0 ) (sides a light has not,
+   * 0); else screenCorrection's z 1 / res[lod] and jitterTexScale's y the jitter scale; N
+   * r_shadowMapSamples, bias r_shadowMapSunDepthBiasScale or RegularDepthBiasScale.
+   */
+  void setShadowParms(const ViewLight& light, const ShadowLightRecord* shadow);
+  // LP3.1 (C60): the frame's record of a list light when pass 6 placed it in the atlas,
+  // else null (r_skipShadows, not casting, LOD -1, no caster, a side without a tile)
+  const ShadowLightRecord* shadowRecordOf(const ViewLight& light) const;
+  // LP3.1 (C60, SC726): DrawSingleInteraction's program: interactionAmbient, the
+  // shadow-atlas interaction of the placed light's type (ids 39-50 less skinned), else
+  // the plain interaction (K26)
+  int interactionProgram(
+    InteractionProgram program, const ShadowLightRecord* shadow) const;
   // D76: the most writes a light's interactions may make
   std::uint64_t worstCaseWrites(const ViewLight& light) const;
   // U2.11: a draw dropped for the budget: counted, and said once
@@ -922,6 +943,7 @@ private:
     Frame& frame,
     std::size_t space,
     const ViewLight& light,
+    const ShadowLightRecord* shadow,
     const MaterialStage& lightStage,
     const std::optional<EngineGlMatrix>& lightTextureMatrix);
 

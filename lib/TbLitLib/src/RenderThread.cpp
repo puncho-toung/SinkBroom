@@ -1549,6 +1549,10 @@ void RenderThread::main() noexcept
       {
         m_images.request(key);
       }
+      // LP3.1 (C60): _blueNoise256, asked for at Start always (the _brdfLut pattern: the
+      // parse thread makes it, 512² RGBA8, 1 MB), so that no frame waits for it when a
+      // light first casts
+      m_images.request(intrinsicImageKey("_blueNoise256"));
     }
     runLoop();
   }

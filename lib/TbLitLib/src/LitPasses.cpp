@@ -135,6 +135,9 @@ constexpr auto UnitSpecular = std::size_t{1};
 constexpr auto UnitBaseColor = std::size_t{2};
 constexpr auto UnitBrdfLut = std::size_t{3};
 constexpr auto UnitSsao = std::size_t{4};
+// LP3.1 (C60): INTERACTION_TEXUNIT_SHADOWMAPS and INTERACTION_TEXUNIT_JITTER
+constexpr auto UnitShadowMaps = std::size_t{5};
+constexpr auto UnitJitter = std::size_t{6};
 constexpr auto UnitAmbientCube = std::size_t{7};
 constexpr auto UnitSpecularCube1 = std::size_t{8};
 constexpr auto UnitDepthCube = std::size_t{12};
@@ -941,11 +944,14 @@ void LitPasses::recordInteractions(Frame& frame)
     return;
   }
   const auto budget = writeBudget();
-  // D76 counts the writes of a volatile constant buffer; a pushed layout writes none
-  const auto& interactionLayouts =
-    frame.inputs->pipelines->layouts(EngineBindingLayout::DrawInteraction);
-  const auto counted = interactionLayouts.state != BindingLayoutLookup::State::Ready
-                       || !pushesConstants(interactionLayouts.layouts);
+  // D76 counts the writes of a volatile constant buffer; a pushed layout writes none.
+  // LP3.1 (P3.5): both interaction layouts, DRAW_INTERACTION (set 10) and
+  // DRAW_INTERACTION_SM (set 11), each its own buffer and its own writes
+  const auto counted = [&](const EngineBindingLayout layout) {
+    const auto& layouts = frame.inputs->pipelines->layouts(layout);
+    return layouts.state != BindingLayoutLookup::State::Ready
+           || !pushesConstants(layouts.layouts);
+  };
   // D76 (P6.13): one budget and one overflow over both phases, in their draw order: once
   // a light overflows, no light after it is drawn, the rest of its phase and every light
   // of the later phase
@@ -992,9 +998,13 @@ void LitPasses::recordInteractions(Frame& frame)
         return;
       }
       // D76: no light whose worst case would pass the frame's writes is added, nor any
-      // after it
-      const auto writes = m_frameWrites[EngineBindingLayout::DrawInteraction];
-      if (counted && writes + worstCaseWrites(light) > budget)
+      // after it; LP3.1 (P3.5): the writes of the layout its program draws with (set 11
+      // for a light placed in the atlas, else set 10)
+      const auto* shadow = shadowRecordOf(light);
+      const auto layout = shadow ? EngineBindingLayout::DrawInteractionSm
+                                 : EngineBindingLayout::DrawInteraction;
+      const auto writes = m_frameWrites[layout];
+      if (counted(layout) && writes + worstCaseWrites(light) > budget)
       {
         overflowing = true;
         ++m_stats.lightsOverflowed;
@@ -1032,7 +1042,7 @@ void LitPasses::recordInteractions(Frame& frame)
         {
           continue;
         }
-        if (!renderInteractions(frame, light, *surfaces, list, depthFunc))
+        if (!renderInteractions(frame, light, shadow, *surfaces, list, depthFunc))
         {
           m_stats.interactionsDisabled = true;
           return;
@@ -1048,6 +1058,7 @@ void LitPasses::recordInteractions(Frame& frame)
 bool LitPasses::renderInteractions(
   Frame& frame,
   const ViewLight& light,
+  const ShadowLightRecord* shadow,
   const std::vector<LitSurface>& surfaces,
   const InteractionList list,
   const std::uint64_t depthFunc)
@@ -1058,6 +1069,8 @@ bool LitPasses::renderInteractions(
     return true;
   }
   m_logList = list;
+  // LP3.1 (C60, SC727): the shadow parms of a light with a shadow LOD (:1784-1866)
+  setShadowParms(light, shadow);
 
   // change the scissor if needed, it will be constant across all the surfaces lit by the
   // light (r_useScissor 1)
@@ -1131,6 +1144,10 @@ bool LitPasses::renderInteractions(
     }
     m_units[3] = (*lightUnits)[0];
     m_units[4] = (*lightUnits)[1];
+    // LP3.1 (C60, SC728): texture 5 the shadow atlas (bound by DRAW_INTERACTION_SM's set
+    // itself: the atlas has no slot, bindingSets), texture 6 the jitter texture for soft
+    // shadowing (:1968-1981)
+    m_units[UnitJitter] = intrinsicImageKey("_blueNoise256");
 
     // USER0-2 (:1934-1965)
     const auto user = engineMathLightParms(record.light.parms.mathLight, mathPath);
@@ -1159,7 +1176,8 @@ bool LitPasses::renderInteractions(
     {
       if (m_currentSpace != surface->space)
       {
-        setInteractionSpace(frame, surface->space, light, lightStage, lightTextureMatrix);
+        setInteractionSpace(
+          frame, surface->space, light, shadow, lightStage, lightTextureMatrix);
       }
 
       auto disabled = false;
@@ -1186,12 +1204,11 @@ bool LitPasses::renderInteractions(
         m_units[1] = interaction.specularImage;
         m_units[2] = interaction.diffuseImage;
 
-        const auto program =
-          interaction.program == InteractionProgram::PbrInteraction
-            ? EngineBuiltinPbrInteraction
-          : interaction.program == InteractionProgram::InteractionAmbient
-            ? EngineBuiltinInteractionAmbient
-            : EngineBuiltinInteraction;
+        // LP3.1 (C60, SC726): a light placed in the atlas draws the shadow-atlas
+        // interaction of its type (DrawSingleInteraction, RenderBackend.cpp:1417-1470,
+        // 1541-1595: the ambientLight test first, then r_skipShadows, globalShadows and
+        // ImageAtlasPlaced); else the plain one (K26)
+        const auto program = interactionProgram(interaction.program, shadow);
         switch (draw(
           frame,
           program,
@@ -1248,6 +1265,7 @@ void LitPasses::setInteractionSpace(
   Frame& frame,
   const std::size_t index,
   const ViewLight& light,
+  const ShadowLightRecord* shadow,
   const MaterialStage&,
   const std::optional<EngineGlMatrix>& lightTextureMatrix)
 {
@@ -1294,6 +1312,162 @@ void LitPasses::setInteractionSpace(
   m_parms.set(RenderParm::LightProjectionT, vec4Of(lightProjection[1]));
   m_parms.set(RenderParm::LightProjectionQ, vec4Of(lightProjection[2]));
   m_parms.set(RenderParm::LightFalloffS, vec4Of(lightProjection[3]));
+
+  // LP3.1 (C60, C61, SC729): the shadow matrices of the space (:2080-2126) under
+  // !r_skipShadows && ImageAtlasPlaced(), from the light's record as its tiles were
+  // drawn (never recomputed): parallel (i < r_shadowMapSplits + 1) and point (i < 6)
+  // clipToWindow · shadowP[i] · shadowV[i] · M, spot shadowP[0] · shadowV[0] · M, M the
+  // space's model matrix transposed
+  if (shadow)
+  {
+    const auto modelMatrix = engineMatrixTranspose(space.modelMatrix);
+    const auto sides = shadow->type == ShadowLightType::Parallel
+                         ? std::size_t(EngineFrame.shadowMapSplits + 1)
+                       : shadow->type == ShadowLightType::Point ? std::size_t{6}
+                                                                : std::size_t{1};
+    for (std::size_t i = 0; i < sides; ++i)
+    {
+      const auto modelToShadowMatrix =
+        engineMatrixMultiply(shadow->shadowV[i], modelMatrix);
+      const auto shadowClipMvp =
+        engineMatrixMultiply(shadow->shadowP[i], modelToShadowMatrix);
+      const auto parm = RenderParm(int(RenderParm::ShadowMatrix0X) + int(i) * 4);
+      if (shadow->type == ShadowLightType::Spot)
+      {
+        m_parms.set(parm, shadowClipMvp);
+      }
+      else
+      {
+        m_parms.set(
+          parm, engineMatrixMultiply(engineClipSpaceToWindowSpace(), shadowClipMvp));
+      }
+    }
+  }
+}
+
+int LitPasses::interactionProgram(
+  const InteractionProgram program, const ShadowLightRecord* shadow) const
+{
+  // RenderBackend.cpp:1404-1470 (PBR) and :1528-1595 (legacy): an ambientLight light
+  // first; then a light placed in the atlas by its type, vLight->parallel, then
+  // pointLight, else spot (never the skinned forms, P3.24e); else the plain program
+  if (program == InteractionProgram::InteractionAmbient)
+  {
+    return EngineBuiltinInteractionAmbient;
+  }
+  const auto pbr = program == InteractionProgram::PbrInteraction;
+  if (!shadow)
+  {
+    return pbr ? EngineBuiltinPbrInteraction : EngineBuiltinInteraction;
+  }
+  switch (shadow->type)
+  {
+  case ShadowLightType::Parallel:
+    return pbr ? EngineBuiltinPbrInteractionShadowAtlasParallel
+               : EngineBuiltinInteractionShadowAtlasParallel;
+  case ShadowLightType::Point:
+    return pbr ? EngineBuiltinPbrInteractionShadowAtlasPoint
+               : EngineBuiltinInteractionShadowAtlasPoint;
+  case ShadowLightType::Spot:
+    break;
+  }
+  return pbr ? EngineBuiltinPbrInteractionShadowAtlasSpot
+             : EngineBuiltinInteractionShadowAtlasSpot;
+}
+
+const ShadowLightRecord* LitPasses::shadowRecordOf(const ViewLight& light) const
+{
+  // !r_skipShadows && ImageAtlasPlaced() (RenderBackend.cpp:1417, 1541, 1818, 2080):
+  // only a light the frame's pass 6 placed has a record that is placed
+  if (m_skipShadows || EngineFrame.skipShadows || m_lists.lights.empty())
+  {
+    return nullptr;
+  }
+  const auto index = std::size_t(&light - m_lists.lights.data());
+  if (index >= m_shadowRecordOf.size() || m_shadowRecordOf[index] < 0)
+  {
+    return nullptr;
+  }
+  const auto& record = m_shadowRecords[std::size_t(m_shadowRecordOf[index])];
+  return record.placed() ? &record : nullptr;
+}
+
+void LitPasses::setShadowParms(const ViewLight& light, const ShadowLightRecord* shadow)
+{
+  // RenderInteractions (RenderBackend.cpp:1784-1866) under !r_skipShadows && shadowLOD >
+  // -1: the shadow parms, the light's own whether it is placed or not (JITTER_SIZE 128;
+  // N r_shadowMapSamples; the jitter pinned, SC727: r_shadowMapRandomizeJitter 0)
+  if (m_skipShadows || EngineFrame.skipShadows || light.shadowLod <= -1)
+  {
+    return;
+  }
+  static_assert(!EngineFrame.shadowMapRandomizeJitter, "SC727: the pinned jitter");
+  constexpr auto JitterSize = 128;
+  const auto jitterSampleScale = 1.0f;
+  const auto shadowMapSamples = float(EngineFrame.shadowMapSamples);
+  // 1 / globalImages->blueNoiseImage256->GetUploadWidth(): _blueNoise256 is 512 wide
+  constexpr auto BlueNoiseWidth = 512;
+  m_parms.set(
+    RenderParm::JitterTexOffset,
+    Vec4{1.0f / float(BlueNoiseWidth), 1.0f / float(BlueNoiseWidth), 0.0f, 0.0f});
+
+  const auto parallel = light.record->light.parms.parallel;
+  if (parallel)
+  {
+    m_parms.set(
+      RenderParm::CascadeDistances,
+      Vec4{
+        m_splitFrustums.splitDistances[0],
+        m_splitFrustums.splitDistances[1],
+        m_splitFrustums.splitDistances[2],
+        m_splitFrustums.splitDistances[3]});
+  }
+  const auto bias = parallel ? EngineFrame.shadowMapSunDepthBiasScale
+                             : EngineFrame.shadowMapRegularDepthBiasScale;
+  const auto atlasSize = EngineFrame.shadowMapAtlasSize;
+  if (shadow)
+  {
+    // r_useShadowAtlas && ImageAtlasPlaced(): the screen power of two correction factor
+    // (the atlas sample scale), the jitter scale, the atlas offsets of the six sides
+    m_parms.set(
+      RenderParm::ScreenCorrectionFactor,
+      Vec4{
+        1.0f / (JitterSize * shadowMapSamples),
+        1.0f / JitterSize,
+        1.0f / atlasSize,
+        bias});
+    m_parms.set(
+      RenderParm::JitterTexScale,
+      Vec4{
+        EngineFrame.shadowMapJitterScale * jitterSampleScale,
+        shadow->imageSize[0] / float(atlasSize),
+        light.shadowFadeOut,
+        shadowMapSamples});
+    for (std::size_t i = 0; i < 6; ++i)
+    {
+      const auto& offset = shadow->atlasOffsets[i];
+      m_parms.set(
+        RenderParm(int(RenderParm::ShadowAtlasOffset0) + int(i)),
+        Vec4{offset[0] * (1.0f / atlasSize), offset[1] * (1.0f / atlasSize), 0.0f, 0.0f});
+    }
+  }
+  else
+  {
+    m_parms.set(
+      RenderParm::ScreenCorrectionFactor,
+      Vec4{
+        1.0f / (JitterSize * shadowMapSamples),
+        1.0f / JitterSize,
+        1.0f / EngineShadowMapResolutions[std::size_t(light.shadowLod)],
+        bias});
+    m_parms.set(
+      RenderParm::JitterTexScale,
+      Vec4{
+        EngineFrame.shadowMapJitterScale * jitterSampleScale,
+        EngineFrame.shadowMapJitterScale * jitterSampleScale,
+        light.shadowFadeOut,
+        shadowMapSamples});
+  }
 }
 
 std::uint64_t interactionStateBits(const std::uint64_t depthFunc)
@@ -3064,6 +3238,7 @@ bool LitPasses::bindingSets(
   auto& device = *inputs.device;
 
   const auto expected = layout == EngineBindingLayout::DrawInteraction      ? 4u
+                        : layout == EngineBindingLayout::DrawInteractionSm  ? 4u
                         : layout == EngineBindingLayout::AmbientLightingIbl ? 4u
                         : layout == EngineBindingLayout::Texture            ? 3u
                         : layout == EngineBindingLayout::Texgen             ? 3u
@@ -3271,6 +3446,94 @@ bool LitPasses::bindingSets(
                       nvrhi::BindingSetDesc{}
                         .addItem(Item::Sampler(0, common->anisotropicWrap))
                         .addItem(Item::Sampler(1, common->linearBorder)),
+                      layouts[3]);
+                  })
+                .Get();
+    return sets[3] != nullptr;
+  }
+  case EngineBindingLayout::DrawInteractionSm: {
+    // LP3.1 (C60, SC728): DRAW_INTERACTION_SM (RenderBackend_NVRHI.cpp:1082-1181): t0-t2
+    // the units 0-2; t3 t4 the units 3-4, t5 the shadow atlas (globalImages->
+    // shadowAtlasImage, which no slot holds: its own texture, the same one for the
+    // session, P3.24b), t6 unit 6 (_blueNoise256); s0 AnisotropicWrap (PointWrap only
+    // under R_UsePixelatedLook), s1 LinearBorder, s2 LinearClampCompare, s3 PointWrap
+    if (!textureSet(1, {0, 1, 2}, 0) || !m_atlas)
+    {
+      return false;
+    }
+    {
+      auto bindings = std::vector<ImageSlots::Binding>{};
+      auto key = BindingSetKey{};
+      key.layout = layouts[2].Get();
+      for (const auto unit : {std::size_t{3}, std::size_t{4}, UnitJitter})
+      {
+        auto binding = unitBinding(unit);
+        if (!binding)
+        {
+          return false;
+        }
+        key.slots.insert(
+          key.slots.end(), binding->versions.begin(), binding->versions.end());
+        bindings.push_back(std::move(*binding));
+      }
+      auto* atlas = m_atlas.Get();
+      key.resources = {atlas};
+      sets[2] =
+        cache
+          .get(
+            key,
+            frameIndex,
+            [&] {
+              auto desc = nvrhi::BindingSetDesc{};
+              desc.addItem(Item::Texture_SRV(
+                3,
+                bindings[0].texture,
+                nvrhi::Format::UNKNOWN,
+                bindings[0].subresources));
+              desc.addItem(Item::Texture_SRV(
+                4,
+                bindings[1].texture,
+                nvrhi::Format::UNKNOWN,
+                bindings[1].subresources));
+              desc.addItem(Item::Texture_SRV(std::uint32_t(UnitShadowMaps), atlas));
+              desc.addItem(Item::Texture_SRV(
+                std::uint32_t(UnitJitter),
+                bindings[2].texture,
+                nvrhi::Format::UNKNOWN,
+                bindings[2].subresources));
+              return device.createBindingSet(desc, layouts[2]);
+            })
+          .Get();
+      if (!sets[2])
+      {
+        return false;
+      }
+    }
+    const auto* common = inputs.samplers->common(device)
+                         | kdl::value_or(static_cast<const SamplerSet::Common*>(nullptr));
+    if (!common)
+    {
+      return false;
+    }
+    auto samplerKey = BindingSetKey{};
+    samplerKey.layout = layouts[3].Get();
+    samplerKey.samplers = 8;
+    samplerKey.resources = {
+      common->anisotropicWrap.Get(),
+      common->linearBorder.Get(),
+      common->linearClampCompare.Get(),
+      common->pointWrap.Get()};
+    sets[3] = cache
+                .get(
+                  samplerKey,
+                  frameIndex,
+                  [&] {
+                    return device.createBindingSet(
+                      nvrhi::BindingSetDesc{}
+                        .addItem(Item::Sampler(0, common->anisotropicWrap))
+                        .addItem(Item::Sampler(1, common->linearBorder))
+                        .addItem(Item::Sampler(2, common->linearClampCompare))
+                        .addItem(Item::Sampler(3, common->pointWrap)),
                       layouts[3]);
                   })
                 .Get();
