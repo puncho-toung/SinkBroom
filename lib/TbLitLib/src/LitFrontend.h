@@ -284,6 +284,9 @@ struct FrontendInputs
   // LP5.3, tests: the view's scissor (viewDef->scissor) to use instead of viewScissor(
   // view ), as ViewFlowInputs::scissorForTesting (a subview's would be smaller)
   std::optional<ScreenRect> scissorForTesting;
+  // LP3.1 (C57), tests: r_skipShadows 1's stand-in (LitPasses::setSkipShadowsForTesting):
+  // no light gets a shadow LOD or casters, as with EngineFrame.skipShadows
+  bool skipShadows = false;
 };
 
 /**

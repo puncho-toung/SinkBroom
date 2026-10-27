@@ -1476,6 +1476,15 @@ inline constexpr int EngineBuiltinInteraction = 19;
 // LP5.1 (C45, D114): an ambientLight light's (RenderProgs.h:399-400)
 inline constexpr int EngineBuiltinInteractionAmbient = 21;
 inline constexpr int EngineBuiltinPbrInteraction = 23;
+// LP3.1 (C60): the shadow-atlas interactions, DRAW_INTERACTION_SM (RenderProgs.h:448-460:
+// BUILTIN_INTERACTION_SHADOW_ATLAS_SPOT .. BUILTIN_PBR_INTERACTION_SHADOW_ATLAS_PARALLEL,
+// the skinned forms never selected, P3.24e)
+inline constexpr int EngineBuiltinInteractionShadowAtlasSpot = 39;
+inline constexpr int EngineBuiltinInteractionShadowAtlasPoint = 41;
+inline constexpr int EngineBuiltinInteractionShadowAtlasParallel = 43;
+inline constexpr int EngineBuiltinPbrInteractionShadowAtlasSpot = 45;
+inline constexpr int EngineBuiltinPbrInteractionShadowAtlasPoint = 47;
+inline constexpr int EngineBuiltinPbrInteractionShadowAtlasParallel = 49;
 // LP5.2b (C48): the cube and sky texgens' programs, which PrepareStageTexturing binds
 // over texture_color (RenderProgs.h:469, 471, 485-486): BUILTIN_ENVIRONMENT
 // (TG_REFLECT_CUBE), BUILTIN_BUMPY_ENVIRONMENT (TG_REFLECT_CUBE with a bump stage),

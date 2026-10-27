@@ -42,6 +42,7 @@
 #include "SamplerSet.h"
 #include "ViewProbes.h"
 #include "base/Macros.h"
+#include "lit/EngineShadowAtlas.h"
 #include "lit/EngineTables.h"
 #include "lit/GridTable.h"
 
@@ -119,6 +120,8 @@ struct LitFrameInputs
   nvrhi::ITimerQuery* stageTimer = nullptr;
   // LP5.3 (C49, C16): pass 9's (FogAllLights), or null
   nvrhi::ITimerQuery* fogTimer = nullptr;
+  // LP3.1 (C59, C16): pass 6's (ShadowAtlasPass), or null
+  nvrhi::ITimerQuery* shadowTimer = nullptr;
   // LP5.2a (C47, D9): the game folder whose renderprogs2/spirv holds a newStage
   // program's blobs (SessionOptions::gamePath)
   std::filesystem::path gamePath;
@@ -297,6 +300,30 @@ struct LitFrameStats
   bool fogLightsSkipped = false;
   bool fogTimed = false;
   bool fogDisabled = false;
+  // ----- LP3.1 (C59, D147, D157): pass 6, ShadowAtlasPass -----
+  // the lights that take tiles (loop 1's: a casting light with shadowLod > -1 and a
+  // caster, RenderBackend.cpp:3653-3674), those all of whose sides found a tile, and
+  // those with a side that found none (unshadowed: imageSize.x -1, SC720), with the
+  // latter's names (their "name" key) in viewLights order
+  std::size_t lightsCasting = 0;
+  std::size_t lightsPlaced = 0;
+  std::size_t lightsUnplaced = 0;
+  std::vector<std::string> unplacedLights;
+  // the tiles cleared and drawn (every placed side, each its far-plane clear first) and
+  // the rects of last frame's tiles this frame's do not cover, cleared (vacated, P3.3);
+  // relocated, cached and provisional are LP3.3's and LP3.4's, 0 until then
+  std::size_t tilesDrawn = 0;
+  std::size_t tilesVacated = 0;
+  std::size_t tilesRelocated = 0;
+  std::size_t tilesCached = 0;
+  std::size_t tilesProvisional = 0;
+  // the atlas bytes the tiles' far-plane clears and draws cover (tiles × size² × 4)
+  std::uint64_t atlasBytesWritten = 0;
+  // the pass ran (its timer begun and ended), its CPU record time, and whether a failed
+  // pipeline or the atlas's creation disabled it (every light then unplaced, D9)
+  bool shadowAtlasTimed = false;
+  double shadowRecordMs = 0.0;
+  bool shadowAtlasDisabled = false;
 };
 
 // a recorded draw (setDrawLogForTesting)
@@ -313,6 +340,10 @@ struct LitDrawRecord
     // LP5.3: FogAllLights' fog draws (a surface or the cube) and blend draws
     Fog,
     Blend,
+    // LP3.1 (C59, D147): pass 6's far-plane clears (a tile's, a vacated rect's) and its
+    // casters' depth draws
+    ShadowClear,
+    Shadow,
   };
 
   Pass pass = Pass::Prepass;
@@ -322,6 +353,54 @@ struct LitDrawRecord
   int program = 0;
   std::uint64_t state = 0;
   nvrhi::Rect scissor;
+  // LP3.1: a shadow draw's side (point 0-5, parallel 0-3, spot -1); -1 otherwise
+  int side = -1;
+};
+
+// LP3.1 (C59): an atlas rect, its top-left pixel and its side
+struct AtlasRect
+{
+  int x = 0;
+  int y = 0;
+  int size = 0;
+
+  bool operator==(const AtlasRect&) const = default;
+};
+
+// LP3.1 (C58, C59): the shadow map type of a light (vLight->parallel, then pointLight,
+// else a spot light: RenderBackend.cpp:3676-3700)
+enum class ShadowLightType
+{
+  Point,
+  Spot,
+  Parallel,
+};
+
+/**
+ * LP3.1 (C59, C61, SC719-SC720): a casting light's record of the frame's pass 6, the
+ * viewLight_t fields ShadowAtlasPass writes (RenderBackend.cpp:3798-3895): imageSize (the
+ * light's first side's output size; x -1 once a side found no tile: ImageAtlasPlaced()
+ * false, RenderCommon.h:390-393), imageAtlasOffset per side (the tile's top-left pixel;
+ * the sides a light does not have stay 0, as the cleared frame allocation leaves them),
+ * and each drawn side's shadowV and shadowP as SetupShadowMapMatrices stored them (C61:
+ * the consumer reads them from here, never recomputes them).
+ */
+struct ShadowLightRecord
+{
+  PreviewId light = NoPreviewId;
+  // its index in FrontendLists::lights
+  std::size_t index = 0;
+  ShadowLightType type = ShadowLightType::Point;
+  int lod = -1;
+  // the sides (point 6, parallel r_shadowMapSplits + 1, spot 1) and each one's placement
+  int sides = 0;
+  std::array<EngineAtlasPlacement, 6> placements = {};
+  std::array<int, 2> imageSize = {-1, -1};
+  std::array<std::array<int, 2>, 6> atlasOffsets = {};
+  std::array<EngineMat4, 6> shadowV = {};
+  std::array<EngineMat4, 6> shadowP = {};
+
+  bool placed() const { return imageSize[0] != -1 && imageSize[1] != -1; }
 };
 
 // DX.5: the state bits of an interaction draw with this depth function (EQUAL, LESS for
@@ -392,6 +471,12 @@ inline constexpr std::size_t LitTextureUnits = 15;
  * draw order (LP5.1, P6.13: the rest of its phase and the whole math phase after the
  * texture phase), and they count as overflowed.
  *
+ * LP3.1 (C59, D142, D147): pass 6, ShadowAtlasPass, between the ambient pass and the
+ * interactions (recordShadowAtlas): the engine's packing of the casting lights' sides
+ * into the one 8192² D32 atlas (made at the first frame that places a tile, released in
+ * teardown step 2), every tile cleared and drawn every frame, the rects last frame's
+ * tiles left cleared first.
+ *
  * Threads: the render thread; releaseAll in teardown step 2.
  */
 class LitPasses
@@ -424,6 +509,8 @@ private:
     // DX.2: the light triangles' answers, and whether the cull applies (a test's switch)
     std::uint64_t lightTrianglesVersion = 0;
     bool lightTriangleCull = true;
+    // LP3.1 (C57): r_skipShadows 1's stand-in (a test's switch)
+    bool skipShadows = false;
 
     bool operator==(const ListsKey&) const = default;
   };
@@ -473,6 +560,8 @@ private:
     LitView view;
     nvrhi::IFramebuffer* framebuffer = nullptr;
     FramebufferFormats formats;
+    // LP3.1 (C59): a pass's own viewport (pass 6's tile), else the view's
+    std::optional<nvrhi::Viewport> viewport;
   };
 
   RenderParms m_parms;
@@ -527,6 +616,31 @@ private:
   // buffer of this session's, made and written at the first fog light's draw
   nvrhi::BufferHandle m_fogCubeVertices;
   nvrhi::BufferHandle m_fogCubeIndexes;
+  // ----- LP3.1 (C59, D142, D145, D147): pass 6 -----
+  // r_skipShadows 1's stand-in (a test's switch, SessionOptions::skipShadowsForTesting)
+  bool m_skipShadows = false;
+  // the renderer's tileMap, Init( r_shadowMapAtlasSize, shadowMapResolutions[0], 8 ) at
+  // the first frame that packs (RenderBackend_NVRHI.cpp:204-215)
+  EngineTileMap m_tileMap;
+  bool m_tileMapReady = false;
+  // _shadowMapAtlas and its depth-only framebuffer _shadowAtlas (Image_intrinsic.cpp:
+  // 672-675, Framebuffer_NVRHI.cpp:136-138), made at the first frame that places a tile
+  // and cleared whole once then; whether its creation failed (said once)
+  nvrhi::TextureHandle m_atlas;
+  nvrhi::FramebufferHandle m_atlasFramebuffer;
+  bool m_atlasFailed = false;
+  // the rects the atlas holds tiles in since their last clear (every tile drawn the last
+  // time the pass ran), which the next run clears where its own tiles do not cover them
+  std::vector<AtlasRect> m_atlasOccupied;
+  // the frame's casting lights' records, in viewLights order, and each list light's
+  // record (-1: none)
+  std::vector<ShadowLightRecord> m_shadowRecords;
+  std::vector<int> m_shadowRecordOf;
+  // D147's far-plane quad (z = w = 1) as a vertex and an index buffer of this session's,
+  // made and written at the first clear
+  nvrhi::BufferHandle m_clearQuadVertices;
+  nvrhi::BufferHandle m_clearQuadIndexes;
+  bool m_atlasWarned = false;
   std::vector<LitDrawRecord> m_drawLog;
   // the pipeline keys asked for while the log is on, drawn or not
   std::set<PipelineKey, PipelineKeyLess> m_requestedKeys;
@@ -553,6 +667,14 @@ public:
   // U2.6, render thread: the volatile constant buffers' bytes, every version (NVRHI's
   // aligned size times maxVersions)
   std::uint64_t volatileBufferBytes() const;
+  // LP3.1 (A49, §3.10), render thread: the shadow atlas's bytes once it is made (8192² ×
+  // 4, 256 MB), 0 before: the render-target budget line's
+  std::uint64_t shadowAtlasBytes() const;
+  // LP3.1 (C59, C61), render thread: the last frame's casting lights' records
+  const std::vector<ShadowLightRecord>& shadowLights() const;
+  // LP3.1 (C59), render thread: the shadow atlas, or null before the first frame that
+  // places a tile (tests read it back)
+  nvrhi::ITexture* shadowAtlas() const;
 
   // teardown step 2: every handle
   void releaseAll();
@@ -574,6 +696,11 @@ public:
   // recorded (RenderBackend.cpp:4275 returns at once; LP5.2a); every other pass as it is
   void setSkipShaderPassesForTesting(bool on);
   bool skipShaderPassesForTesting() const;
+  // LP3.1 (C57): r_skipShadows 1's stand-in (SessionOptions::skipShadowsForTesting):
+  // while on, no light takes tiles (the frontend makes no shadow LOD and gathers no
+  // caster), pass 6 is not recorded (RenderBackend.cpp:3605) and every light draws the
+  // plain interaction (:1417, :1541); the lists are built again
+  void setSkipShadowsForTesting(bool on);
   const std::vector<LitDrawRecord>& drawLogForTesting() const;
   // the pipeline keys the draws asked for while the log was on, also those of skipped
   // draws (a pending pipeline)
@@ -592,6 +719,36 @@ private:
   // LP4.2a (C34): AmbientPass( fillGbuffer false ) on the probe path; LP4.3 (C36): and
   // on the light-grid path for a surface with a grid area (RenderBackend.cpp:1196-1305)
   void recordAmbient(Frame& frame);
+  /**
+   * LP3.1 (C59, D142, D145, D147, SC714-SC720): ShadowAtlasPass (RenderBackend.cpp:
+   * 3603-3922): nothing under r_skipShadows (the test's stand-in) or without view lights
+   * (:3605); loop 1 over the lists' lights in viewLights order (fog and blend lights,
+   * lights without interactions, LOD -1 and lights without casters skipped: :3653-3674)
+   * appends each side's ( res[lod], res[lod] ), engineShadowAtlasLayout packs them
+   * (:3718-3783), and loop 2 (:3798-3895) fills each light's record: imageSize from its
+   * first side's output, imageAtlasOffset per side, x -1 when a side found no tile. The
+   * atlas is made at the first frame that places a tile and cleared whole then; it is not
+   * cleared whole every frame (:3640-3643): the rects last run's tiles occupied that this
+   * run's do not cover are cleared first (P3.3), then every placed side's tile gets its
+   * far-plane clear (D147) and its draws. A frame with neither a tile nor a rect to clear
+   * records nothing.
+   */
+  void recordShadowAtlas(Frame& frame);
+  // LP3.1: the atlas and its framebuffer, made at the first call and cleared whole into
+  // the frame's command list (Image_intrinsic.cpp:672-675: TD_DEPTH at 8192², a render
+  // target; IN:556-566: initial state DepthWrite, clear value 1); false when it cannot be
+  // made (said once)
+  bool ensureShadowAtlas(Frame& frame);
+  // LP3.1 (D147): a far-plane quad over rect of the atlas, under builtin/depth with the
+  // identity MVP, DEPTHFUNC_ALWAYS | CULL_TWOSIDED and no offset: depth 1.0 under the
+  // rect's viewport and scissor; false when the pass is disabled
+  bool clearAtlasRect(Frame& frame, const AtlasRect& rect, PreviewId light, int side);
+  // LP3.1 (C59, SC719): GL_ViewportAndScissor( x, y, size, size ) on the atlas: the
+  // frame's viewport and m_scissor (RenderBackend_NVRHI.cpp:2176-2193)
+  void setAtlasViewport(Frame& frame, const AtlasRect& rect);
+  // D147's quad, its buffers made and written into the frame's command list the first
+  // time; nullopt when a buffer cannot be made
+  std::optional<DrawGeometry> clearQuadGeometry(Frame& frame);
   // AmbientPass' space change (RenderBackend.cpp:2480-2502); DrawShaderPasses' sets the
   // same four (:4352-4382)
   void setAmbientSpace(Frame& frame, std::size_t space);

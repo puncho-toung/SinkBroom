@@ -63,6 +63,11 @@ struct SessionOptions
   // that the compile thread makes them while the scene loads; tests that order the
   // compile thread's jobs themselves turn it off
   bool requestStartPipelines = true;
+  // LP3.1 (C57), tests: r_skipShadows 1's stand-in (EngineFrame keeps the engine's 0): no
+  // light takes tiles, pass 6 is not recorded and every light draws the plain interaction
+  // (RenderBackend.cpp:1417, 1541, 3605), for a test about something else than shadows
+  // whose scene has casting lights
+  bool skipShadowsForTesting = false;
 };
 
 // D9: a program the compile thread was asked for, and whether the preview can draw with

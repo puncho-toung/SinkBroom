@@ -352,6 +352,13 @@ constexpr auto FrameLogFields = std::size_t{70};
 // by vertex shader" (mirror.json M-PIPE-DEFECT-01), as this machine's layer names it
 constexpr auto OutputNotConsumedId = std::string_view{"WARNING-Shader-OutputNotConsumed"};
 
+// LP3.1 (C59): the layer's id of "the fragment shader writes to output Location 0 but
+// there is no pColorAttachments[0]": builtin/depth's colour write in the depth-only
+// shadow-atlas framebuffer, as the engine's own pipelines of it have it (mirror.json
+// M-SHADOW-DEFECT-01)
+constexpr auto DepthOnlyOutputId =
+  std::string_view{"Undefined-Value-ShaderOutputNotConsumed"};
+
 // T0.2: the Khronos layer's default duplicate_message_limit, the most messages of one id
 // it reports when the test cannot raise it (VK_EXT_layer_settings)
 constexpr auto ValidationDuplicateMessageLimit = 10;
@@ -374,6 +381,8 @@ struct ValidationMessages
   // (mirror.json M-PIPE-DEFECT-01); empty counts every message
   std::string_view mirroredMessageId;
   std::atomic<int> mirrored = 0;
+  // LP3.1: while mirroredMessageId is set, the warnings of DepthOnlyOutputId
+  std::atomic<int> mirroredDepthOnly = 0;
 
   // LPF.2: the product instance's message sink (VulkanInstanceOptions::messages)
   void receive(const VulkanMessage& message)
@@ -381,6 +390,13 @@ struct ValidationMessages
     if (!message.error && !mirroredMessageId.empty() && message.id == mirroredMessageId)
     {
       ++mirrored;
+      return;
+    }
+    // LP3.1 (mirror.json M-SHADOW-DEFECT-01): the engine's depth-only shadow-atlas
+    // pipelines too, counted apart
+    if (!message.error && !mirroredMessageId.empty() && message.id == DepthOnlyOutputId)
+    {
+      ++mirroredDepthOnly;
       return;
     }
     if (message.error)
@@ -399,7 +415,8 @@ struct ValidationMessages
   {
     const auto lock = std::scoped_lock{mutex};
     std::cout << label << ": validation errors " << errors << ", warnings " << warnings
-              << ", mirrored engine warnings " << mirrored << "\n";
+              << ", mirrored engine warnings " << mirrored << " (" << mirroredDepthOnly
+              << " of the shadow atlas's depth-only pipelines)\n";
     for (const auto& text : texts)
     {
       std::cout << "  " << text << "\n";
@@ -3936,8 +3953,10 @@ namespace
 {
 
 // LP2.2a: the ten programs' blobs LP2 loads (C26), copied out of the game folder (read
-// only) into a test game root; LP4.2a: and the ambient pass's probe path
-constexpr auto Lp2Programs = std::array<int, 15>{
+// only) into a test game root; LP4.2a: and the ambient pass's probe path; LP3.1 (C60):
+// and the shadow-atlas interactions (one pair of blob files for the six), which the cases
+// that run with shadows draw with
+constexpr auto Lp2Programs = std::array<int, 21>{
   EngineBuiltinColor,
   EngineBuiltinTextureVertexColor,
   EngineBuiltinInteraction,
@@ -3954,7 +3973,13 @@ constexpr auto Lp2Programs = std::array<int, 15>{
   EngineBuiltinAmbientLightingIblPbr,
   // LP4.3 (C36): the light-grid path's
   EngineBuiltinAmbientLightgridIbl,
-  EngineBuiltinAmbientLightgridIblPbr};
+  EngineBuiltinAmbientLightgridIblPbr,
+  EngineBuiltinInteractionShadowAtlasSpot,
+  EngineBuiltinInteractionShadowAtlasPoint,
+  EngineBuiltinInteractionShadowAtlasParallel,
+  EngineBuiltinPbrInteractionShadowAtlasSpot,
+  EngineBuiltinPbrInteractionShadowAtlasPoint,
+  EngineBuiltinPbrInteractionShadowAtlasParallel};
 
 // the light stand-ins (a white light of no falloff: the default light shaders the
 // fixture map's lights reach) and a lit translucent material, written into the root
@@ -4040,9 +4065,13 @@ std::filesystem::path assembleLitRoot(const std::filesystem::path& gamePath)
         return {};
       }
       const auto to = base / relative;
+      // LP3.1: the shadow-atlas programs share their files; each is copied once
+      if (std::filesystem::exists(to))
+      {
+        continue;
+      }
       std::filesystem::create_directories(to.parent_path());
-      std::filesystem::copy_file(
-        from, to, std::filesystem::copy_options::overwrite_existing);
+      std::filesystem::copy_file(from, to);
     }
   }
   return root;
@@ -4297,12 +4326,16 @@ std::unique_ptr<LitSession> rootSession(
   MaterialService& service,
   const std::filesystem::path& root,
   const bool startPipelines = true,
-  const bool shaderPasses = false)
+  const bool shaderPasses = false,
+  const bool shadows = false)
 {
   auto options = SessionOptions{};
   options.validation = true;
   options.gamePath = root;
   options.requestStartPipelines = startPipelines;
+  // LP3.1 (C57): r_skipShadows 1 unless a case runs with shadows: the fixture's eight
+  // lights cast, and these cases' models are the unshadowed interaction's (SC733)
+  options.skipShadowsForTesting = !shadows;
   auto session =
     LitSession::create(
       instance.handles(), VK_NULL_HANDLE, 160, 120, options, events.sink(), 7, &service)
@@ -4968,7 +5001,8 @@ TEST_CASE("LitSession lit passes on a GPU (LP2.2a)", "[.][litgpu]")
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
       auto events = Events{};
-      auto session = rootSession(instance, events, *service, root);
+      // LP3.1 (C57): with shadows: a stop at a pass boundary (pass 6 among them)
+      auto session = rootSession(instance, events, *service, root, true, false, true);
       session->setExposed(true);
       REQUIRE(waitFor(
         [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
@@ -5276,6 +5310,9 @@ std::unique_ptr<LitSession> loggedRootSession(
   options.validation = true;
   options.gamePath = root;
   options.frameLogPath = frameLogPath;
+  // LP3.1 (C57): r_skipShadows 1: the fixture's lights cast, and these cases' models and
+  // counts are the unshadowed interaction's (SC733)
+  options.skipShadowsForTesting = true;
   auto session =
     LitSession::create(
       instance.handles(), VK_NULL_HANDLE, 160, 120, options, events.sink(), 7, &service)
@@ -5684,6 +5721,9 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
         auto options = SessionOptions{};
         options.validation = true;
         options.gamePath = root;
+        // LP3.1 (C57): r_skipShadows 1: a case about the window's present, whose
+        // fixture lights cast
+        options.skipShadowsForTesting = true;
         const auto [width, height] = window.clientSize();
         auto session = LitSession::create(
                          instance.handles(),
@@ -5809,7 +5849,9 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
         REQUIRE(initInstanceDispatcher(instance.handles()));
         auto service = rootService(root);
         auto events = Events{};
-        auto session = rootSession(instance, events, *service, root);
+        // LP3.1 (C57): with shadows: the thread and handle baseline with the shadow
+        // pass's objects
+        auto session = rootSession(instance, events, *service, root, true, false, true);
         session->setExposed(true);
         REQUIRE(waitFor(
           [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
@@ -6110,7 +6152,8 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
       auto events = Events{};
-      auto session = rootSession(instance, events, *service, root);
+      // LP3.1 (C57): with shadows: a stop at a pass boundary (pass 6 among them)
+      auto session = rootSession(instance, events, *service, root, true, false, true);
       session->setExposed(true);
       REQUIRE(waitFor(
         [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
@@ -7894,6 +7937,8 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu2]")
       options.validation = true;
       options.gamePath = root;
       options.frameLogPath = logPath;
+      // LP3.1 (C57): r_skipShadows 1: the floor's model is the unshadowed interaction's
+      options.skipShadowsForTesting = true;
       auto session = LitSession::create(
                        instance.handles(),
                        VK_NULL_HANDLE,
@@ -8663,7 +8708,8 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu2]")
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
       auto events = Events{};
-      auto session = rootSession(instance, events, *service, root);
+      // LP3.1 (C57): with shadows: the stop comes before pass 6
+      auto session = rootSession(instance, events, *service, root, true, false, true);
       session->setExposed(true);
       REQUIRE(waitFor(
         [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
@@ -8726,7 +8772,8 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu2]")
       REQUIRE(initInstanceDispatcher(instance.handles()));
       auto service = rootService(root);
       auto events = Events{};
-      auto session = rootSession(instance, events, *service, root);
+      // LP3.1 (C57): with shadows: the shadow pass's per-frame work on the debug heap too
+      auto session = rootSession(instance, events, *service, root, true, false, true);
       session->setExposed(true);
       REQUIRE(waitFor(
         [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
@@ -10653,6 +10700,9 @@ TEST_CASE("LitSession math and ambientLight lights on a GPU (LP5.1)", "[.][litgp
     options.validation = true;
     options.gamePath = root;
     options.frameLogPath = frameLog;
+    // LP3.1 (C57): r_skipShadows 1: the math and ambientLight lights' models are the
+    // unshadowed interaction's
+    options.skipShadowsForTesting = true;
     auto session = LitSession::create(
                      instance.handles(),
                      VK_NULL_HANDLE,
@@ -14577,6 +14627,9 @@ TEST_CASE("LitSession model entities on a GPU (LP7.2)", "[.][litgpu3]")
     options.validation = true;
     options.gamePath = root;
     options.frameLogPath = frameLog;
+    // LP3.1 (C57): r_skipShadows 1: the N01's and the shaded models' pixels are the
+    // unshadowed interaction's
+    options.skipShadowsForTesting = true;
     auto session = LitSession::create(
                      instance.handles(),
                      VK_NULL_HANDLE,

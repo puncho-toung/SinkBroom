@@ -201,7 +201,13 @@ struct HostEvents
 // M-PIPE-DEFECT-01; the engine filters it with VK_LAYER_MESSAGE_ID_FILTER)
 constexpr auto OutputNotConsumedId = std::string_view{"WARNING-Shader-OutputNotConsumed"};
 
-// the instance's validation messages, counted; the engine's by-design warning apart
+// LP3.1 (C59): the layer's id of builtin/depth's colour write in the depth-only
+// shadow-atlas framebuffer, as the engine's own pipelines of it have it (mirror.json
+// M-SHADOW-DEFECT-01)
+constexpr auto DepthOnlyOutputId =
+  std::string_view{"Undefined-Value-ShaderOutputNotConsumed"};
+
+// the instance's validation messages, counted; the engine's by-design warnings apart
 struct ValidationCount
 {
   std::atomic<int> errors = 0;
@@ -213,7 +219,9 @@ struct ValidationCount
   VulkanMessageSink sink()
   {
     return [this](const VulkanMessage& message) {
-      if (!message.error && message.id == OutputNotConsumedId)
+      if (
+        !message.error
+        && (message.id == OutputNotConsumedId || message.id == DepthOnlyOutputId))
       {
         ++mirrored;
         return;

@@ -188,7 +188,9 @@ GpuMemoryAccount accountGpuMemory(
   auto account = GpuMemoryAccount{};
   account.arenaBytes = arenas.capacityBytes();
   account.textureBytes = images.textureBytes();
-  account.renderTargetBytes = frame.renderTargetBytes() + frame.bufferBytes();
+  // LP3.1 (A49): the shadow atlas on the render-target line once it is made (256 MB)
+  account.renderTargetBytes =
+    frame.renderTargetBytes() + frame.bufferBytes() + passes.shadowAtlasBytes();
   account.releasedBytes = frame.retiredBytes() + images.retiredBytes();
   // U2.6: the volatile buffers are host-visible (NVRHI allocates them for CPU writes);
   // the rest of the host-visible bytes is the upload pool and a readback's staging
@@ -1361,6 +1363,8 @@ bool RenderThread::recordLitPasses(
   m_passes.setSkipInteractionsForTesting(m_skipInteractionsForTesting.load());
   // LP5.0 (D118): r_skipAmbient's stand-in, which the stage pass reads (LP5.2a)
   m_passes.setSkipShaderPassesForTesting(m_skipShaderPassesForTesting.load());
+  // LP3.1 (C57): r_skipShadows 1's stand-in, a test's session option
+  m_passes.setSkipShadowsForTesting(m_options.skipShadowsForTesting);
   const auto stats = m_passes.record(inputs);
   if (stats.prepassTimed)
   {

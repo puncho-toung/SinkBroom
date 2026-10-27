@@ -872,7 +872,9 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       // LP3.0 (C58, D144): the shadow LOD from the projected box, for a light that casts
       // (tr_frontend_addlights.cpp:391-466; r_useLightScissors 3, no MOC: K51)
       viewLight.projected = scissorAndBox->projected;
-      if (!EngineFrame.skipShadows && lightCastsShadows(*record).value_or(false))
+      if (
+        !EngineFrame.skipShadows && !inputs.skipShadows
+        && lightCastsShadows(*record).value_or(false))
       {
         const auto lod = engineShadowLod(
           viewLight.projected,

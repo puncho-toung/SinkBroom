@@ -34,6 +34,7 @@
 #include "lit/AreaData.h"
 #include "lit/EngineBuiltins.h"
 #include "lit/EnginePipelineState.h"
+#include "lit/EntityState.h"
 #include "lit/ImageCache.h"
 #include "lit/LitConfig.h"
 
@@ -44,6 +45,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 
 namespace tb::lit
 {
@@ -332,6 +334,24 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
     m_stats.stoppedEarly = true;
     return m_stats;
   }
+  // LP3.1 (C59, D142, SC714): pass 6, ShadowAtlasPass, after AmbientPass( false ) and
+  // before DrawInteractions (RenderBackend.cpp:6062-6073), inside the shot's frame
+  // (SC742: no warm-up frame); r_skipInteractions does not gate it
+  {
+    const auto start = std::chrono::steady_clock::now();
+    beginTimer(frame, inputs.shadowTimer);
+    recordShadowAtlas(frame);
+    m_stats.shadowAtlasTimed = endTimer(frame, inputs.shadowTimer);
+    m_stats.shadowRecordMs =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+        .count();
+  }
+
+  if (inputs.stopRequested && inputs.stopRequested())
+  {
+    m_stats.stoppedEarly = true;
+    return m_stats;
+  }
   // C38 (LP4.2b): r_skipInteractions 1 records no interactions (RenderBackend.cpp:4181).
   // LP5.0 (P6.16, C46): it gates DrawInteractions alone, so it skips this pass and no
   // other: the passes recorded after it (LP5.2a's stage pass, LP5.3's fog and blend
@@ -478,6 +498,7 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   key.table = ListsTableKey::of(table);
   key.lightTrianglesVersion = m_lightTriangles.version();
   key.lightTriangleCull = m_lightTriangleCull;
+  key.skipShadows = m_skipShadows;
   const auto tableVersion = table ? table->version : 0;
   if (m_listsKey == key && !(m_lists.pending && tableVersion != m_listsTableVersion))
   {
@@ -506,6 +527,8 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   frontend.tree = inputs.procTree.get();
   frontend.areas = inputs.areas.get();
   frontend.portalFog = inputs.portalFog.get();
+  // LP3.1 (C57): r_skipShadows 1's stand-in
+  frontend.skipShadows = m_skipShadows;
   // LP4.3 (C36): an area's grid is valid when it has points and its atlas slot holds an
   // image (Resident, or Loading: its texture is made and written as the frame uploads);
   // Pending is not loaded yet, Default the engine's defaulted image (D88)
@@ -1570,6 +1593,411 @@ void LitPasses::recordAmbient(Frame& frame)
   m_stats.ambientSkipped =
     m_stats.skippedDraws - skippedBefore - m_stats.ambientOverflowed;
   m_stats.ambientPendingPipelines = m_stats.pendingPipelines - pendingBefore;
+}
+
+namespace
+{
+
+// LP3.1 (C59): the atlas's format and its framebuffer's (FBN:136-138: depth only)
+constexpr auto AtlasFormat = nvrhi::Format::D32;
+constexpr auto AtlasFormats = FramebufferFormats{nvrhi::Format::UNKNOWN, AtlasFormat};
+// NUM_QUAD_TREE_LEVELS (RenderBackend_NVRHI.cpp:207-215)
+constexpr auto AtlasQuadTreeLevels = 8u;
+
+ShadowLightType shadowLightType(const ViewLight& light)
+{
+  // RenderBackend.cpp:3678-3700: vLight->parallel, then vLight->pointLight
+  const auto& parms = light.record->light.parms;
+  return parms.parallel     ? ShadowLightType::Parallel
+         : parms.pointLight ? ShadowLightType::Point
+                            : ShadowLightType::Spot;
+}
+
+// the side and its stop of ShadowAtlasPass' loops (:3676-3700, :3835-3859)
+std::pair<int, int> shadowSides(const ShadowLightType type)
+{
+  switch (type)
+  {
+  case ShadowLightType::Parallel:
+    return {0, EngineFrame.shadowMapSplits + 1};
+  case ShadowLightType::Point:
+    if (EngineFrame.shadowMapSingleSide != -1)
+    {
+      return {EngineFrame.shadowMapSingleSide, EngineFrame.shadowMapSingleSide + 1};
+    }
+    return {0, 6};
+  case ShadowLightType::Spot:
+    break;
+  }
+  return {-1, 0};
+}
+
+// the pixels a and b share
+std::int64_t overlapArea(const AtlasRect& a, const AtlasRect& b)
+{
+  const auto x0 = std::max(a.x, b.x);
+  const auto y0 = std::max(a.y, b.y);
+  const auto x1 = std::min(a.x + a.size, b.x + b.size);
+  const auto y1 = std::min(a.y + a.size, b.y + b.size);
+  return x1 > x0 && y1 > y0 ? std::int64_t(x1 - x0) * std::int64_t(y1 - y0) : 0;
+}
+
+} // namespace
+
+void LitPasses::recordShadowAtlas(Frame& frame)
+{
+  m_shadowRecords.clear();
+  m_shadowRecordOf.assign(m_lists.lights.size(), -1);
+  // ShadowAtlasPass (RenderBackend.cpp:3605): r_skipShadows, r_useShadowAtlas (always 1
+  // here: the arrays are K50's), no view lights
+  if (m_skipShadows || EngineFrame.skipShadows || m_lists.lights.empty())
+  {
+    return;
+  }
+  static_assert(EngineFrame.useShadowAtlas == 1, "K50: the non-atlas path");
+
+  // loop 1 (:3653-3716): the sides' sizes in viewLights order
+  auto sizes = std::vector<EngineAtlasSize>{};
+  for (std::size_t i = 0; i < m_lists.lights.size(); ++i)
+  {
+    const auto& light = m_lists.lights[i];
+    if (light.kind == ViewLightKind::Fog || light.kind == ViewLightKind::Blend)
+    {
+      continue;
+    }
+    if (
+      light.localInteractions.empty() && light.globalInteractions.empty()
+      && light.translucentInteractions.empty())
+    {
+      continue;
+    }
+    // light doesn't cast shadows: LOD -1, or no shadow surface (globalShadows NULL: C57's
+    // caster set is empty)
+    if (light.shadowLod < 0 || light.casters.empty())
+    {
+      continue;
+    }
+    auto record = ShadowLightRecord{};
+    record.light = light.record->id;
+    record.index = i;
+    record.type = shadowLightType(light);
+    record.lod = light.shadowLod;
+    const auto [first, stop] = shadowSides(record.type);
+    record.sides = stop - first;
+    const auto resolution = EngineShadowMapResolutions[std::size_t(light.shadowLod)];
+    for (auto side = first; side < stop; ++side)
+    {
+      sizes.push_back(EngineAtlasSize{resolution, resolution});
+    }
+    m_shadowRecordOf[i] = int(m_shadowRecords.size());
+    m_shadowRecords.push_back(record);
+  }
+  m_stats.lightsCasting = m_shadowRecords.size();
+
+  // :3718-3783: the engine's packing (D145)
+  if (!m_tileMapReady)
+  {
+    m_tileMapReady = m_tileMap.init(
+      unsigned(EngineFrame.shadowMapAtlasSize),
+      unsigned(EngineShadowMapResolutions[0]),
+      AtlasQuadTreeLevels);
+  }
+  auto placements = std::vector<EngineAtlasPlacement>{};
+  if (!sizes.empty() && m_tileMapReady)
+  {
+    placements =
+      engineShadowAtlasLayout(m_tileMap, sizes, EngineFrame.shadowMapAtlasSize);
+  }
+  else
+  {
+    placements.resize(sizes.size());
+  }
+
+  // loop 2's placements (:3798-3895): imageSize the light's first side's output size,
+  // imageAtlasOffset[ max( 0, side ) ] per side, x -1 when a side did not fit
+  auto tiles = std::vector<std::pair<std::size_t, int>>{};
+  auto current = std::vector<AtlasRect>{};
+  {
+    auto shadowIndex = std::size_t{0};
+    for (auto r = std::size_t{0}; r < m_shadowRecords.size(); ++r)
+    {
+      auto& record = m_shadowRecords[r];
+      const auto [first, stop] = shadowSides(record.type);
+      record.imageSize = {placements[shadowIndex].size, placements[shadowIndex].size};
+      auto fits = true;
+      for (auto side = first; side < stop; ++side)
+      {
+        const auto slice = std::size_t(std::max(0, side));
+        const auto& placement = placements[shadowIndex];
+        record.placements[slice] = placement;
+        record.atlasOffsets[slice] = {placement.x, placement.y};
+        ++shadowIndex;
+        if (placement.x == -1 || placement.y == -1)
+        {
+          // didn't fit into atlas anymore
+          fits = false;
+          continue;
+        }
+        tiles.emplace_back(r, side);
+        current.push_back(AtlasRect{placement.x, placement.y, record.imageSize[0]});
+      }
+      if (!fits)
+      {
+        record.imageSize[0] = -1;
+      }
+    }
+  }
+
+  // P3.3: the rects last run's tiles occupied that this run's tiles do not cover
+  auto vacated = std::vector<AtlasRect>{};
+  for (const auto& rect : m_atlasOccupied)
+  {
+    auto covered = std::int64_t{0};
+    for (const auto& tile : current)
+    {
+      covered += overlapArea(rect, tile);
+    }
+    if (covered < std::int64_t(rect.size) * std::int64_t(rect.size))
+    {
+      vacated.push_back(rect);
+    }
+  }
+  // the lights placed and not, the latter by name (D157), at every way out
+  const auto countRecords = [&] {
+    for (const auto& record : m_shadowRecords)
+    {
+      if (record.placed())
+      {
+        ++m_stats.lightsPlaced;
+      }
+      else
+      {
+        ++m_stats.lightsUnplaced;
+        m_stats.unplacedLights.emplace_back(
+          spawnString(m_lists.lights[record.index].record->spawnArgs, "name"));
+      }
+    }
+  };
+  const auto unplaceAll = [&] {
+    for (auto& record : m_shadowRecords)
+    {
+      record.imageSize[0] = -1;
+    }
+  };
+  if (tiles.empty() && vacated.empty())
+  {
+    m_atlasOccupied.clear();
+    countRecords();
+    return;
+  }
+
+  // the atlas, made at the first frame that places a tile (A49: 256 MB from then on)
+  if (!ensureShadowAtlas(frame))
+  {
+    m_stats.shadowAtlasDisabled = true;
+    m_atlasOccupied.clear();
+    unplaceAll();
+    countRecords();
+    return;
+  }
+
+  auto atlasFrame = frame;
+  atlasFrame.framebuffer = m_atlasFramebuffer.Get();
+  atlasFrame.formats = AtlasFormats;
+  m_currentSpace.reset();
+  auto disabled = false;
+
+  // D147, P3.3: the vacated rects first, each by a far-plane quad
+  for (const auto& rect : vacated)
+  {
+    if (!clearAtlasRect(atlasFrame, rect, NoPreviewId, -1))
+    {
+      disabled = true;
+      break;
+    }
+    ++m_stats.tilesVacated;
+  }
+
+  // then each placed side, in loop 2's order: its far-plane clear, then its draws
+  for (auto t = std::size_t{0}; t < tiles.size() && !disabled; ++t)
+  {
+    const auto [r, side] = tiles[t];
+    auto& record = m_shadowRecords[r];
+    const auto slice = std::size_t(std::max(0, side));
+    const auto rect = AtlasRect{
+      record.atlasOffsets[slice][0], record.atlasOffsets[slice][1], record.imageSize[1]};
+    if (!clearAtlasRect(atlasFrame, rect, record.light, side))
+    {
+      disabled = true;
+      break;
+    }
+    ++m_stats.tilesDrawn;
+    m_stats.atlasBytesWritten +=
+      std::uint64_t(rect.size) * std::uint64_t(rect.size) * sizeof(float);
+  }
+  m_atlasOccupied = std::move(current);
+
+  if (disabled)
+  {
+    // D9: the pass is disabled; every light draws the plain interaction (programReport()
+    // says why)
+    m_stats.shadowAtlasDisabled = true;
+    unplaceAll();
+  }
+  countRecords();
+
+  // :3910-3915: GL_State( GLS_DEFAULT ) (each draw's key carries its state), ALPHA_TEST
+  // 0, ResetViewportAndScissorToDefaultCamera
+  m_parms.set(RenderParm::AlphaTest, ZeroVec4);
+  m_currentScissor = viewScissor(frame.view);
+  m_scissor = engineScissorRect(frame.view, m_currentScissor);
+  m_currentSpace.reset();
+}
+
+bool LitPasses::ensureShadowAtlas(Frame& frame)
+{
+  if (m_atlas && m_atlasFramebuffer)
+  {
+    return true;
+  }
+  if (m_atlasFailed)
+  {
+    return false;
+  }
+  // _shadowMapAtlas: GenerateImage( NULL, r_shadowMapAtlasSize, r_shadowMapAtlasSize,
+  // TF_LINEAR, TR_CLAMP_TO_ZERO_ALPHA, TD_DEPTH, isRenderTarget ) (Image_intrinsic.cpp:
+  // 672-675, 1077): FMT_DEPTH, nvrhi::Format::D32 (IN:400-402), initial state DepthWrite
+  // and clear value 1 (IN:556-566); nvrhi rule 3: that state kept
+  auto& device = *frame.inputs->device;
+  const auto size = std::uint32_t(EngineFrame.shadowMapAtlasSize);
+  auto desc = nvrhi::TextureDesc{};
+  desc.width = size;
+  desc.height = size;
+  desc.format = AtlasFormat;
+  desc.debugName = "_shadowMapAtlas";
+  desc.isRenderTarget = true;
+  desc.initialState = nvrhi::ResourceStates::DepthWrite;
+  desc.keepInitialState = true;
+  desc.setClearValue(nvrhi::Color{1.0f});
+  auto atlas = device.createTexture(desc);
+  auto framebuffer =
+    atlas ? device.createFramebuffer(nvrhi::FramebufferDesc{}.setDepthAttachment(atlas))
+          : nvrhi::FramebufferHandle{};
+  if (!atlas || !framebuffer)
+  {
+    m_atlasFailed = true;
+    if (!m_atlasWarned && frame.inputs->warn)
+    {
+      m_atlasWarned = true;
+      frame.inputs->warn(
+        "The lit preview cannot make its shadow atlas (8192 × 8192 D32): no light casts "
+        "shadows in this session");
+    }
+    return false;
+  }
+  // cleared whole once, at its creation (D147)
+  frame.inputs->commandList->clearDepthStencilTexture(
+    atlas, nvrhi::AllSubresources, true, 1.0f, false, 0);
+  m_state.valid = false;
+  m_atlas = std::move(atlas);
+  m_atlasFramebuffer = std::move(framebuffer);
+  m_atlasOccupied.clear();
+  return true;
+}
+
+void LitPasses::setAtlasViewport(Frame& frame, const AtlasRect& rect)
+{
+  // GL_ViewportAndScissor( x, y, w, h ): currentViewport and the scissor [x, x + w] × [y,
+  // y + h], taken by NVRHI top-left and unflipped (RenderBackend_NVRHI.cpp:520-535,
+  // 2176-2193; SC719)
+  frame.viewport = nvrhi::Viewport{
+    float(rect.x),
+    float(rect.x + rect.size),
+    float(rect.y),
+    float(rect.y + rect.size),
+    0.0f,
+    1.0f};
+  m_scissor = nvrhi::Rect{rect.x, rect.x + rect.size, rect.y, rect.y + rect.size};
+}
+
+bool LitPasses::clearAtlasRect(
+  Frame& frame, const AtlasRect& rect, const PreviewId light, const int side)
+{
+  // D147: NVRHI has no rect clear (§3.9); a quad at z = w = 1 through the identity MVP,
+  // DEPTHFUNC_ALWAYS, depth written, both sides, no polygon offset, writes exactly 1.0
+  // under the rect's scissor
+  setAtlasViewport(frame, rect);
+  const auto geometry = clearQuadGeometry(frame);
+  if (!geometry)
+  {
+    ++m_stats.skippedDraws;
+    m_stats.unconverged = true;
+    m_stats.retrigger = true;
+    return true;
+  }
+  setMvp(m_parms, engineIdentityMatrix());
+  m_currentSpace.reset();
+  constexpr auto state = gls::DepthFuncAlways | gls::CullTwoSided;
+  const auto outcome =
+    drawGeometry(frame, EngineBuiltinDepth, *geometry, state, 0.0f, 0.0f, nullptr);
+  if (outcome == DrawOutcome::Disabled)
+  {
+    return false;
+  }
+  if (outcome == DrawOutcome::Drawn && m_logDraws)
+  {
+    auto record = LitDrawRecord{};
+    record.pass = LitDrawRecord::Pass::ShadowClear;
+    record.light = light;
+    record.program = EngineBuiltinDepth;
+    record.state = state;
+    record.scissor = m_scissor;
+    record.side = side;
+    m_drawLog.push_back(std::move(record));
+  }
+  return true;
+}
+
+std::optional<LitPasses::DrawGeometry> LitPasses::clearQuadGeometry(Frame& frame)
+{
+  if (!m_clearQuadVertices || !m_clearQuadIndexes)
+  {
+    // the clip-space square at the far plane: (±1, ±1, 1), w = 1 through the identity
+    auto verts = std::array<EngineDrawVert, 4>{};
+    verts[0].xyz = {-1.0f, -1.0f, 1.0f};
+    verts[1].xyz = {1.0f, -1.0f, 1.0f};
+    verts[2].xyz = {1.0f, 1.0f, 1.0f};
+    verts[3].xyz = {-1.0f, 1.0f, 1.0f};
+    constexpr auto indexes = std::array<std::uint16_t, 6>{0, 1, 2, 0, 2, 3};
+    // nvrhi rule 3: a known entry state kept; written once through the frame's list
+    auto vertexDesc = nvrhi::BufferDesc{};
+    vertexDesc.byteSize = sizeof(verts);
+    vertexDesc.debugName = "Lit preview atlas clear quad vertices";
+    vertexDesc.isVertexBuffer = true;
+    vertexDesc.initialState = nvrhi::ResourceStates::VertexBuffer;
+    vertexDesc.keepInitialState = true;
+    auto indexDesc = nvrhi::BufferDesc{};
+    indexDesc.byteSize = sizeof(indexes);
+    indexDesc.debugName = "Lit preview atlas clear quad indexes";
+    indexDesc.isIndexBuffer = true;
+    indexDesc.initialState = nvrhi::ResourceStates::IndexBuffer;
+    indexDesc.keepInitialState = true;
+    auto& device = *frame.inputs->device;
+    auto vertices = device.createBuffer(vertexDesc);
+    auto indexBuffer = device.createBuffer(indexDesc);
+    if (!vertices || !indexBuffer)
+    {
+      return std::nullopt;
+    }
+    auto& commandList = *frame.inputs->commandList;
+    commandList.writeBuffer(vertices, verts.data(), sizeof(verts));
+    commandList.writeBuffer(indexBuffer, indexes.data(), sizeof(indexes));
+    // nvrhi rules 6 and 7: the writes end the render pass
+    m_state.valid = false;
+    m_clearQuadVertices = std::move(vertices);
+    m_clearQuadIndexes = std::move(indexBuffer);
+  }
+  return DrawGeometry{m_clearQuadVertices.Get(), m_clearQuadIndexes.Get(), 6, 0, 0};
 }
 
 std::optional<MaterialImageKey> LitPasses::stageImage(
@@ -2919,7 +3347,8 @@ LitPasses::DrawOutcome LitPasses::drawGeometry(
     return DrawOutcome::Skipped;
   }
 
-  const auto viewport = engineViewport(frame.view);
+  // LP3.1: pass 6's tile viewport, else the view's
+  const auto viewport = frame.viewport ? *frame.viewport : engineViewport(frame.view);
   auto changeState = !m_state.valid || m_state.pipeline != pipeline
                      || m_state.framebuffer != frame.framebuffer
                      || m_state.vertexBuffer != vertexBuffer
@@ -3076,6 +3505,26 @@ std::uint64_t LitPasses::volatileBufferBytes() const
   return bytes;
 }
 
+std::uint64_t LitPasses::shadowAtlasBytes() const
+{
+  if (!m_atlas)
+  {
+    return 0;
+  }
+  const auto& desc = m_atlas->getDesc();
+  return std::uint64_t(desc.width) * std::uint64_t(desc.height) * sizeof(float);
+}
+
+const std::vector<ShadowLightRecord>& LitPasses::shadowLights() const
+{
+  return m_shadowRecords;
+}
+
+nvrhi::ITexture* LitPasses::shadowAtlas() const
+{
+  return m_atlas.Get();
+}
+
 const RenderParms& LitPasses::parms() const
 {
   return m_parms;
@@ -3083,6 +3532,16 @@ const RenderParms& LitPasses::parms() const
 
 void LitPasses::releaseAll()
 {
+  // LP3.1 (C59): the shadow atlas goes with the session's device objects (teardown step
+  // 2), so that the stop row's allocations are back to the start's
+  m_atlasFramebuffer = nullptr;
+  m_atlas = nullptr;
+  m_atlasFailed = false;
+  m_atlasOccupied.clear();
+  m_shadowRecords.clear();
+  m_shadowRecordOf.clear();
+  m_clearQuadVertices = nullptr;
+  m_clearQuadIndexes = nullptr;
   m_constantBuffers.clear();
   m_lists = FrontendLists{};
   m_stageOrder.clear();
@@ -3122,6 +3581,12 @@ void LitPasses::setSkipShaderPassesForTesting(const bool on)
 bool LitPasses::skipShaderPassesForTesting() const
 {
   return m_skipShaderPasses;
+}
+
+void LitPasses::setSkipShadowsForTesting(const bool on)
+{
+  // the lists' key holds it: they are built again when it changes
+  m_skipShadows = on;
 }
 
 void LitPasses::setDrawLogForTesting(const bool on)
