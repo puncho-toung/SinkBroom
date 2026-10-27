@@ -35,10 +35,12 @@
 // spot light and a parallel light's four cascades. The idRenderMatrix operations the
 // range calls (Multiply, Transpose, Inverse, GetFrustumCorners) are the copy's, through
 // the light facade, as R_MatrixMultiply is (engineGlMatrixMultiply): the test transcribes
-// what the ranges themselves compute.
+// what the ranges themselves compute. LP3.2 (D157 extended): and the consumer's program
+// choice with the per-list shadow-atlas draw counters on a synthetic frame.
 
 #include "LitPasses.h"
 #include "LitView.h"
+#include "lit/EngineBuiltins.h"
 #include "lit/EngineLight.h"
 #include "lit/EngineShadowMatrices.h"
 #include "lit/EngineTables.h"
@@ -726,6 +728,118 @@ TEST_CASE("EngineShadowMatrices (LP3.1, C58, D160)")
         engineShadowMapMatrices(light, side, shadowView, splits),
         parallelSide(light, view, splits, side));
     }
+  }
+}
+
+
+// LP3.2 (D157 extended, SC709, P3.10): the per-list shadow-atlas interaction draws on a
+// synthetic frame of one casting light with a surface on each list (a noSelfShadow wall
+// on the local list, a wall on the global, a translucent panel on the translucent), each
+// drawn as RenderInteractions draws it: the program engineInteractionProgram chooses
+// (DrawSingleInteraction, RenderBackend.cpp:1404-1470, 1528-1595), then
+// countInteractionDraw. Placed in the atlas: one shadow-atlas draw per list; unplaced (no
+// record: a side without a tile, LOD -1 or no caster) the plain program, none counted; an
+// ambientLight light's interactionAmbient, none counted
+TEST_CASE("LitPasses: the shadow-atlas interaction draws per list (LP3.2, D157, SC709)")
+{
+  auto placed = ShadowLightRecord{};
+  placed.type = ShadowLightType::Point;
+  placed.lod = 1;
+  placed.sides = 6;
+  placed.imageSize = {512, 512};
+  REQUIRE(placed.placed());
+
+  struct Surface
+  {
+    InteractionList list = InteractionList::Global;
+    InteractionProgram program = InteractionProgram::Interaction;
+  };
+  const auto frameOf =
+    [](const std::vector<Surface>& surfaces, const ShadowLightRecord* shadow) {
+      auto stats = LitFrameStats{};
+      for (const auto& surface : surfaces)
+      {
+        countInteractionDraw(
+          stats, surface.list, engineInteractionProgram(surface.program, shadow));
+      }
+      return stats;
+    };
+  const auto eachList = std::vector<Surface>{
+    {InteractionList::Local, InteractionProgram::Interaction},
+    {InteractionList::Global, InteractionProgram::PbrInteraction},
+    {InteractionList::Translucent, InteractionProgram::Interaction}};
+
+  SECTION("a light placed in the atlas: one shadow-atlas draw per list")
+  {
+    const auto stats = frameOf(eachList, &placed);
+    CHECK(stats.interactionDraws == 3u);
+    CHECK(stats.smDrawsLocal == 1u);
+    CHECK(stats.smDrawsGlobal == 1u);
+    CHECK(stats.smDrawsTranslucent == 1u);
+    // the plain draws are the difference
+    CHECK(
+      stats.interactionDraws - stats.smDrawsLocal - stats.smDrawsGlobal
+        - stats.smDrawsTranslucent
+      == 0u);
+  }
+
+  SECTION("an unplaced light draws the plain programs: none counted (K26)")
+  {
+    const auto stats = frameOf(eachList, nullptr);
+    CHECK(stats.interactionDraws == 3u);
+    CHECK(stats.smDrawsLocal == 0u);
+    CHECK(stats.smDrawsGlobal == 0u);
+    CHECK(stats.smDrawsTranslucent == 0u);
+  }
+
+  SECTION("an ambientLight light's interactionAmbient: none counted")
+  {
+    const auto stats = frameOf(
+      {{InteractionList::Global, InteractionProgram::InteractionAmbient},
+       {InteractionList::Local, InteractionProgram::InteractionAmbient}},
+      &placed);
+    CHECK(stats.interactionDraws == 2u);
+    CHECK(stats.smDrawsLocal + stats.smDrawsGlobal + stats.smDrawsTranslucent == 0u);
+  }
+
+  SECTION("the programs of each light type, legacy and PBR, and the plain ones")
+  {
+    using Expected = std::tuple<ShadowLightType, int, int>;
+    for (const auto& [type, legacy, pbr] : {
+           Expected{
+             ShadowLightType::Point,
+             EngineBuiltinInteractionShadowAtlasPoint,
+             EngineBuiltinPbrInteractionShadowAtlasPoint},
+           Expected{
+             ShadowLightType::Spot,
+             EngineBuiltinInteractionShadowAtlasSpot,
+             EngineBuiltinPbrInteractionShadowAtlasSpot},
+           Expected{
+             ShadowLightType::Parallel,
+             EngineBuiltinInteractionShadowAtlasParallel,
+             EngineBuiltinPbrInteractionShadowAtlasParallel},
+         })
+    {
+      auto record = placed;
+      record.type = type;
+      CHECK(engineInteractionProgram(InteractionProgram::Interaction, &record) == legacy);
+      CHECK(engineInteractionProgram(InteractionProgram::PbrInteraction, &record) == pbr);
+      CHECK(engineShadowAtlasProgram(legacy));
+      CHECK(engineShadowAtlasProgram(pbr));
+    }
+    CHECK(
+      engineInteractionProgram(InteractionProgram::Interaction, nullptr)
+      == EngineBuiltinInteraction);
+    CHECK(
+      engineInteractionProgram(InteractionProgram::PbrInteraction, nullptr)
+      == EngineBuiltinPbrInteraction);
+    CHECK(
+      engineInteractionProgram(InteractionProgram::InteractionAmbient, &placed)
+      == EngineBuiltinInteractionAmbient);
+    CHECK_FALSE(engineShadowAtlasProgram(EngineBuiltinInteraction));
+    CHECK_FALSE(engineShadowAtlasProgram(EngineBuiltinPbrInteraction));
+    CHECK_FALSE(engineShadowAtlasProgram(EngineBuiltinInteractionAmbient));
+    CHECK_FALSE(engineShadowAtlasProgram(EngineBuiltinDepth));
   }
 }
 

@@ -346,8 +346,9 @@ using namespace std::chrono_literals;
 
 // the frame log's fields (lit/FrameLog.cpp, frameLogHeader): LP5.3's 57, LP7.0's
 // proc_bytes and the eleven model, dress and adoption counts (C52, P7.20), LP7.3's
-// inlined_surfaces (C54), LP3.1's pass 6 and caster columns (D157)
-constexpr auto FrameLogFields = std::size_t{91};
+// inlined_surfaces (C54), LP3.1's pass 6 and caster columns (D157), LP3.2's per-list
+// shadow-atlas interaction draws
+constexpr auto FrameLogFields = std::size_t{94};
 
 // LP2.0, T0.2: the validation layer's id of "Vertex attribute at location N not consumed
 // by vertex shader" (mirror.json M-PIPE-DEFECT-01), as this machine's layer names it
@@ -6670,6 +6671,28 @@ bool parityCountHolds(const JsonValue& expected, const std::size_t actual)
   return actual == std::size_t(expected.number);
 }
 
+// LP3.2 (D157 extended, SC709): the shadow counters a parity row's "expect" can pin (a
+// number or {"min": n}), by key, from the settled frame's stats; none for another key
+std::optional<std::size_t> parityShadowCount(
+  const LitFrameStats& lit, const std::string_view key)
+{
+  const auto counts = std::array<std::pair<std::string_view, std::size_t>, 10>{{
+    {"lights_casting", lit.lightsCasting},
+    {"lights_placed", lit.lightsPlaced},
+    {"lights_unplaced", lit.lightsUnplaced},
+    {"tiles_drawn", lit.tilesDrawn},
+    {"shadow_draws", lit.shadowDraws},
+    {"perforated_skipped", lit.perforatedCastersSkipped},
+    {"atlas_bytes_written", std::size_t(lit.atlasBytesWritten)},
+    {"sm_draws_local", lit.smDrawsLocal},
+    {"sm_draws_global", lit.smDrawsGlobal},
+    {"sm_draws_translucent", lit.smDrawsTranslucent},
+  }};
+  const auto found =
+    std::ranges::find_if(counts, [&](const auto& count) { return count.first == key; });
+  return found != counts.end() ? std::optional{found->second} : std::nullopt;
+}
+
 std::vector<PreviewId> snapshotIds(const Snapshot& snapshot)
 {
   auto ids = std::vector<PreviewId>{};
@@ -6854,8 +6877,12 @@ TEST_CASE("LitSession parity rows: the ambient-only switch (LP4.2b)")
  * stage_pending; LP7.2 (C52): and the models' (model_draws, models_pending,
  * models_skinned); LP7.3 (C54): and the dress decals' (dress_surfaces, the dress surfaces
  * the frame drew; dress_unmatched, the scene's func_decals without a fragment surface;
- * the .json also the scene's identified surfaces and inlined copies). Hidden: it needs a
- * GPU and the root of a parity.py run.
+ * the .json also the scene's identified surfaces and inlined copies); LP3.2 (D157
+ * extended, SC709): and pass 6's counters (lights_casting, lights_placed,
+ * lights_unplaced, tiles_drawn, shadow_draws, perforated_skipped, atlas_bytes_written)
+ * and the per-list shadow-atlas interaction draws (sm_draws_local, sm_draws_global,
+ * sm_draws_translucent), the .json also the atlas's unshadowed lights by name. Hidden: it
+ * needs a GPU and the root of a parity.py run.
  */
 TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
 {
@@ -7110,6 +7137,30 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           expectedArea,
           fmt::join(areas, ", "));
       }
+      // LP3.2 (D157 extended, SC709, P3.10): pass 6's counters a row can pin, the
+      // per-list shadow-atlas interaction draws, and the lights the atlas left unshadowed
+      // (their "name" keys, in viewLights order: H11's two, D162)
+      auto unplaced = std::vector<std::string>{};
+      for (const auto& name : lit.unplacedLights)
+      {
+        unplaced.push_back(fmt::format("\"{}\"", name));
+      }
+      const auto shadowStats = fmt::format(
+        "\"lights_casting\": {}, \"lights_placed\": {}, \"lights_unplaced\": {}, "
+        "\"tiles_drawn\": {}, \"shadow_draws\": {}, \"perforated_skipped\": {}, "
+        "\"atlas_bytes_written\": {}, \"sm_draws_local\": {}, \"sm_draws_global\": {}, "
+        "\"sm_draws_translucent\": {}, \"unplaced_lights\": [{}]",
+        lit.lightsCasting,
+        lit.lightsPlaced,
+        lit.lightsUnplaced,
+        lit.tilesDrawn,
+        lit.shadowDraws,
+        lit.perforatedCastersSkipped,
+        lit.atlasBytesWritten,
+        lit.smDrawsLocal,
+        lit.smDrawsGlobal,
+        lit.smDrawsTranslucent,
+        fmt::join(unplaced, ", "));
       writeTextFile(
         out / (id + ".json"),
         fmt::format(
@@ -7130,7 +7181,7 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           "\"blend_lights\": {}, \"portals_fogged\": {}, \"model_entities\": {}, "
           "\"model_instances\": {}, \"model_draws\": {}, \"models_pending\": {}, "
           "\"models_skinned\": {}, \"dress_surfaces\": {}, \"dress_unmatched\": {}, "
-          "\"dress_identified\": {}, \"inlined_surfaces\": {}, \"view_lights\": "
+          "\"dress_identified\": {}, \"inlined_surfaces\": {}, {}, \"view_lights\": "
           "[{}]}}\n",
           width,
           height,
@@ -7181,6 +7232,7 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           settledRow->lists.dressUnmatched,
           settledRow->lists.dressIdentified,
           settledRow->lists.inlinedSurfaces,
+          shadowStats,
           fmt::join(viewLights, ", ")));
 
       // C38 (LP4.2b): an ambient-only frame drew no interaction and was lit by the
@@ -7308,6 +7360,15 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           else if (key == "dress_unmatched")
           {
             CHECK(settledRow->lists.dressUnmatched == std::uint64_t(value.number));
+          }
+          else if (const auto count = parityShadowCount(lit, key))
+          {
+            // LP3.2 (D157 extended, SC709): pass 6's counters (lights casting, placed and
+            // unplaced by the atlas, tiles, shadow draws, perforated casters skipped,
+            // atlas bytes: the LOD) and the per-list shadow-atlas interaction draws, a
+            // count or a minimum
+            CAPTURE(*count);
+            CHECK(parityCountHolds(value, *count));
           }
           else
           {

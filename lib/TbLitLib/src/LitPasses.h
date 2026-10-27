@@ -336,6 +336,13 @@ struct LitFrameStats
   // against constantWriteBudget
   std::uint64_t interactionWrites = 0;
   std::uint64_t interactionSmWrites = 0;
+  // LP3.2 (D157 extended, SC709, P3.10): the interaction draws that used a shadow-atlas
+  // program (interactionSM), per list (countInteractionDraw): H05's proof that a
+  // noSelfShadow surface of a casting light is drawn on the local list with it; the plain
+  // interaction draws are interactionDraws less their sum
+  std::size_t smDrawsLocal = 0;
+  std::size_t smDrawsGlobal = 0;
+  std::size_t smDrawsTranslucent = 0;
 };
 
 // a recorded draw (setDrawLogForTesting)
@@ -429,6 +436,27 @@ bool engineShadowCasterCulled(const EngineMat4& mvp, const EngineBounds& bounds)
 // the translucent list): additive RGB, alpha overwritten, no depth write, stencil
 // ALWAYS (D75)
 std::uint64_t interactionStateBits(std::uint64_t depthFunc);
+
+/**
+ * LP3.1 (C60, SC726): DrawSingleInteraction's program (RenderBackend.cpp:1404-1470 PBR,
+ * :1528-1595 legacy): an ambientLight light's interactionAmbient first; then, for a
+ * light the frame's pass 6 placed in the atlas (shadow, its record), the shadow-atlas
+ * interaction of its type, vLight->parallel, then pointLight, else spot (ids 39-50, never
+ * the skinned forms, P3.24e); else the plain interaction (K26). Pure; any thread.
+ */
+int engineInteractionProgram(InteractionProgram program, const ShadowLightRecord* shadow);
+
+// LP3.2 (D157 extended, SC709): a shadow-atlas interaction program (interactionSM, the
+// builtins 39-49 of engineInteractionProgram). Pure
+bool engineShadowAtlasProgram(int program);
+
+/**
+ * LP3.2 (D157 extended, SC709, P3.10): a drawn interaction counted into the frame's
+ * stats, as RenderInteractions draws it from a light's list: interactionDraws, and when
+ * its program is a shadow-atlas one its list's smDrawsLocal, smDrawsGlobal or
+ * smDrawsTranslucent. Pure; the render thread's recording.
+ */
+void countInteractionDraw(LitFrameStats& stats, InteractionList list, int program);
 
 /**
  * DX.5: the lit passes' pipelines that every lit scene draws with, as their first draws
@@ -932,11 +960,6 @@ private:
   // LP3.1 (C60): the frame's record of a list light when pass 6 placed it in the atlas,
   // else null (r_skipShadows, not casting, LOD -1, no caster, a side without a tile)
   const ShadowLightRecord* shadowRecordOf(const ViewLight& light) const;
-  // LP3.1 (C60, SC726): DrawSingleInteraction's program: interactionAmbient, the
-  // shadow-atlas interaction of the placed light's type (ids 39-50 less skinned), else
-  // the plain interaction (K26)
-  int interactionProgram(
-    InteractionProgram program, const ShadowLightRecord* shadow) const;
   // D76: the most writes a light's interactions may make
   std::uint64_t worstCaseWrites(const ViewLight& light) const;
   // U2.11: a draw dropped for the budget: counted, and said once

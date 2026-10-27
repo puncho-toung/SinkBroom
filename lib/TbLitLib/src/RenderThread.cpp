@@ -2166,6 +2166,10 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.atlasBytesWritten = litStats.atlasBytesWritten;
       row.shadowCpuMs = litStats.shadowRecordMs;
       row.set11Writes = litStats.interactionSmWrites;
+      // LP3.2 (D157 extended, SC709): the shadow-atlas interaction draws per list
+      row.smDrawsLocal = litStats.smDrawsLocal;
+      row.smDrawsGlobal = litStats.smDrawsGlobal;
+      row.smDrawsTranslucent = litStats.smDrawsTranslucent;
       row.casterLights = litStats.casterLights;
       row.casterPairs = litStats.casterPairs;
       row.casterPairsResident = litStats.casterPairsResident;

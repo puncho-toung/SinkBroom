@@ -171,12 +171,13 @@ std::string lp7Fields(const FrameLogRow& row)
     optionalCount(row.inlinedSurfaces));
 }
 
-// LP3.1's columns (D157): pass 6's counts and times, set 11's writes, and LP3.0's caster
-// requests; empty in a start or stop row
+// LP3.1's columns (D157): pass 6's counts and times, set 11's writes, LP3.2's per-list
+// shadow-atlas interaction draws, and LP3.0's caster requests; empty in a start or stop
+// row
 std::string shadowFields(const FrameLogRow& row)
 {
   return fmt::format(
-    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+    "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
     optionalCount(row.shadowDraws),
     optionalCount(row.tilesDrawn),
     optionalCount(row.tilesCleared),
@@ -191,6 +192,9 @@ std::string shadowFields(const FrameLogRow& row)
     optionalField(row.gpuShadowMs, "{:.3f}"),
     optionalField(row.shadowCpuMs, "{:.3f}"),
     optionalCount(row.set11Writes),
+    optionalCount(row.smDrawsLocal),
+    optionalCount(row.smDrawsGlobal),
+    optionalCount(row.smDrawsTranslucent),
     optionalCount(row.casterLights),
     optionalCount(row.casterPairs),
     optionalCount(row.casterPairsResident),
@@ -233,8 +237,9 @@ std::string_view frameLogHeader()
          "islands,inlined_surfaces,shadow_draws,tiles_drawn,tiles_cleared,tiles_"
          "relocated,tiles_cached,tiles_provisional,lights_casting,lights_placed,lights_"
          "unplaced,perforated_skipped,atlas_bytes_written,gpu_shadow_ms,shadow_cpu_ms,"
-         "set11_writes,caster_lights,caster_pairs,caster_pairs_resident,caster_pairs_"
-         "pending,casters,caster_ms,light_triangle_entries\n";
+         "set11_writes,sm_draws_local,sm_draws_global,sm_draws_translucent,caster_"
+         "lights,caster_pairs,caster_pairs_resident,caster_pairs_pending,casters,caster_"
+         "ms,light_triangle_entries\n";
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)
@@ -246,10 +251,10 @@ std::string formatFrameLogRow(const FrameLogRow& row)
   if (row.event != FrameLogEvent::Frame)
   {
     // the frame's columns empty (gpu_prepass_ms ... gpu_fog_ms), then proc_bytes, then
-    // LP7's twelve counts and LP3.1's twenty-one empty
+    // LP7's twelve counts, LP3.1's twenty-one and LP3.2's three empty
     return fmt::format(
       "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,{},,,,,,,,,,,,"
-      ",,,,,,,,,,,,,,,,,,,,,\n",
+      ",,,,,,,,,,,,,,,,,,,,,,,,\n",
       row.session,
       eventName(row.event),
       vram,

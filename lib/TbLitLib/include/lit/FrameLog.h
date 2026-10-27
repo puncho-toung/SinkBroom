@@ -203,6 +203,12 @@ struct FrameLogRow
   std::optional<double> gpuShadowMs;
   std::optional<double> shadowCpuMs;
   std::optional<std::uint64_t> set11Writes;
+  // LP3.2 (D157 extended, SC709, P3.10): the interaction draws that used a shadow-atlas
+  // program, per list (LitFrameStats::smDrawsLocal, smDrawsGlobal, smDrawsTranslucent):
+  // the columns after set11_writes
+  std::optional<std::uint64_t> smDrawsLocal;
+  std::optional<std::uint64_t> smDrawsGlobal;
+  std::optional<std::uint64_t> smDrawsTranslucent;
   // LP3.0's caster light-triangle requests of the frame's lists (C57, P3.14), the
   // casters' log's columns until LP3.1: the lights that gathered casters, the (light,
   // chunk) pairs asked for, answered and pending, the casters kept, the gathering's time

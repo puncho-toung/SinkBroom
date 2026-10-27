@@ -1211,7 +1211,7 @@ bool LitPasses::renderInteractions(
         // interaction of its type (DrawSingleInteraction, RenderBackend.cpp:1417-1470,
         // 1541-1595: the ambientLight test first, then r_skipShadows, globalShadows and
         // ImageAtlasPlaced); else the plain one (K26)
-        const auto program = interactionProgram(interaction.program, shadow);
+        const auto program = engineInteractionProgram(interaction.program, shadow);
         switch (draw(
           frame,
           program,
@@ -1222,7 +1222,8 @@ bool LitPasses::renderInteractions(
           surface->lightTriangles.get()))
         {
         case DrawOutcome::Drawn:
-          ++m_stats.interactionDraws;
+          // LP3.2 (D157 extended): and its list's shadow-atlas draws
+          countInteractionDraw(m_stats, list, program);
           log(
             frame, LitDrawRecord::Pass::Interaction, *surface->chunk, program, stateBits);
           break;
@@ -1348,8 +1349,8 @@ void LitPasses::setInteractionSpace(
   }
 }
 
-int LitPasses::interactionProgram(
-  const InteractionProgram program, const ShadowLightRecord* shadow) const
+int engineInteractionProgram(
+  const InteractionProgram program, const ShadowLightRecord* shadow)
 {
   // RenderBackend.cpp:1404-1470 (PBR) and :1528-1595 (legacy): an ambientLight light
   // first; then a light placed in the atlas by its type, vLight->parallel, then
@@ -1376,6 +1377,44 @@ int LitPasses::interactionProgram(
   }
   return pbr ? EngineBuiltinPbrInteractionShadowAtlasSpot
              : EngineBuiltinInteractionShadowAtlasSpot;
+}
+
+bool engineShadowAtlasProgram(const int program)
+{
+  switch (program)
+  {
+  case EngineBuiltinInteractionShadowAtlasSpot:
+  case EngineBuiltinInteractionShadowAtlasPoint:
+  case EngineBuiltinInteractionShadowAtlasParallel:
+  case EngineBuiltinPbrInteractionShadowAtlasSpot:
+  case EngineBuiltinPbrInteractionShadowAtlasPoint:
+  case EngineBuiltinPbrInteractionShadowAtlasParallel:
+    return true;
+  default:
+    return false;
+  }
+}
+
+void countInteractionDraw(
+  LitFrameStats& stats, const InteractionList list, const int program)
+{
+  ++stats.interactionDraws;
+  if (!engineShadowAtlasProgram(program))
+  {
+    return;
+  }
+  switch (list)
+  {
+  case InteractionList::Local:
+    ++stats.smDrawsLocal;
+    break;
+  case InteractionList::Global:
+    ++stats.smDrawsGlobal;
+    break;
+  case InteractionList::Translucent:
+    ++stats.smDrawsTranslucent;
+    break;
+  }
 }
 
 const ShadowLightRecord* LitPasses::shadowRecordOf(const ViewLight& light) const
