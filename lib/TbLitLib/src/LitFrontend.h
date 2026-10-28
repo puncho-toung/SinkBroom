@@ -44,6 +44,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -51,6 +52,7 @@
 namespace tb::lit
 {
 struct AreaData;
+class CasterSets;
 struct GridTable;
 struct PortalFogTable;
 struct ProcTree;
@@ -162,7 +164,10 @@ struct ViewLight
    * R_SetEntityDefViewEntity, FAL:694-698), its material and its light triangles (null:
    * all; Pending: not known yet). A TranslucentCaster counts and is never drawn (P3.17).
    * Nothing draws them before LP3.1. LP3.4 (D155): a Perforated caster also carries its
-   * registers and provisional flag (perforatedHash below).
+   * registers and provisional flag (perforatedHash below). LP6.2 (C66, D168): filled from
+   * the light's caster set (CasterSets), kept across builds while its key holds; each
+   * caster's space is the build's (made in the order the casters come, after the drawn
+   * surfaces' spaces).
    */
   std::vector<LitSurface> casters;
   /**
@@ -270,8 +275,26 @@ struct FrontendLists
   std::size_t casterPairsResident = 0;
   std::size_t casterPairsPending = 0;
   std::size_t casters = 0;
-  // the gathering's own time in this build (steady clock), in milliseconds
+  // the gathering's own time in this build (steady clock), in milliseconds, the kept
+  // sets' fill included
   double casterMs = 0.0;
+  // LP6.2 (C66): the caster sets made in this build (kept ones are not)
+  std::size_t casterSetsBuilt = 0;
+};
+
+/**
+ * LPF.0b (C43, D106): what of the material table the frontend lists depend on beyond its
+ * version: the registry, and materialsRevision, which a re-parse moves once (an image
+ * override moves neither), so that LitPasses builds its lists again once per re-parse.
+ * Any thread.
+ */
+struct ListsTableKey
+{
+  std::uint64_t registry = 0;
+  std::uint64_t materialsRevision = 0;
+
+  static ListsTableKey of(const MaterialTable* table);
+  bool operator==(const ListsTableKey&) const = default;
 };
 
 // what the frontend reads; the functions answer from the material table and the
@@ -315,6 +338,18 @@ struct FrontendInputs
   // LP3.1 (C57), tests: r_skipShadows 1's stand-in (LitPasses::setSkipShadowsForTesting):
   // no light gets a shadow LOD or casters, as with EngineFrame.skipShadows
   bool skipShadows = false;
+  // LP6.2 (C66, D168, P8.2): the caster sets kept across builds (LitPasses', or a test's
+  // own; null: a fresh set per light per build, by the same code), and what of their key
+  // the fields above do not hold: the chunks' version, the material table's key and
+  // version and the light-triangle cache's version (CasterSetsKey, CasterSet)
+  CasterSets* casterSets = nullptr;
+  std::uint64_t chunksVersion = 0;
+  ListsTableKey table;
+  std::uint64_t tableVersion = 0;
+  std::uint64_t lightTrianglesVersion = 0;
+  // LP6.2 (D52): the registers of a kept set's Perforated casters stay the consumer's for
+  // this build (RegisterCache::keep: one lookup each, no evaluation)
+  std::function<void(PreviewId, const MaterialEntry&)> keepRegisters;
 };
 
 /**
@@ -526,21 +561,6 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs);
 std::size_t surfaceIndexCount(const LitSurface& surface);
 
 /**
- * LPF.0b (C43, D106): what of the material table the frontend lists depend on beyond its
- * version: the registry, and materialsRevision, which a re-parse moves once (an image
- * override moves neither), so that LitPasses builds its lists again once per re-parse.
- * Any thread.
- */
-struct ListsTableKey
-{
-  std::uint64_t registry = 0;
-  std::uint64_t materialsRevision = 0;
-
-  static ListsTableKey of(const MaterialTable* table);
-  bool operator==(const ListsTableKey&) const = default;
-};
-
-/**
  * D52 (§3.5 Registers, C27's last sentence): the render thread's registers per consumer
  * (an entity's or a light's preview id) and material. An answer is the latest table's
  * evaluation of (material, shaderParms, time 0), else the service's (evaluate queues it
@@ -559,7 +579,18 @@ private:
     bool used = false;
   };
 
-  std::map<std::pair<PreviewId, std::string>, Kept> m_kept;
+  // LP6.2: keyed by (consumer, material name), found by a name's view too (keep)
+  using KeptKey = std::pair<PreviewId, std::string>;
+  using KeptView = std::pair<PreviewId, std::string_view>;
+  struct KeptLess
+  {
+    using is_transparent = void;
+    bool operator()(const KeptKey& lhs, const KeptKey& rhs) const;
+    bool operator()(const KeptKey& lhs, const KeptView& rhs) const;
+    bool operator()(const KeptView& lhs, const KeptKey& rhs) const;
+  };
+
+  std::map<KeptKey, Kept, KeptLess> m_kept;
 
 public:
   RegisterAnswer registers(
@@ -569,6 +600,13 @@ public:
     const MaterialTable& table,
     MaterialService* service);
 
+  /**
+   * LP6.2 (C66, D52): a kept caster set's Perforated caster asks for nothing in a build
+   * (its registers are the set's), so its entry is marked used here (one lookup, no
+   * copy), standing across a re-parse as a drawn surface's does; nothing when there is
+   * none
+   */
+  void keep(PreviewId consumer, std::string_view material);
   // a build begins: every kept entry is unused until asked for
   void beginBuild();
   // the build ended: the entries not asked for go

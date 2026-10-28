@@ -687,6 +687,16 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
                                     space.modelMatrix);
       };
   }
+  // LP6.2 (C66, D168, P8.2): the kept caster sets, with the parts of their key the
+  // frontend's other inputs do not hold, and the registers their Perforated casters keep
+  frontend.casterSets = &m_casterSets;
+  frontend.chunksVersion = key.chunksVersion;
+  frontend.table = key.table;
+  frontend.tableVersion = tableVersion;
+  frontend.lightTrianglesVersion = key.lightTrianglesVersion;
+  frontend.keepRegisters = [&](const PreviewId consumer, const MaterialEntry& material) {
+    m_registers.keep(consumer, material.name);
+  };
   m_registers.beginBuild();
   m_lightTriangles.beginBuild();
   auto lists = buildFrontendLists(frontend);
@@ -694,7 +704,11 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   const auto linksStart = FrameClock::now();
   m_lists = std::move(lists);
   m_registers.endBuild();
-  m_lightTriangles.endBuild(inputs.pool);
+  // LP6.2 (C66): the bound keeps the entries a kept caster set holds
+  m_lightTriangles.endBuild(
+    inputs.pool, [&](const PreviewId light, const ChunkKey& chunk) {
+      return m_casterSets.holds(light, chunk);
+    });
   // LP5.2a (D115): R_SortDrawSurfs' order of the new lists, kept with them
   m_stageOrder = stagePassOrder(m_lists.drawSurfs, m_lists.spaces);
   // LP6.1 (C64): the new lists' links into the records, then the sweep
@@ -5558,6 +5572,8 @@ void LitPasses::releaseAll()
   m_listsKey.reset();
   m_registers.clear();
   m_lightTriangles.clear();
+  // LP6.2 (C66): the caster sets go with the caches whose answers they hold
+  m_casterSets.clear();
   m_state = DrawState{};
   m_units = {};
   m_unitKeys = {};

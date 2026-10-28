@@ -103,6 +103,18 @@ LitSpace litSpaceOf(
   const ShaderParms& shaderParms);
 
 /**
+ * LP6.2 (C66): litSpaceOf's part that no view moves, which it is made from: the entity,
+ * modelMatrix, modelRenderMatrix and shaderParms (modelViewMatrix and mvp left zero),
+ * what the caster gathering reads of a space (the light volume's cull, the caster hash,
+ * the light triangles, the registers). Pure.
+ */
+LitSpace litModelSpaceOf(
+  PreviewId entity,
+  const EngineVec3& origin,
+  const EngineMat3& axis,
+  const ShaderParms& shaderParms);
+
+/**
  * The world's render entity parms (RenderWorld_load.cpp:1083-1086 AddWorldModelEntities):
  * the identity axis at the origin and shaderParms 0 to 3 at 1, the rest 0. Pure.
  */

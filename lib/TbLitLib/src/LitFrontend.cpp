@@ -30,6 +30,7 @@
 
 #include "LitFrontend.h"
 
+#include "CasterSets.h"
 #include "LitStages.h"
 #include "ShadowCache.h"
 #include "ViewFlow.h"
@@ -1055,206 +1056,66 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
   // and LOD -1, RenderBackend.cpp:3653-3674), requested here, per casting light, as the
   // lists are made: R_AddSingleLight's area walk from the light's own area
   // (lightReachesCaster's rule), R_AddSingleModel's shadow surface rule (the cast class,
-  // the light volume's cull, the spectrum, the light triangles), on screen or off. The
-  // candidates (every chunk and instance of a cast class) and what does not depend on the
-  // light (their areas, their space, their material) are gathered once per build
+  // the light volume's cull, the spectrum, the light triangles), on screen or off
+  // (CasterSets, which gathers them)
   const auto casterStart = std::chrono::steady_clock::now();
   lists.lightsMs = millisecondsOf(casterStart - lightsStart);
-  const auto anyCaster = std::ranges::any_of(lists.lights, [](const ViewLight& light) {
-    return light.shadowLod >= 0 && light.shader;
-  });
-  struct CasterCandidate
-  {
-    const ChunkKey* key = nullptr;
-    const Chunk* chunk = nullptr;
-    const ModelInstance* instance = nullptr;
-    AreaSurface areaSurface;
-    // made on first use: the space (none: an invisible entity) and the material
-    bool resolved = false;
-    std::optional<std::size_t> space;
-    std::shared_ptr<const MaterialEntry> material;
-    // LP3.4 (D155, C61, P3.6): a Perforated candidate's registers at view time (its
-    // entity's shaderParms, as the surfaces' :712-723), whether they or its material are
-    // pending or not current, and its term of the lights' perforatedHash
-    std::shared_ptr<const EvaluatedRegisters> registers;
-    bool provisional = false;
-    std::uint64_t perforatedTerm = 0;
-  };
-  auto candidates = std::vector<CasterCandidate>{};
-  if (anyCaster)
-  {
-    const auto add =
-      [&](const ChunkKey& key, const Chunk& chunk, const ModelInstance* instance) {
-        if (chunk.castClass == CastClass::None)
-        {
-          return;
-        }
-        auto candidate = CasterCandidate{};
-        candidate.key = &key;
-        candidate.chunk = &chunk;
-        candidate.instance = instance;
-        if (const auto* state = stateOf(key.entity))
-        {
-          candidate.areaSurface.kind = AreaSurfaceKind::Entity;
-          candidate.areaSurface.refs = state->areas;
-        }
-        else if (key.area >= 0 && std::size_t(key.area) < numAreas)
-        {
-          candidate.areaSurface.kind = AreaSurfaceKind::WorldArea;
-          candidate.areaSurface.area = key.area;
-        }
-        else
-        {
-          candidate.areaSurface.kind = AreaSurfaceKind::WorldOutside;
-        }
-        candidates.push_back(std::move(candidate));
-      };
-    for (const auto& [key, chunk] : *inputs.chunks)
-    {
-      if (!chunk.indexes.empty())
-      {
-        add(key, chunk, nullptr);
-      }
-    }
-    if (inputs.instances)
-    {
-      for (const auto& [key, instance] : *inputs.instances)
-      {
-        if (instance.geometry && instance.geometry->indexCount() > 0)
-        {
-          add(key, instance.header, &instance);
-        }
-      }
-    }
-  }
+  // LP6.2 (C66, D168, P8.2): the casting lights' sets, kept across builds while their
+  // keys hold (CasterSets), or made fresh for this build alone; then each light's casters
+  // from its set, each with this build's space (one lookup), the set's hashes and counts
+  auto fresh = std::optional<CasterSets>{};
+  auto& sets = inputs.casterSets ? *inputs.casterSets : fresh.emplace();
+  sets.beginBuild(casterSetsKeyOf(inputs, flow.flowed));
   for (auto& viewLight : lists.lights)
   {
     if (viewLight.shadowLod < 0 || !viewLight.shader)
     {
       continue;
     }
-    const auto& record = *viewLight.record;
-    const auto& projection = record.derived.projection;
-    const auto areaNum = record.derived.areaNum;
-    const auto spectrum = viewLight.shader->spectrum;
     ++lists.casterLights;
-    // lightReachesCaster, the one rule (C57 rev 2.3, D81, K14, H03): the light's area
-    // test tabulated once per light (lightCasterAreas, FAL:488-501), then per candidate
-    // the outside set for a light without references alone, never for one with
-    // references (a hull face in the void that dmap removes casts nothing into the hull);
-    // without a tree (D94) nothing is classified and every candidate casts
-    const auto areaLight = AreaLight{areaNum, record.derived.areas};
-    const auto casterAreas =
-      flow.flowed ? lightCasterAreas(areaLight, *inputs.areas) : std::vector<char>{};
-    for (auto& candidate : candidates)
+    const auto answer = sets.set(inputs, viewLight.record, viewLight.shader->spectrum);
+    const auto& set = *answer.set;
+    viewLight.casters.reserve(set.casters.size());
+    for (const auto& kept : set.casters)
     {
-      if (
-        flow.flowed && !lightReachesCaster(areaLight, candidate.areaSurface, casterAreas))
+      const auto index = space(kept.key.entity);
+      if (!index)
       {
-        continue;
-      }
-      if (!candidate.resolved)
-      {
-        candidate.resolved = true;
-        candidate.space = space(candidate.key->entity);
-        auto materialPending = false;
-        if (candidate.space && inputs.material)
-        {
-          const auto answer = inputs.material(candidate.key->material);
-          candidate.material = answer.entry;
-          materialPending = answer.pending;
-        }
-        if (candidate.space && candidate.chunk->castClass == CastClass::Perforated)
-        {
-          // LP3.4 (D155): the registers its stages draw by, evaluated once per build (the
-          // surfaces' rule, :712-723); pending ones keep the lists pending (D77): the
-          // table that answers them builds the lists again
-          if (candidate.material && inputs.registers)
-          {
-            const auto registers = inputs.registers(
-              candidate.key->entity,
-              *candidate.material,
-              lists.spaces[*candidate.space].shaderParms);
-            candidate.registers = registers.registers;
-            candidate.provisional = !registers.registers || !registers.current;
-          }
-          else
-          {
-            candidate.provisional = materialPending || !inputs.registers;
-          }
-          lists.pending = lists.pending || candidate.provisional;
-          candidate.perforatedTerm = shadowPerforatedTerm(
-            *candidate.key,
-            candidate.instance != nullptr,
-            candidate.material.get(),
-            candidate.registers.get());
-        }
-      }
-      if (!candidate.space)
-      {
-        continue;
-      }
-      const auto& litSpace = lists.spaces[*candidate.space];
-      if (engineCullModelBoundsToLight(
-            projection.baseLightProject,
-            candidate.chunk->bounds,
-            litSpace.modelRenderMatrix))
-      {
-        continue;
-      }
-      // "invisible ink" lights and shaders (FAM:935-938)
-      if (candidate.material && candidate.material->spectrum != spectrum)
-      {
+        // not under the set's key: its entity's visibility moves chunksVersion
         continue;
       }
       auto caster = LitSurface{};
-      caster.chunk = candidate.chunk;
-      caster.instance = candidate.instance;
-      caster.space = *candidate.space;
-      caster.material = candidate.material;
-      ++lists.casterPairs;
-      const auto triangles = inputs.lightTriangles
-                               ? inputs.lightTriangles(record, caster, litSpace)
-                               : std::shared_ptr<const LightTriangles>{};
-      if (triangles && triangles->state == LightTriangles::State::None)
+      caster.chunk = kept.chunk;
+      caster.instance = kept.instance;
+      caster.space = *index;
+      caster.material = kept.material;
+      caster.lightTriangles = kept.lightTriangles;
+      if (kept.perforated)
       {
-        // no triangle of the surface reaches the light: no shadow surface (FAM:1089)
-        ++lists.casterPairsResident;
-        continue;
-      }
-      if (triangles && triangles->state == LightTriangles::State::Pending)
-      {
-        ++lists.casterPairsPending;
-      }
-      else
-      {
-        ++lists.casterPairsResident;
-      }
-      if (triangles && triangles->state != LightTriangles::State::All)
-      {
-        caster.lightTriangles = triangles;
-      }
-      // LP3.3 (C61, D150): the light's caster hash, over the casters it keeps
-      viewLight.casterHash += shadowCasterTerm(
-        *candidate.key,
-        candidate.instance != nullptr,
-        candidate.chunk->casterVersion,
-        litSpace.modelMatrix,
-        candidate.chunk->castClass,
-        candidate.areaSurface);
-      ++viewLight.casterCount;
-      // LP3.4 (C61, P3.6): a Perforated caster's registers ride on its entry, its term in
-      // the light's perforatedHash
-      if (candidate.chunk->castClass == CastClass::Perforated)
-      {
-        caster.registers = candidate.registers;
-        caster.provisional = candidate.provisional;
-        viewLight.perforatedHash += candidate.perforatedTerm;
+        caster.registers = kept.registers;
+        caster.provisional = kept.provisional;
       }
       viewLight.casters.push_back(std::move(caster));
-      ++lists.casters;
+    }
+    viewLight.casterHash = set.casterHash;
+    viewLight.casterCount = set.casterCount;
+    viewLight.perforatedHash = set.perforatedHash;
+    lists.casterPairs += set.pairs;
+    lists.casterPairsResident += set.pairsResident;
+    lists.casterPairsPending += set.pairsPending;
+    lists.casters += set.casters.size();
+    lists.pending = lists.pending || set.pending;
+    // D52: a kept set's Perforated candidates keep their registers' standing
+    if (!answer.made && inputs.keepRegisters)
+    {
+      for (const auto& [entity, material] : set.registerConsumers)
+      {
+        inputs.keepRegisters(entity, *material);
+      }
     }
   }
+  sets.endBuild(inputs.lights);
+  lists.casterSetsBuilt = sets.built();
   lists.casterMs = std::chrono::duration<double, std::milli>(
                      std::chrono::steady_clock::now() - casterStart)
                      .count();
@@ -1274,6 +1135,23 @@ ListsTableKey ListsTableKey::of(const MaterialTable* table)
 {
   return table ? ListsTableKey{table->registry, table->materialsRevision}
                : ListsTableKey{};
+}
+
+bool RegisterCache::KeptLess::operator()(const KeptKey& lhs, const KeptKey& rhs) const
+{
+  return lhs < rhs;
+}
+
+bool RegisterCache::KeptLess::operator()(const KeptKey& lhs, const KeptView& rhs) const
+{
+  return lhs.first != rhs.first ? lhs.first < rhs.first
+                                : std::string_view{lhs.second} < rhs.second;
+}
+
+bool RegisterCache::KeptLess::operator()(const KeptView& lhs, const KeptKey& rhs) const
+{
+  return lhs.first != rhs.first ? lhs.first < rhs.first
+                                : lhs.second < std::string_view{rhs.second};
 }
 
 RegisterAnswer RegisterCache::registers(
@@ -1309,6 +1187,14 @@ RegisterAnswer RegisterCache::registers(
     kept.registers.reset();
   }
   return RegisterAnswer{kept.registers, false};
+}
+
+void RegisterCache::keep(const PreviewId consumer, const std::string_view material)
+{
+  if (const auto it = m_kept.find(KeptView{consumer, material}); it != m_kept.end())
+  {
+    it->second.used = true;
+  }
 }
 
 void RegisterCache::beginBuild()

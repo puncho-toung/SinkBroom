@@ -29,6 +29,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <future>
 #include <map>
 #include <memory>
@@ -203,9 +204,15 @@ public:
     const EngineMat4& baseLightProject,
     const ModelInstance& instance,
     const EngineGlMatrix& modelMatrix);
-  // the build ended: beyond the bound the entries not asked for go; the misses go to pool
-  // (none: they are answered at once)
-  void endBuild(CpuPool* pool);
+  /**
+   * The build ended: beyond the bound the entries not asked for go, but those held says
+   * a kept caster set holds (LP6.2, C66: CasterSets::holds; a kept set asks for nothing,
+   * and its next making would ask again for what it holds); the misses go to pool (none:
+   * they are answered at once)
+   */
+  void endBuild(
+    CpuPool* pool,
+    const std::function<bool(PreviewId light, const ChunkKey& chunk)>& held = {});
   // a finished job's answers are taken; whether any was (the lists must be built again)
   bool collect();
   // a job runs or misses wait for one

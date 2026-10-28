@@ -32,6 +32,7 @@
 #pragma once
 
 #include "BindingSetCache.h"
+#include "CasterSets.h"
 #include "DrawRecords.h"
 #include "FrameResources.h"
 #include "GeometryArenas.h"
@@ -742,6 +743,10 @@ private:
   RegisterCache m_registers;
   // DX.2: the static interactions' light triangles
   LightTriangleCache m_lightTriangles;
+  // LP6.2 (C66, D168, P8.2): the casting lights' caster sets, kept across lists builds
+  // while their keys hold (the frontend's); the light triangles and registers they hold
+  // stay theirs (the caches' rules, rebuildLists)
+  CasterSets m_casterSets;
   FrontendLists m_lists;
   // LP4.2a (C37, D79): the view's probes, chosen every frame outside the cached lists
   ViewProbes m_viewProbes;

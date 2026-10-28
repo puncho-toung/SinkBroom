@@ -70,16 +70,26 @@ LitSpace litSpaceOf(
   const EngineMat3& axis,
   const ShaderParms& shaderParms)
 {
-  auto space = LitSpace{};
-  space.entity = entity;
-  // RenderWorld_defs.cpp:51-53
-  space.modelMatrix = engineModelMatrix(origin, axis);
-  space.modelRenderMatrix = engineMatrixFromOriginAxis(origin, axis);
+  auto space = litModelSpaceOf(entity, origin, axis, shaderParms);
   // tr_frontend_addmodels.cpp:502-507
   space.modelViewMatrix =
     engineGlMatrixMultiply(space.modelMatrix, view.worldModelViewMatrix);
   space.mvp = engineMatrixMultiply(
     view.projectionRenderMatrix, engineMatrixTranspose(space.modelViewMatrix));
+  return space;
+}
+
+LitSpace litModelSpaceOf(
+  const PreviewId entity,
+  const EngineVec3& origin,
+  const EngineMat3& axis,
+  const ShaderParms& shaderParms)
+{
+  auto space = LitSpace{};
+  space.entity = entity;
+  // RenderWorld_defs.cpp:51-53
+  space.modelMatrix = engineModelMatrix(origin, axis);
+  space.modelRenderMatrix = engineMatrixFromOriginAxis(origin, axis);
   space.shaderParms = shaderParms;
   return space;
 }

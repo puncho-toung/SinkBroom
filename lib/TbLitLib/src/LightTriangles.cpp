@@ -224,11 +224,14 @@ std::shared_ptr<const LightTriangles> LightTriangleCache::triangles(
   return m_pending;
 }
 
-void LightTriangleCache::endBuild(CpuPool* pool)
+void LightTriangleCache::endBuild(
+  CpuPool* pool, const std::function<bool(PreviewId light, const ChunkKey& chunk)>& held)
 {
   if (m_entries.size() > m_capacity)
   {
-    std::erase_if(m_entries, [](const auto& entry) { return !entry.second.used; });
+    std::erase_if(m_entries, [&](const auto& entry) {
+      return !entry.second.used && !(held && held(entry.first.light, entry.first.chunk));
+    });
   }
   // the requests hold what they need
   m_buildGeometry.clear();
