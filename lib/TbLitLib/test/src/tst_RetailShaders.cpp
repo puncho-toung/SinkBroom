@@ -795,7 +795,7 @@ TEST_CASE(
       const auto key = shaderPermutationKey(defines);
       const auto keys = shaderBlobKeys(blob.value());
       // C2: the key the defines name is one the blob holds
-      CHECK(std::find(keys.begin(), keys.end(), key) != keys.end());
+      CHECK(std::ranges::find(keys, key) != keys.end());
       std::cout << "LP6.5a: " << builtin.name << "." << shaderStageSuffix(stage)
                 << " key '" << key << "' of " << keys.size() << " keys\n";
       const auto code = findShaderPermutation(blob.value(), defines);

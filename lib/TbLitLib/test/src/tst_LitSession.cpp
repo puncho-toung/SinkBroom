@@ -20837,7 +20837,7 @@ std::size_t frameLogColumn(
   const std::vector<std::vector<std::string>>& rows, const std::string_view name)
 {
   const auto& header = rows.at(0);
-  const auto it = std::find(header.begin(), header.end(), name);
+  const auto it = std::ranges::find(header, name);
   return it == header.end() ? header.size() : std::size_t(it - header.begin());
 }
 
