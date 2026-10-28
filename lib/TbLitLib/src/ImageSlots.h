@@ -107,6 +107,12 @@ using ImageRequest = std::function<ImageLookup(const MaterialImageKey&)>;
  * Textures are made and written by the uploader (TextureUploads, step 5) through
  * attachTexture and levelsWritten.
  *
+ * LP6.4a (C68 (a), D171): a texture placed in a heap (setHeaps) is let go with its range:
+ * every texture the slots retire also retires its heap range, stamped with the same
+ * frame, and releaseAll lets every range go; such a texture's bytes are the heaps' (their
+ * capacity is the account's), so its retirement adds none to retiredBytes, and
+ * dedicatedTextureBytes counts the others.
+ *
  * Threads: the render thread; releaseAll in teardown step 2.
  */
 class ImageSlots
@@ -192,12 +198,17 @@ private:
   // the frame being recorded (refresh, dropTexture), which a swap retires the replaced
   // texture at
   std::uint64_t m_frame = 0;
+  // LP6.4a: the heaps the uploader places textures in (none: every texture dedicated)
+  TextureHeaps* m_heaps = nullptr;
 
 public:
   ImageSlots() = default;
 
   // the service's answers (MaterialService::image); none: every slot stays Pending
   void setRequest(ImageRequest request);
+  // LP6.4a: the heaps the slots' textures may be placed in, whose ranges are let go with
+  // them (render thread, before the first texture)
+  void setHeaps(TextureHeaps* heaps);
 
   // the slot of a key, made and asked for on its first request
   ImageSlotId request(const MaterialImageKey& key);
@@ -257,6 +268,9 @@ public:
   // LP6.4a (C68 (a)): the slots' textures (a Replacing slot's both) not placed in heaps,
   // live: the frame log's textures_dedicated
   std::size_t dedicatedTextures(const TextureHeaps* heaps) const;
+  // LP6.4a (C68 (a), the director's reading (2)): the bytes of those textures, the
+  // account's texture line beside the heaps' capacity
+  std::uint64_t dedicatedTextureBytes() const;
 
   // the slots whose version changed since the last call, each once
   std::vector<ImageSlotId> takeChangedSlots();
@@ -301,6 +315,10 @@ private:
   // a Replacing slot's replaced texture is retired and its new one bound (the swap), or
   // (restore) the replaced one bound again and the new one retired
   void endReplacing(ImageSlotId id, bool restore);
+  // D35: a texture let go is held until the frames that may bind it have finished;
+  // LP6.4a: its heap range is freed in the same frame, and its bytes are the heaps'
+  void retire(
+    const nvrhi::TextureHandle& texture, std::uint64_t bytes, std::uint64_t frame);
 
   deleteCopyAndMove(ImageSlots);
 };

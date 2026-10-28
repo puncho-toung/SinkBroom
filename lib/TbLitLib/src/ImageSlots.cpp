@@ -90,6 +90,11 @@ void ImageSlots::setRequest(ImageRequest request)
   m_request = std::move(request);
 }
 
+void ImageSlots::setHeaps(TextureHeaps* heaps)
+{
+  m_heaps = heaps;
+}
+
 ImageSlotId ImageSlots::request(const MaterialImageKey& key)
 {
   if (const auto it = m_ids.find(key); it != m_ids.end())
@@ -371,6 +376,22 @@ std::uint64_t ImageSlots::retiredBytes() const
   return m_retired.bytes();
 }
 
+std::uint64_t ImageSlots::dedicatedTextureBytes() const
+{
+  const auto dedicated =
+    [&](const nvrhi::TextureHandle& texture, const std::uint64_t bytes) {
+      return texture && !(m_heaps && m_heaps->placed(texture.Get())) ? bytes
+                                                                     : std::uint64_t{0};
+    };
+  auto total = std::uint64_t{0};
+  for (const auto& slot : m_slots)
+  {
+    total += dedicated(slot.texture, slot.textureBytes)
+             + dedicated(slot.replaced, slot.replacedBytes);
+  }
+  return total;
+}
+
 std::size_t ImageSlots::dedicatedTextures(const TextureHeaps* heaps) const
 {
   const auto dedicated = [&](const nvrhi::TextureHandle& texture) {
@@ -420,6 +441,16 @@ void ImageSlots::collectRetired(const std::uint64_t completedFrames)
 
 void ImageSlots::releaseAll()
 {
+  // LP6.4a: every range a slot's texture holds goes with it (the heaps are released
+  // after the slots)
+  if (m_heaps)
+  {
+    for (const auto& slot : m_slots)
+    {
+      m_heaps->retire(slot.texture.Get(), m_frame);
+      m_heaps->retire(slot.replaced.Get(), m_frame);
+    }
+  }
   m_retired.releaseAll();
   m_slots.clear();
   m_ids.clear();
@@ -486,7 +517,7 @@ void ImageSlots::adopt(
   {
     // the image has gone (no file, a refusal): the replaced texture goes too, as when the
     // slot is asked again without one (the intrinsic stands in)
-    m_retired.retire(slot.replaced.Get(), slot.replacedBytes, m_frame);
+    retire(slot.replaced, slot.replacedBytes, m_frame);
     slot.replaced = nullptr;
     slot.replacedMipLevels = 0;
     slot.replacedBytes = 0;
@@ -525,7 +556,7 @@ void ImageSlots::reRequest(
       slot.replacedMipLevels = slot.mipLevels;
       slot.replacedBytes = slot.textureBytes;
     }
-    m_retired.retire(slot.texture.Get(), slot.textureBytes, frame);
+    retire(slot.texture, slot.textureBytes, frame);
     slot.texture = nullptr;
     slot.mipLevels = 0;
     slot.firstWrittenMip = 0;
@@ -550,8 +581,8 @@ void ImageSlots::reRequest(
     return;
   }
   // D35: the textures are held until the frames that may bind them have finished
-  m_retired.retire(slot.texture.Get(), slot.textureBytes, frame);
-  m_retired.retire(slot.replaced.Get(), slot.replacedBytes, frame);
+  retire(slot.texture, slot.textureBytes, frame);
+  retire(slot.replaced, slot.replacedBytes, frame);
   slot.texture = nullptr;
   slot.mipLevels = 0;
   slot.firstWrittenMip = 0;
@@ -580,13 +611,22 @@ void ImageSlots::reRequest(
   }
 }
 
+void ImageSlots::retire(
+  const nvrhi::TextureHandle& texture,
+  const std::uint64_t bytes,
+  const std::uint64_t frame)
+{
+  const auto placed = m_heaps && texture && m_heaps->retire(texture.Get(), frame);
+  m_retired.retire(texture.Get(), placed ? 0 : bytes, frame);
+}
+
 void ImageSlots::endReplacing(const ImageSlotId id, const bool restore)
 {
   auto& slot = m_slots[id];
   if (restore)
   {
     // the new texture goes, the complete one is the slot's again (its binding unchanged)
-    m_retired.retire(slot.texture.Get(), slot.textureBytes, m_frame);
+    retire(slot.texture, slot.textureBytes, m_frame);
     slot.texture = std::move(slot.replaced);
     slot.mipLevels = slot.replacedMipLevels;
     slot.firstWrittenMip = 0;
@@ -596,7 +636,7 @@ void ImageSlots::endReplacing(const ImageSlotId id, const bool restore)
   {
     // D35: the replaced texture is held until the frames that bound it have finished;
     // the bump erases the slot's binding sets (C28); the new image's facts are the draws'
-    m_retired.retire(slot.replaced.Get(), slot.replacedBytes, m_frame);
+    retire(slot.replaced, slot.replacedBytes, m_frame);
     slot.adoptedUsage = slot.replacingUsage;
     slot.adoptedFormat = slot.replacingFormat;
     bump(id);

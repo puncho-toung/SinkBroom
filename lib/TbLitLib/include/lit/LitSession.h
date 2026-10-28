@@ -811,6 +811,12 @@ public:
   static void setFormatClassRefusedForTesting(
     nvrhi::Format format, nvrhi::TextureDimension dimension, bool refused = true);
   /**
+   * LP6.4a (C68 (a)), any thread: the texture heaps' size of the sessions created from
+   * now on (0: HeapBytes, 128 MB, Q47), for a test of a texture larger than a heap.
+   * Process-wide; tests only.
+   */
+  static void setTextureHeapBytesForTesting(std::uint64_t bytes);
+  /**
    * LP2.4 (C30, D72), any thread: the device memory allocations the counter of the last
    * session counts now; after a Stop, what that session's teardown left (0 expected).
    * Process-wide; tests and measurements only.

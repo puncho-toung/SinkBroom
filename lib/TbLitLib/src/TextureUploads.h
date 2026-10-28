@@ -31,6 +31,7 @@
 #pragma once
 
 #include "ImageSlots.h"
+#include "TextureHeaps.h"
 #include "base/Result.h"
 #include "lit/MaterialDecls.h"
 
@@ -83,16 +84,44 @@ Result<std::uint64_t> levelUploadBytes(
  * texture is made and written as a Loading slot's while its complete texture stays bound;
  * the frame that writes its last level swaps it in (dropPixels); refused for the headroom
  * it keeps the complete texture bound and its image, counts once, and is left for a later
- * frame (the frame unconverged). Render thread only.
+ * frame (the frame unconverged). LP6.4a (C68 (a), D171, P8.3): with heaps, a texture of
+ * a class the Start probe found heap-able is made virtual and bound into a heap's range
+ * of its own size and alignment (TextureHeaps::place, bindTextureMemory); U2.3 is asked
+ * only for a device allocation (the director's reading (1)): a new heap, or a dedicated
+ * texture, which a class the probe or a test refused, a texture larger than a heap, or no
+ * heap made gets as before (its virtual texture let go and made again non-virtual).
+ * Render thread only.
  */
 class TextureUploads
 {
+public:
+  // LP6.4a: why the slots' textures made so far went outside the heaps
+  struct DedicatedCounts
+  {
+    // no heaps, or the probe has not run
+    std::uint64_t noHeaps = 0;
+    // a class the probe or a test refused
+    std::uint64_t refusedClass = 0;
+    // larger than a heap
+    std::uint64_t tooLarge = 0;
+    // the device made no heap
+    std::uint64_t noHeap = 0;
+    // a bind into a heap refused (P8.3's wrong assumption)
+    std::uint64_t bindRefused = 0;
+
+    std::uint64_t total() const;
+  };
+
 private:
   bool m_d24s8Supported = false;
   bool m_permanentState = true;
   std::uint64_t m_uploadedBytes = 0;
   std::uint64_t m_texturesMade = 0;
   std::uint64_t m_headroomRefusals = 0;
+  std::uint64_t m_texturesPlaced = 0;
+  std::uint64_t m_largestPlacedBytes = 0;
+  std::uint64_t m_largestDedicatedBytes = 0;
+  DedicatedCounts m_dedicated;
 
 public:
   explicit TextureUploads(bool d24s8Supported = false);
@@ -101,9 +130,10 @@ public:
 
   /**
    * Writes what fits; frameBytes, the frame's uploads so far, grows by what is written.
-   * allocationRoom, asked before each new texture, says whether one more device
-   * allocation leaves the headroom (none: always). Whether a loading slot is left for a
-   * later frame.
+   * allocationRoom, asked before each new device allocation (a dedicated texture; the
+   * heaps ask it before a new heap), says whether one more leaves the headroom (none:
+   * always). heaps (LP6.4a): where the textures of the heap-able classes go; none: every
+   * texture dedicated. Whether a loading slot is left for a later frame.
    */
   bool record(
     nvrhi::IDevice& device,
@@ -111,7 +141,8 @@ public:
     ImageSlots& slots,
     std::uint64_t cap,
     std::uint64_t& frameBytes,
-    const std::function<bool()>& allocationRoom = {});
+    const std::function<bool()>& allocationRoom = {},
+    TextureHeaps* heaps = nullptr);
 
   /**
    * Tests: whether a finished texture's state is made permanent (as the engine's, the
@@ -125,6 +156,12 @@ public:
   std::uint64_t uploadedBytes() const;
   std::uint64_t texturesMade() const;
   std::uint64_t headroomRefusals() const;
+  // LP6.4a: the textures placed in heaps so far, the dedicated ones by why, and the
+  // largest of each (their memory requirements' sizes)
+  std::uint64_t texturesPlaced() const;
+  const DedicatedCounts& dedicated() const;
+  std::uint64_t largestPlacedBytes() const;
+  std::uint64_t largestDedicatedBytes() const;
 };
 
 } // namespace tb::lit

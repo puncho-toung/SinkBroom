@@ -21,6 +21,7 @@
 
 #include "lit/EngineImageEnums.h"
 #include "lit/EngineTables.h"
+#include "lit/LitConfig.h"
 
 #include <fmt/format.h>
 #include <fmt/ranges.h>
@@ -43,6 +44,8 @@ namespace
 constexpr auto MaxRefusedClasses = std::size_t{8};
 constinit auto s_refusedClasses =
   std::array<std::atomic<std::uint32_t>, MaxRefusedClasses>{};
+// and the heaps' size a test asks for, 0 for HeapBytes
+constinit auto s_heapBytesForTesting = std::atomic<std::uint64_t>{0};
 
 std::uint32_t classCode(const FormatClass& formatClass)
 {
@@ -313,6 +316,17 @@ bool formatClassRefusedForTesting(const FormatClass& formatClass)
   const auto code = classCode(formatClass);
   return std::ranges::any_of(
     s_refusedClasses, [&](const auto& slot) { return slot.load() == code; });
+}
+
+void setTextureHeapBytesForTesting(const std::uint64_t bytes)
+{
+  s_heapBytesForTesting = bytes;
+}
+
+std::uint64_t textureHeapBytes()
+{
+  const auto bytes = s_heapBytesForTesting.load();
+  return bytes != 0 ? bytes : HeapBytes;
 }
 
 void TextureHeaps::setDevice(nvrhi::IDevice& device, const std::uint64_t heapBytes)

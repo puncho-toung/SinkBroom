@@ -183,15 +183,19 @@ GpuMemoryAccount accountGpuMemory(
   const GeometryArenas& arenas,
   const ImageSlots& images,
   const LitPasses& passes,
-  const TonemapPasses& tonemap)
+  const TonemapPasses& tonemap,
+  const TextureHeaps& heaps)
 {
   auto account = GpuMemoryAccount{};
   account.arenaBytes = arenas.capacityBytes();
-  account.textureBytes = images.textureBytes();
+  // LP6.4a (C68 (a)): the heaps' capacity and the dedicated slot textures; a texture in
+  // a heap, live or retired, is inside its heap's bytes
+  account.textureBytes = heaps.capacityBytes() + images.dedicatedTextureBytes();
   // LP3.1 (A49): the shadow atlas on the render-target line once it is made (256 MB);
   // LP3.3 (D146): and its relocation scratch (16 MB)
   account.renderTargetBytes = frame.renderTargetBytes() + frame.bufferBytes()
                               + passes.shadowAtlasBytes() + passes.shadowScratchBytes();
+  // LP6.4a: the slots' retired textures count only the dedicated ones' bytes
   account.releasedBytes = frame.retiredBytes() + images.retiredBytes();
   // U2.6: the volatile buffers are host-visible (NVRHI allocates them for CPU writes);
   // the rest of the host-visible bytes is the upload pool and a readback's staging
@@ -239,8 +243,9 @@ Result<void> RenderThread::createFrameResources(
   m_arenas.setAllocationRoom([this] { return allocationRoom(); });
   // LP6.4a (C68 (a), D171, Q47): the slots' textures in heaps of HeapBytes, a new heap
   // under U2.3's room (the director's reading (1))
-  m_textureHeaps.setDevice(device, HeapBytes);
+  m_textureHeaps.setDevice(device, textureHeapBytes());
   m_textureHeaps.setAllocationRoom([this] { return allocationRoom(); });
+  m_images.setHeaps(&m_textureHeaps);
   m_textureUploads.setD24s8Supported(m_device.gpu().d24s8Supported);
   for (auto& event : m_frameEvents)
   {
@@ -1009,9 +1014,23 @@ bool RenderThread::recordUploads(nvrhi::ICommandList& commandList)
     updateModelTotals();
   }
   const auto texturesLeft = m_textureUploads.record(
-    m_device.device(), commandList, m_images, cap, m_frameUploadBytes, [this] {
-      return allocationRoom();
-    });
+    m_device.device(),
+    commandList,
+    m_images,
+    cap,
+    m_frameUploadBytes,
+    [this] { return allocationRoom(); },
+    &m_textureHeaps);
+  // LP6.4a (P8.3): NVRHI refused to bind a texture into a heap (the probe's assumption
+  // is wrong on this device: the texture was made dedicated); said once
+  if (!m_bindRefusalWarned && m_textureUploads.dedicated().bindRefused > 0)
+  {
+    m_bindRefusalWarned = true;
+    m_events.post(
+      SessionEvent::Warning,
+      "NVRHI refused to bind a texture into the lit preview's texture heaps; such "
+      "textures are made dedicated");
+  }
   // U2.3: the headroom refused a texture or an arena; said once
   if (
     !m_headroomWarned
@@ -1187,7 +1206,8 @@ void RenderThread::checkVramBudget()
                                : std::nullopt;
   const auto used =
     vram ? vram->usedBytes
-         : accountGpuMemory(m_frameResources, m_arenas, m_images, m_passes, m_tonemap)
+         : accountGpuMemory(
+             m_frameResources, m_arenas, m_images, m_passes, m_tonemap, m_textureHeaps)
              .total();
   if (budget && used > *budget)
   {
@@ -2370,7 +2390,8 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         status.skippedDraws = litStats.skippedDraws;
         status.pendingPipelines = litStats.pendingPipelines + tonemap.pendingPipelines;
         status.vramBytes =
-          accountGpuMemory(m_frameResources, m_arenas, m_images, m_passes, m_tonemap)
+          accountGpuMemory(
+            m_frameResources, m_arenas, m_images, m_passes, m_tonemap, m_textureHeaps)
             .total();
         // D90 (LP4.1): the view's portal flow
         status.viewArea = litStats.viewArea;
@@ -2428,6 +2449,8 @@ void RenderThread::framesCompleted(const std::uint64_t completedFrames)
   m_frameResources.collectRetired(m_completedFrames);
   m_arenas.reclaim(m_completedFrames);
   m_images.collectRetired(m_completedFrames);
+  // LP6.4a (C68 (a), D35): the heap ranges freed in those frames, after their textures
+  m_textureHeaps.reclaim(m_completedFrames);
 }
 
 void RenderThread::refreshImages()

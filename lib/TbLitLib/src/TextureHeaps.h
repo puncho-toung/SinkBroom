@@ -122,6 +122,11 @@ std::string formatClassLine(const FormatClassTable& table);
 void setFormatClassRefusedForTesting(const FormatClass& formatClass, bool refused);
 bool formatClassRefusedForTesting(const FormatClass& formatClass);
 
+// LP6.4a, any thread (tests): the heaps' size the next sessions make (0: HeapBytes, Q47);
+// process-wide like the hook above; and the size a session takes at its phase B
+void setTextureHeapBytesForTesting(std::uint64_t bytes);
+std::uint64_t textureHeapBytes();
+
 // the heaps' allocators' own unit: none of their own, each texture's own alignment (a
 // power of two) aligns its offset (RangeAllocator::allocate(size, alignment), the
 // director's reading (6)); only optimal-tiling images share a heap, so Vulkan's

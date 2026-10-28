@@ -40,6 +40,7 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <optional>
 #include <vector>
 
 namespace tb::lit
@@ -153,13 +154,19 @@ void TextureUploads::setD24s8Supported(const bool supported)
   m_d24s8Supported = supported;
 }
 
+std::uint64_t TextureUploads::DedicatedCounts::total() const
+{
+  return noHeaps + refusedClass + tooLarge + noHeap + bindRefused;
+}
+
 bool TextureUploads::record(
   nvrhi::IDevice& device,
   nvrhi::ICommandList& commandList,
   ImageSlots& slots,
   const std::uint64_t cap,
   std::uint64_t& frameBytes,
-  const std::function<bool()>& allocationRoom)
+  const std::function<bool()>& allocationRoom,
+  TextureHeaps* heaps)
 {
   auto left = false;
   for (const auto id : slots.loading())
@@ -208,13 +215,103 @@ bool TextureUploads::record(
             UploadBytesPerFrame / (1024 * 1024));
         }
       }
-      // U2.3: no new texture within the allocation headroom; the slot keeps binding its
-      // intrinsic. LPF.1 (D102): a Replacing slot keeps binding its complete texture and
-      // keeps its image, so that a later frame tries again (the frame is left
-      // unconverged); counted once until its texture is made
-      if (
-        problem.empty() && allocationRoom && slot->state == ImageSlots::State::Replacing
-        && !allocationRoom())
+      auto desc = std::optional<nvrhi::TextureDesc>{};
+      if (problem.empty())
+      {
+        engineTextureDesc(*image, m_d24s8Supported, slot->key.name)
+          | kdl::transform([&](nvrhi::TextureDesc made) { desc = std::move(made); })
+          | kdl::if_error([&](const auto& e) { problem = e.msg; }) | kdl::ignore();
+      }
+      auto texture = nvrhi::TextureHandle{};
+      auto roomRefused = false;
+      // why a texture made below is dedicated (counted once it is made)
+      auto* dedicatedReason = &m_dedicated.noHeaps;
+      if (problem.empty())
+      {
+        // LP6.4a (C68 (a), D171): a heap-able class's texture is made virtual and bound
+        // into a heap's range; one larger than a heap, or with no heap made, is made
+        // again dedicated below
+        const auto formatClass = FormatClass{desc->format, desc->dimension};
+        if (heaps && heaps->heapable(formatClass))
+        {
+          auto virtualDesc = *desc;
+          virtualDesc.isVirtual = true;
+          texture = device.createTexture(virtualDesc);
+          if (!texture)
+          {
+            problem = "NVRHI cannot create the texture";
+          }
+          else
+          {
+            const auto requirements = device.getTextureMemoryRequirements(texture);
+            if (const auto placement = heaps->place(texture.Get(), requirements))
+            {
+              if (device.bindTextureMemory(
+                    texture, heaps->heap(placement->heap), placement->range.offset))
+              {
+                ++m_texturesPlaced;
+                m_largestPlacedBytes = std::max(m_largestPlacedBytes, requirements.size);
+              }
+              else
+              {
+                // P8.3: a bind refused is a wrong assumption (the probe's); its range
+                // goes at once (nothing used it) and the texture is made dedicated
+                heaps->retire(texture.Get(), 0);
+                texture = nullptr;
+                dedicatedReason = &m_dedicated.bindRefused;
+              }
+            }
+            else
+            {
+              switch (heaps->lastRefusal())
+              {
+              case TextureHeaps::Refusal::Room:
+                roomRefused = true;
+                break;
+              case TextureHeaps::Refusal::TooLarge:
+                dedicatedReason = &m_dedicated.tooLarge;
+                break;
+              case TextureHeaps::Refusal::NoHeap:
+              case TextureHeaps::Refusal::None:
+                dedicatedReason = &m_dedicated.noHeap;
+                break;
+              }
+              texture = nullptr;
+            }
+          }
+        }
+        else if (heaps && heaps->formatClassesForTesting())
+        {
+          dedicatedReason = &m_dedicated.refusedClass;
+        }
+        // a dedicated texture is a device allocation: U2.3's room before it
+        if (problem.empty() && !texture && !roomRefused)
+        {
+          if (allocationRoom && !allocationRoom())
+          {
+            roomRefused = true;
+          }
+          else
+          {
+            texture = device.createTexture(*desc);
+            if (!texture)
+            {
+              problem = "NVRHI cannot create the texture";
+            }
+            else
+            {
+              ++*dedicatedReason;
+              m_largestDedicatedBytes = std::max(m_largestDedicatedBytes, bytes);
+            }
+          }
+        }
+      }
+      // U2.3: no new device allocation within the allocation headroom (a dedicated
+      // texture, or a new heap); the slot keeps binding its intrinsic. LPF.1 (D102): a
+      // Replacing slot keeps binding its complete texture and keeps its image, so that a
+      // later frame tries again (the frame is left unconverged); counted once until its
+      // texture is made
+      if (roomRefused && slot->state == ImageSlots::State::Replacing)
       {
         if (slots.waitForRoom(id))
         {
@@ -223,26 +320,13 @@ bool TextureUploads::record(
         left = true;
         continue;
       }
-      if (problem.empty() && allocationRoom && !allocationRoom())
+      if (roomRefused)
       {
         problem = fmt::format(
           "the device's memory allocations are within {} of its limit "
           "(maxMemoryAllocationCount)",
           AllocationHeadroom);
         ++m_headroomRefusals;
-      }
-      auto texture = nvrhi::TextureHandle{};
-      if (problem.empty())
-      {
-        engineTextureDesc(*image, m_d24s8Supported, slot->key.name)
-          | kdl::transform([&](const nvrhi::TextureDesc& desc) {
-              texture = device.createTexture(desc);
-              if (!texture)
-              {
-                problem = "NVRHI cannot create the texture";
-              }
-            })
-          | kdl::if_error([&](const auto& e) { problem = e.msg; }) | kdl::ignore();
       }
       if (!problem.empty())
       {
@@ -320,6 +404,26 @@ std::uint64_t TextureUploads::texturesMade() const
 std::uint64_t TextureUploads::headroomRefusals() const
 {
   return m_headroomRefusals;
+}
+
+std::uint64_t TextureUploads::texturesPlaced() const
+{
+  return m_texturesPlaced;
+}
+
+const TextureUploads::DedicatedCounts& TextureUploads::dedicated() const
+{
+  return m_dedicated;
+}
+
+std::uint64_t TextureUploads::largestPlacedBytes() const
+{
+  return m_largestPlacedBytes;
+}
+
+std::uint64_t TextureUploads::largestDedicatedBytes() const
+{
+  return m_largestDedicatedBytes;
 }
 
 } // namespace tb::lit

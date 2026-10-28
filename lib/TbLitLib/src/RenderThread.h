@@ -80,7 +80,10 @@ struct SwapchainGeneration;
  * staging; V2.6: total() is the device-local part alone, the budget is compared with the
  * driver's own figure (VramUsage::usedBytes). U2.9: arenas never shrink before teardown,
  * so a whole-map rebuild may leave up to twice the geometry plus one arena per kind in
- * arenaBytes (M-ARENA-DIFF-01; compaction in LP6).
+ * arenaBytes (M-ARENA-DIFF-01; compaction in LP6). LP6.4a (C68 (a), the director's
+ * reading (2)): textureBytes is the texture heaps' capacity plus the slots' dedicated
+ * textures, releasedBytes counts only dedicated textures (a heap's freed ranges are
+ * inside its capacity); renderTargetBytes is FrameResources' and the passes' targets.
  */
 struct GpuMemoryAccount
 {
@@ -103,7 +106,8 @@ GpuMemoryAccount accountGpuMemory(
   const GeometryArenas& arenas,
   const ImageSlots& images,
   const LitPasses& passes,
-  const TonemapPasses& tonemap);
+  const TonemapPasses& tonemap,
+  const TextureHeaps& heaps);
 
 /**
  * D77, §3.10 (LP2.2b): what kept a frame from being settled, and which of it the frame
@@ -356,6 +360,8 @@ private:
   BindingSetCache m_bindingSets{BindingSetCacheSize};
   // LP2.1 (SC268, P2.14c): the textures made from the slots' images, low mips first
   TextureUploads m_textureUploads;
+  // LP6.4a (P8.3): the binds into a heap NVRHI refused so far, said once
+  bool m_bindRefusalWarned = false;
   // LP6.4a (C68 (a), D171): the heaps the slots' textures are placed in, and the format
   // classes the session's first frame probed (P8.3); released after the slots
   TextureHeaps m_textureHeaps;

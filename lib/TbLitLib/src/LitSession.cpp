@@ -836,6 +836,11 @@ void LitSession::setFormatClassRefusedForTesting(
   lit::setFormatClassRefusedForTesting(FormatClass{format, dimension}, refused);
 }
 
+void LitSession::setTextureHeapBytesForTesting(const std::uint64_t bytes)
+{
+  lit::setTextureHeapBytesForTesting(bytes);
+}
+
 std::int64_t LitSession::liveDeviceMemoryAllocationsForTesting()
 {
   return liveDeviceMemoryAllocations();

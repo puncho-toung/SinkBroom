@@ -53,6 +53,7 @@
 #include "lit/Snapshot.h"
 #include "lit/VulkanInstance.h"
 
+#include "kd/invoke.h"
 #include "kd/result.h"
 
 #include <fmt/format.h>
@@ -2997,16 +2998,26 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
       REQUIRE(waitForSlots(*session, ids));
       auto resident = std::size_t{0};
       auto bytes = std::uint64_t{0};
+      auto heaps = std::size_t{0};
+      auto placed = std::size_t{0};
       REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
         resident = access.images.resident();
         bytes = access.images.textureBytes();
+        heaps = access.heaps.heaps();
+        placed = access.heaps.placedTextures();
       }));
       CHECK(resident == 200u);
       const auto withTextures = session->deviceMemoryAllocations();
       std::cout << "200 textures (" << bytes << " bytes): allocations " << baseline
-                << " -> " << withTextures << "\n";
-      // one allocation per texture (D72 measures what that means for a whole map)
-      CHECK(withTextures - baseline >= 200);
+                << " -> " << withTextures << ", " << heaps << " heaps holding " << placed
+                << " textures\n";
+      // LP6.4a (C68 (a)): one heap is one allocation: the first of the 200 small textures
+      // makes the session's first heap (this session has no material service, so no
+      // intrinsic made one before the baseline) and the others fit in it (NVRHI's upload
+      // chunks for their bytes aside: at most one more)
+      CHECK(heaps == 1u);
+      CHECK(placed >= 200u);
+      CHECK(withTextures - baseline <= 2);
 
       teardown(*session);
       const auto report = session->teardownReport();
@@ -3144,7 +3155,15 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
       CHECK(largeSeen.reason.find("33640000 bytes") != std::string::npos);
 
       // U2.3: with the limit at the live allocations plus the headroom, no texture is
-      // made: each slot keeps its stand-in, the session says so once
+      // made: each slot keeps its stand-in, the session says so once. LP6.4a: a texture
+      // that fits a heap is no allocation (the director's reading (1)), so the slots'
+      // class (RGBA8 2D) is made dedicated for the check
+      LitSession::setFormatClassRefusedForTesting(
+        nvrhi::Format::RGBA8_UNORM, nvrhi::TextureDimension::Texture2D);
+      const auto clearRefusal = kdl::invoke_later{[] {
+        LitSession::setFormatClassRefusedForTesting(
+          nvrhi::Format::RGBA8_UNORM, nvrhi::TextureDimension::Texture2D, false);
+      }};
       settle(*session);
       const auto live = session->deviceMemoryAllocations();
       session->setAllocationLimitForTesting(
@@ -3898,7 +3917,12 @@ TEST_CASE("LitSession GPU resources on the retail game (D72)", "[.][retail]")
         peak.slots = access.images.size();
         settled = peak.pending == 0 && !loading;
         const auto account = accountGpuMemory(
-          access.frame, access.arenas, access.images, access.passes, access.tonemap);
+          access.frame,
+          access.arenas,
+          access.images,
+          access.passes,
+          access.tonemap,
+          access.heaps);
         if (account.total() >= peak.account.total())
         {
           peak.account = account;
@@ -5940,7 +5964,12 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
       auto account = GpuMemoryAccount{};
       REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
         account = accountGpuMemory(
-          access.frame, access.arenas, access.images, access.passes, access.tonemap);
+          access.frame,
+          access.arenas,
+          access.images,
+          access.passes,
+          access.tonemap,
+          access.heaps);
       }));
       CHECK(account.volatileBufferBytes > 0u);
       CHECK(account.uploadPoolBytes >= UploadChunkBytes);
@@ -7234,6 +7263,419 @@ void checkProbesAgainstShProbes(
                      : 0;
     }
     CHECK(differing == 0);
+  }
+}
+
+namespace
+{
+
+// LP6.4a (C68 (a)): the slots' textures (a Replacing slot's both) and what the heaps hold
+struct HeapsSeen
+{
+  std::size_t textures = 0;
+  std::size_t heapable = 0;
+  std::size_t placedHeapable = 0;
+  std::size_t placed = 0;
+  std::size_t rgba8 = 0;
+  std::set<std::string> classes;
+  std::size_t heaps = 0;
+  std::uint64_t heapBytes = 0;
+  std::uint64_t capacity = 0;
+  std::size_t dedicated = 0;
+  std::uint64_t dedicatedBytes = 0;
+  std::uint64_t accountTextures = 0;
+  std::uint64_t largestPlaced = 0;
+  std::uint64_t smallestPlaced = 0;
+};
+
+HeapsSeen heapsSeen(RenderFrameAccess& access)
+{
+  auto seen = HeapsSeen{};
+  for (ImageSlotId id = 0; id < access.images.size(); ++id)
+  {
+    const auto* slot = access.images.slot(id);
+    for (const auto* texture : {slot->texture.Get(), slot->replaced.Get()})
+    {
+      if (!texture)
+      {
+        continue;
+      }
+      const auto& desc = texture->getDesc();
+      const auto formatClass = FormatClass{desc.format, desc.dimension};
+      ++seen.textures;
+      seen.classes.insert(formatClassName(formatClass));
+      const auto placed = access.heaps.heapOfForTesting(texture).has_value();
+      seen.placed += placed ? 1 : 0;
+      if (access.heaps.heapable(formatClass))
+      {
+        ++seen.heapable;
+        seen.placedHeapable += placed ? 1 : 0;
+      }
+      seen.rgba8 +=
+        formatClass
+            == FormatClass{nvrhi::Format::RGBA8_UNORM, nvrhi::TextureDimension::Texture2D}
+          ? 1
+          : 0;
+    }
+  }
+  seen.heaps = access.heaps.heaps();
+  seen.heapBytes = access.heaps.usedBytes();
+  seen.capacity = access.heaps.capacityBytes();
+  seen.dedicated = access.images.dedicatedTextures(&access.heaps);
+  seen.dedicatedBytes = access.images.dedicatedTextureBytes();
+  seen.accountTextures = accountGpuMemory(
+                           access.frame,
+                           access.arenas,
+                           access.images,
+                           access.passes,
+                           access.tonemap,
+                           access.heaps)
+                           .textureBytes;
+  seen.largestPlaced = access.heaps.largestPlaced();
+  seen.smallestPlaced = access.heaps.smallestPlaced();
+  return seen;
+}
+
+// the probe's line, the session's MaterialInfo naming the heaps
+std::vector<std::string> probeLines(Events& events)
+{
+  const auto lock = std::scoped_lock{events.mutex};
+  auto lines = std::vector<std::string>{};
+  for (const auto& [event, message, generation] : events.events)
+  {
+    if (
+      event == SessionEvent::MaterialInfo
+      && message.find("texture heaps (LP6.4a)") != std::string::npos)
+    {
+      lines.push_back(message);
+    }
+  }
+  return lines;
+}
+
+// the format-class test hook cleared when a section ends, also on a failed REQUIRE
+struct ClassRefusal
+{
+  nvrhi::Format format = nvrhi::Format::RGBA8_UNORM;
+  nvrhi::TextureDimension dimension = nvrhi::TextureDimension::Texture2D;
+
+  ClassRefusal() { LitSession::setFormatClassRefusedForTesting(format, dimension); }
+  ~ClassRefusal()
+  {
+    LitSession::setFormatClassRefusedForTesting(format, dimension, false);
+  }
+
+  deleteCopyAndMove(ClassRefusal);
+};
+
+// and the heaps' test size
+struct HeapBytesForTesting
+{
+  explicit HeapBytesForTesting(const std::uint64_t bytes)
+  {
+    LitSession::setTextureHeapBytesForTesting(bytes);
+  }
+  ~HeapBytesForTesting() { LitSession::setTextureHeapBytesForTesting(0); }
+
+  deleteCopyAndMove(HeapBytesForTesting);
+};
+
+} // namespace
+
+// LP6.4a (C68 (a), D171, P8.3, the director's readings (1)-(6)): the slots' textures in
+// 128 MB DeviceLocal heaps after the Start probe of every format class; a class the probe
+// or a test refuses, and a texture larger than a heap, dedicated as before; a texture let
+// go frees its range in its frame, handed out again once that frame has finished; one
+// heap is one allocation; at Stop nothing is left
+TEST_CASE("LitSession texture heaps on a GPU (LP6.4a)", "[.][litgpu]")
+{
+  namespace ei = engine_image;
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+
+  SECTION("(a) the fixture's textures in heaps, (b) a class refused before Start")
+  {
+    struct Run
+    {
+      HeapsSeen seen;
+      std::int64_t allocations = 0;
+      std::vector<std::string> lines;
+      std::uint64_t texturesPlaced = 0;
+      std::uint64_t refusedClass = 0;
+    };
+    const auto run = [&](const bool refuseRgba8) {
+      auto result = Run{};
+      auto refusal = std::optional<ClassRefusal>{};
+      if (refuseRgba8)
+      {
+        refusal.emplace();
+      }
+      auto messages = ValidationMessages{};
+      messages.mirroredMessageId = OutputNotConsumedId;
+      {
+        const auto instance = testInstance(true, false, messages);
+        REQUIRE(instance.valid());
+        REQUIRE(initInstanceDispatcher(instance.handles()));
+        auto service = rootService(root);
+        auto events = Events{};
+        auto session = rootSession(instance, events, *service, root);
+        session->setExposed(true);
+        REQUIRE(waitFor(
+          [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+          5000ms,
+          false));
+        REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+        const auto lit =
+          settledChain(*session, litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0}));
+        REQUIRE(lit);
+        settle(*session);
+        REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+          result.seen = heapsSeen(access);
+          result.texturesPlaced = access.textures.texturesPlaced();
+          result.refusedClass = access.textures.dedicated().refusedClass;
+          CHECK(access.textures.dedicated().bindRefused == 0u);
+        }));
+        result.allocations = session->deviceMemoryAllocations();
+        result.lines = probeLines(events);
+        teardown(*session);
+        CHECK(session->lastDeviceReleaseCount() == 0u);
+        CHECK(session->nvrhiErrorCount() == 0u);
+        // (e) Stop: every allocation freed, the heaps among them
+        CHECK(session->deviceMemoryAllocations() == 0);
+        CHECK(events.count(SessionEvent::Error) == 0u);
+        session.reset();
+        service->requestStop();
+        service->join();
+      }
+      CHECK(resetDispatcher());
+      CHECK(messages.errors == 0);
+      CHECK(messages.warnings == 0);
+      return result;
+    };
+
+    const auto a = run(false);
+    const auto b = run(true);
+    for (const auto* r : {&a, &b})
+    {
+      std::cout << fmt::format(
+        "LP6.4a heaps: {} slot textures ({} heap-able, {} placed; classes {}), {} heaps, "
+        "heap_bytes {}, capacity {}, textures_dedicated {} ({} bytes), RGBA8 2D {}, "
+        "account textures {}, placed {}..{} bytes; alloc_count {}\n",
+        r->seen.textures,
+        r->seen.heapable,
+        r->seen.placed,
+        fmt::join(r->seen.classes, ", "),
+        r->seen.heaps,
+        r->seen.heapBytes,
+        r->seen.capacity,
+        r->seen.dedicated,
+        r->seen.dedicatedBytes,
+        r->seen.rgba8,
+        r->seen.accountTextures,
+        r->seen.smallestPlaced,
+        r->seen.largestPlaced,
+        r->allocations);
+      REQUIRE(r->lines.size() == 1u);
+      std::cout << "  " << r->lines.front() << "\n";
+      // the account's texture line is the heaps' capacity and the dedicated textures
+      CHECK(r->seen.accountTextures == r->seen.capacity + r->seen.dedicatedBytes);
+    }
+    // (a) every slot texture of a heap-able class is in a heap, none outside; the
+    // allocations by tens (the targets, the arenas, the buffers, one heap, the chunks)
+    CHECK(a.seen.textures > 0u);
+    CHECK(a.seen.heapable == a.seen.textures);
+    CHECK(a.seen.placedHeapable == a.seen.heapable);
+    CHECK(a.seen.dedicated == 0u);
+    CHECK(a.seen.heaps >= 1u);
+    CHECK(a.seen.heapBytes > 0u);
+    CHECK(a.allocations < 100);
+    CHECK(a.lines.front().find("kept dedicated: none") != std::string::npos);
+    // (b) the refused class's textures dedicated, one allocation each; the probe's line
+    // names it
+    CHECK(b.seen.rgba8 > 0u);
+    CHECK(b.seen.dedicated == b.seen.rgba8);
+    CHECK(b.refusedClass >= b.seen.rgba8);
+    CHECK(b.seen.placed == b.seen.textures - b.seen.rgba8);
+    CHECK(
+      b.lines.front().find("RGBA8_UNORM 2D (refused by a test)") != std::string::npos);
+    // one allocation per dedicated texture, a heap fewer if none was needed (NVRHI's
+    // upload chunks aside: within one)
+    const auto expected = a.allocations + std::int64_t(b.seen.dedicated)
+                          - (std::int64_t(a.seen.heaps) - std::int64_t(b.seen.heaps));
+    CHECK(b.allocations >= expected - 1);
+    CHECK(b.allocations <= expected + 1);
+  }
+
+  SECTION("(c) a texture larger than a heap is dedicated, its bytes outside the heaps")
+  {
+    const auto heapBytes = HeapBytesForTesting{std::uint64_t{4} * 1024 * 1024};
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1);
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+      settle(*session);
+      auto before = HeapsSeen{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        before = heapsSeen(access);
+        CHECK(access.heaps.heapBytes() == std::uint64_t{4} * 1024 * 1024);
+      }));
+      const auto allocationsBefore = session->deviceMemoryAllocations();
+
+      // 2048 x 2048 RGBA8: a 16 MB level (under the 32 MB level cap), 21.3 MB with its
+      // mips, more than a 4 MB heap
+      auto large = NoImageSlot;
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        large = access.images.provideForTesting(
+          testImageKey("textures/lp6/large"), syntheticImage(2048, ei::FormatRgba8, 3));
+      }));
+      REQUIRE(waitForSlots(*session, {large}, 30000ms));
+      auto after = HeapsSeen{};
+      auto largePlaced = true;
+      auto tooLarge = std::uint64_t{0};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        after = heapsSeen(access);
+        const auto* slot = access.images.slot(large);
+        CHECK(slot->state == ImageSlots::State::Resident);
+        largePlaced = access.heaps.heapOfForTesting(slot->texture.Get()).has_value();
+        tooLarge = access.textures.dedicated().tooLarge;
+      }));
+      std::cout << fmt::format(
+        "LP6.4a (c): a 2048 x 2048 RGBA8 slot with a 4 MB heap: placed {}, too large {}, "
+        "heap_bytes {} -> {}, textures_dedicated {} -> {} ({} bytes), allocations {} -> "
+        "{}\n",
+        largePlaced,
+        tooLarge,
+        before.heapBytes,
+        after.heapBytes,
+        before.dedicated,
+        after.dedicated,
+        after.dedicatedBytes,
+        allocationsBefore,
+        session->deviceMemoryAllocations());
+      CHECK_FALSE(largePlaced);
+      CHECK(tooLarge == 1u);
+      CHECK(after.heapBytes == before.heapBytes);
+      CHECK(after.dedicated == before.dedicated + 1);
+      CHECK(after.dedicatedBytes > std::uint64_t{16} * 1024 * 1024);
+      // one dedicated texture (NVRHI's upload chunks for its 21 MB aside: at most one)
+      CHECK(session->deviceMemoryAllocations() >= allocationsBefore + 1);
+      CHECK(session->deviceMemoryAllocations() <= allocationsBefore + 2);
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+    }
+    CHECK(resetDispatcher());
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("(d) a texture let go frees its range once its frame has finished")
+  {
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1);
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+      settle(*session);
+
+      auto first = NoImageSlot;
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        first = access.images.provideForTesting(
+          testImageKey("textures/lp6/first"), syntheticImage(256, ei::FormatRgba8, 5));
+      }));
+      REQUIRE(waitForSlots(*session, {first}));
+      auto placement = std::optional<HeapPlacement>{};
+      auto used = std::uint64_t{0};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        placement =
+          access.heaps.heapOfForTesting(access.images.slot(first)->texture.Get());
+        used = access.heaps.usedBytes();
+      }));
+      REQUIRE(placement);
+
+      // let go while no frame counts as finished: the range waits, in heap_bytes
+      session->holdFrameCompletionForTesting(true);
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        access.images.dropTexture(first, access.frameIndex);
+      }));
+      auto pending = std::uint64_t{0};
+      auto usedHeld = std::uint64_t{0};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        pending = access.heaps.pendingBytes();
+        usedHeld = access.heaps.usedBytes();
+      }));
+      CHECK(pending == placement->range.size);
+      CHECK(usedHeld == used);
+      session->holdFrameCompletionForTesting(false);
+      CHECK(waitFor(
+        [&] {
+          auto free = false;
+          session->requestFrame();
+          inFrame(*session, [&](RenderFrameAccess& access) {
+            free = access.heaps.pendingBytes() == 0;
+          });
+          return free;
+        },
+        5000ms,
+        false));
+      auto usedAfter = std::uint64_t{0};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        usedAfter = access.heaps.usedBytes();
+      }));
+      CHECK(usedAfter == used - placement->range.size);
+
+      // a texture of the same size takes the freed range: the same offset
+      auto second = NoImageSlot;
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        second = access.images.provideForTesting(
+          testImageKey("textures/lp6/second"), syntheticImage(256, ei::FormatRgba8, 9));
+      }));
+      REQUIRE(waitForSlots(*session, {second}));
+      auto again = std::optional<HeapPlacement>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        again = access.heaps.heapOfForTesting(access.images.slot(second)->texture.Get());
+      }));
+      REQUIRE(again);
+      std::cout << fmt::format(
+        "LP6.4a (d): a 256 x 256 RGBA8 slot at heap {} offset {} ({} bytes); let go: "
+        "pending {}, heap_bytes {} -> {} -> {}; the next one at heap {} offset {}\n",
+        placement->heap,
+        placement->range.offset,
+        placement->range.size,
+        pending,
+        used,
+        usedHeld,
+        usedAfter,
+        again->heap,
+        again->range.offset);
+      CHECK(*again == *placement);
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+    }
+    CHECK(resetDispatcher());
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
   }
 }
 
@@ -12314,8 +12756,16 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu2]")
       }
 
       // (c) the allocation headroom refuses the new texture: the old one stays bound, the
-      // frames unconverged, one warning; the room back, it settles
+      // frames unconverged, one warning; the room back, it settles. LP6.4a: the
+      // override's class (RGBA8 2D) is made dedicated meanwhile (a texture that fits a
+      // heap is no allocation); (d)'s textures go into the heap again
       {
+        LitSession::setFormatClassRefusedForTesting(
+          nvrhi::Format::RGBA8_UNORM, nvrhi::TextureDimension::Texture2D);
+        const auto clearRefusal = kdl::invoke_later{[] {
+          LitSession::setFormatClassRefusedForTesting(
+            nvrhi::Format::RGBA8_UNORM, nvrhi::TextureDimension::Texture2D, false);
+        }};
         // the probes' staging let go, so the allocations hold still: the limit puts the
         // next texture within the headroom
         settle(session);
