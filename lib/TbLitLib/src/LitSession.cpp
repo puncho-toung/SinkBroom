@@ -810,6 +810,11 @@ bool LitSession::shadowDepthCopyForTesting() const
   return m_device && m_device->gpu().depthCopySupported;
 }
 
+std::string LitSession::formatClassLineForTesting() const
+{
+  return m_renderThread ? m_renderThread->formatClassLine() : std::string{};
+}
+
 SessionStatus LitSession::status() const
 {
   return m_renderThread ? m_renderThread->status() : SessionStatus{};

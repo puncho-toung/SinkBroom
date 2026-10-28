@@ -239,6 +239,9 @@ public:
   std::uint64_t capacityBytes() const;
   std::uint64_t usedBytes() const;
   std::uint64_t pendingBytes() const;
+  // LP6.4b's figures: the free ranges over every heap, and the largest
+  std::size_t freeRanges() const;
+  std::uint64_t largestFree() const;
   std::size_t placedTextures() const;
   // LP6.4b's figures: the largest and the smallest range placed so far, and how many
   std::uint64_t largestPlaced() const;

@@ -234,8 +234,10 @@ FormatClassTable probeFormatClasses(
 
 std::string formatClassLine(const FormatClassTable& table)
 {
-  // the probed classes grouped by alignment, then the classes kept dedicated with why
-  auto byAlignment = std::map<std::uint64_t, std::vector<std::string>>{};
+  // the probed classes grouped by alignment, each format once with its dimensions
+  // ("RGBA8_UNORM 2D/cube/array"), then the classes kept dedicated with why
+  auto byAlignment =
+    std::map<std::uint64_t, std::vector<std::pair<nvrhi::Format, std::string>>>{};
   auto dedicated = std::vector<std::string>{};
   auto unsupported = std::vector<std::string>{};
   auto prefers = std::vector<std::string>{};
@@ -249,7 +251,18 @@ std::string formatClassLine(const FormatClassTable& table)
     }
     if (entry.probed)
     {
-      byAlignment[entry.alignment].push_back(name);
+      auto& group = byAlignment[entry.alignment];
+      const auto format = std::ranges::find(
+        group, entry.formatClass.format, &std::pair<nvrhi::Format, std::string>::first);
+      const auto dimension = dimensionName(entry.formatClass.dimension);
+      if (format == group.end())
+      {
+        group.emplace_back(entry.formatClass.format, name);
+      }
+      else
+      {
+        format->second += fmt::format("/{}", dimension);
+      }
       if (entry.prefersDedicated)
       {
         prefers.push_back(name);
@@ -263,16 +276,20 @@ std::string formatClassLine(const FormatClassTable& table)
     }
   }
   auto alignments = std::vector<std::string>{};
-  for (const auto& [alignment, names] : byAlignment)
+  for (const auto& [alignment, group] : byAlignment)
   {
+    auto names = std::vector<std::string>{};
+    for (const auto& [format, name] : group)
+    {
+      names.push_back(name);
+    }
     alignments.push_back(
       fmt::format("alignment {}: {}", alignment, fmt::join(names, ", ")));
   }
   return fmt::format(
     "texture heaps (LP6.4a): {} classes probed in {:.1f} ms, the heaps in memory type "
-    "{}; "
-    "{}; kept dedicated: {}; prefer a dedicated allocation (a note): {}; not made by the "
-    "device: {}",
+    "{}; {}; kept dedicated: {}; prefer a dedicated allocation (a note): {}; not made by "
+    "the device: {}",
     std::ranges::count_if(table.entries, &FormatClassEntry::probed),
     table.milliseconds,
     table.heapMemoryType ? fmt::format("{}", *table.heapMemoryType) : "none",
@@ -495,6 +512,26 @@ std::uint64_t TextureHeaps::pendingBytes() const
     bytes += heap.ranges.pendingBytes();
   }
   return bytes;
+}
+
+std::size_t TextureHeaps::freeRanges() const
+{
+  auto ranges = std::size_t{0};
+  for (const auto& heap : m_heaps)
+  {
+    ranges += heap.ranges.freeRanges();
+  }
+  return ranges;
+}
+
+std::uint64_t TextureHeaps::largestFree() const
+{
+  auto largest = std::uint64_t{0};
+  for (const auto& heap : m_heaps)
+  {
+    largest = std::max(largest, heap.ranges.largestFree());
+  }
+  return largest;
 }
 
 std::size_t TextureHeaps::placedTextures() const

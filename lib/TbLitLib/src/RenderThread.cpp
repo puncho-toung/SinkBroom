@@ -674,6 +674,12 @@ SessionStatus RenderThread::status() const
   return m_status;
 }
 
+std::string RenderThread::formatClassLine() const
+{
+  const auto lock = std::scoped_lock{m_statusMutex};
+  return m_formatClassLine;
+}
+
 void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableVersion)
 {
   // D77, §3.10
@@ -1174,6 +1180,35 @@ bool RenderThread::prepareFrameResources(const vk::Extent2D extent)
          | kdl::value_or(false);
 }
 
+TextureHeapStatus RenderThread::textureHeapStatus() const
+{
+  auto status = TextureHeapStatus{};
+  status.heaps = m_textureHeaps.heaps();
+  status.capacityBytes = m_textureHeaps.capacityBytes();
+  status.usedBytes = m_textureHeaps.usedBytes();
+  status.placed = m_textureHeaps.placedTextures();
+  status.placedImageBytes = m_images.textureBytes() - m_images.dedicatedTextureBytes();
+  status.freeRanges = m_textureHeaps.freeRanges();
+  status.largestFreeBytes = m_textureHeaps.largestFree();
+  status.dedicated = m_images.dedicatedTextures(&m_textureHeaps);
+  status.dedicatedBytes = m_images.dedicatedTextureBytes();
+  status.texturesPlaced = m_textureUploads.texturesPlaced();
+  const auto& dedicated = m_textureUploads.dedicated();
+  status.dedicatedNoProbe = dedicated.noHeaps;
+  status.dedicatedRefusedClass = dedicated.refusedClass;
+  status.dedicatedTooLarge = dedicated.tooLarge;
+  status.dedicatedNoHeap = dedicated.noHeap;
+  status.dedicatedBindRefused = dedicated.bindRefused;
+  status.largestPlacedBytes = m_textureHeaps.largestPlaced();
+  status.smallestPlacedBytes = m_textureHeaps.smallestPlaced();
+  status.largestDedicatedBytes = m_textureUploads.largestDedicatedBytes();
+  if (const auto& classes = m_textureHeaps.formatClassesForTesting())
+  {
+    status.probeMs = classes->milliseconds;
+  }
+  return status;
+}
+
 void RenderThread::probeFormatClassesAtStart()
 {
   // LP6.4a (P8.3, D171): NVRHI places a texture in a heap without checking its memory
@@ -1183,8 +1218,11 @@ void RenderThread::probeFormatClassesAtStart()
   const auto& gpu = m_device.gpu();
   auto table = probeFormatClasses(
     m_device.device(), m_device.vkDevice(), gpu.physicalDevice, gpu.d24s8Supported);
-  m_events.post(SessionEvent::MaterialInfo, formatClassLine(table));
+  auto line = lit::formatClassLine(table);
+  m_events.post(SessionEvent::MaterialInfo, line);
   m_textureHeaps.setFormatClasses(std::move(table));
+  const auto lock = std::scoped_lock{m_statusMutex};
+  m_formatClassLine = std::move(line);
 }
 
 void RenderThread::checkVramBudget()
@@ -2389,10 +2427,16 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
                        + litStats.fogDraws + litStats.blendDraws + tonemap.draws;
         status.skippedDraws = litStats.skippedDraws;
         status.pendingPipelines = litStats.pendingPipelines + tonemap.pendingPipelines;
-        status.vramBytes =
-          accountGpuMemory(
-            m_frameResources, m_arenas, m_images, m_passes, m_tonemap, m_textureHeaps)
-            .total();
+        const auto account = accountGpuMemory(
+          m_frameResources, m_arenas, m_images, m_passes, m_tonemap, m_textureHeaps);
+        status.vramBytes = account.total();
+        // LP6.4a (C68 (a), (e)): the account's lines and the heaps
+        status.vramHeapBytes = m_textureHeaps.capacityBytes();
+        status.vramDedicatedTextureBytes = account.textureBytes - status.vramHeapBytes;
+        status.vramArenaBytes = account.arenaBytes;
+        status.vramRenderTargetBytes = account.renderTargetBytes;
+        status.vramReleasedBytes = account.releasedBytes;
+        status.heaps = textureHeapStatus();
         // D90 (LP4.1): the view's portal flow
         status.viewArea = litStats.viewArea;
         status.areasFlowed = litStats.areasFlowed;

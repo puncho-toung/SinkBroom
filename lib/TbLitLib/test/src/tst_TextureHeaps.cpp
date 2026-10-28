@@ -170,6 +170,23 @@ TEST_CASE("TextureHeaps")
     CHECK_FALSE(formatClassRefusedForTesting(rgba));
     CHECK(heaps.heapable(rgba));
     CHECK(formatClassLine(table).find("refused by a test") == std::string::npos);
+
+    // a format's dimensions of one alignment are named together
+    entry.formatClass =
+      FormatClass{nvrhi::Format::RGBA8_UNORM, nvrhi::TextureDimension::TextureCube};
+    entry.heapable = true;
+    entry.reason.clear();
+    table.entries.push_back(entry);
+    entry.formatClass =
+      FormatClass{nvrhi::Format::RGBA8_UNORM, nvrhi::TextureDimension::Texture2DArray};
+    entry.alignment = 4096;
+    table.entries.push_back(entry);
+    const auto grouped = formatClassLine(table);
+    CHECK(
+      grouped.find("alignment 1024: RGBA8_UNORM 2D/cube, BC1_UNORM 2D; alignment 4096: "
+                   "RGBA8_UNORM array")
+      != std::string::npos);
+    CHECK(grouped.find("4 classes probed") != std::string::npos);
   }
 
   SECTION("place: one heap, then a second when the first is full, nothing over a heap")

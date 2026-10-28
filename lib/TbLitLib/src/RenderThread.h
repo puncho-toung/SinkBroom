@@ -397,6 +397,8 @@ private:
   // LP2.3 (D9): the last frame shown, written by the render thread, read on any thread
   mutable std::mutex m_statusMutex;
   SessionStatus m_status;
+  // LP6.4a (P8.3): the Start probe's line (under m_statusMutex)
+  std::string m_formatClassLine;
   // D77 (LP2.2a): the last frame's lit passes wait for a material table newer than this
   // version (a pending material or evaluation); a newer one triggers a frame
   bool m_litWaitsForTable = false;
@@ -653,6 +655,8 @@ public:
   std::uint64_t stillTimerFirings() const;
   // LP2.3 (D9), any thread: the last frame shown, for the panel's status line
   SessionStatus status() const;
+  // LP6.4a (P8.3): the Start probe's line, empty before it ran
+  std::string formatClassLine() const;
   // any thread: every frame runs hook on the render thread (as runInFrame) until an
   // empty function replaces it
   void setEveryFrameHook(std::function<void(RenderFrameAccess&)> hook);
@@ -728,6 +732,8 @@ private:
   void checkVramBudget();
   // LP6.4a (P8.3): the Start probe of the format classes, its line, the heaps' table
   void probeFormatClassesAtStart();
+  // LP6.4a (C68 (a)): the heaps for the status (the measurements)
+  TextureHeapStatus textureHeapStatus() const;
   void runFrameHooks(nvrhi::ICommandList& commandList);
   void runAfterPassHooks(nvrhi::ICommandList& commandList);
   void runAfterTonemapHooks(nvrhi::ICommandList& commandList);

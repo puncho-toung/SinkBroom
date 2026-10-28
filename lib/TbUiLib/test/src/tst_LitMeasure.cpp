@@ -965,6 +965,10 @@ public:
   Clock::time_point tableChangedAt = Clock::now();
   std::uint64_t vramPeak = 0;
   std::uint64_t accountPeak = 0;
+  // LP6.4a (C68 (a), (e)): the status at the account's peak (its lines), and the Start
+  // probe's line of the session
+  lit::SessionStatus accountPeakStatus;
+  std::string probeLine;
   // the gaps between two samples, for the resolution the times are known to
   std::vector<double> gaps;
   // the camera script, called every pass
@@ -992,6 +996,8 @@ public:
     tableChangedAt = Clock::now();
     vramPeak = 0;
     accountPeak = 0;
+    accountPeakStatus = lit::SessionStatus{};
+    probeLine.clear();
   }
 
   void sample()
@@ -1026,7 +1032,15 @@ public:
       batchSeen = now;
     }
     const auto status = session->status();
-    accountPeak = std::max(accountPeak, status.vramBytes);
+    if (status.vramBytes > accountPeak)
+    {
+      accountPeak = status.vramBytes;
+      accountPeakStatus = status;
+    }
+    if (probeLine.empty())
+    {
+      probeLine = session->formatClassLineForTesting();
+    }
     if (status.frames != lastFrames)
     {
       lastFrames = status.frames;
@@ -2209,6 +2223,8 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
   const auto idleFrames = sampler.lastFrames - framesBeforeIdle;
   const auto firstVramPeak = sampler.vramPeak;
   const auto firstAccountPeak = sampler.accountPeak;
+  const auto firstAccountPeakStatus = sampler.accountPeakStatus;
+  const auto firstProbeLine = sampler.probeLine;
   keepRecords(first);
   const auto allocationsAfterFirstStop = stopPreview();
   const auto firstReport = reports.back();
@@ -3018,7 +3034,8 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     pass(settleAfterMoveMs <= 250.0));
   summary += fmt::format(
     "| Device memory allocations | peak {} / {} / {} (first, second, third Start); "
-    "after Stop {} / {} / {} | far below 4096 | {} |\n",
+    "after Stop {} / {} / {} | in the tens: the textures in heaps (LP6.4a), < 1024 "
+    "(D72's quarter of 4096) | {} |\n",
     peakAllocations(log, first),
     peakAllocations(log, second),
     peakAllocations(log, third),
@@ -3038,10 +3055,62 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     firstReport.vramAtStopBytes ? mb(double(*firstReport.vramAtStopBytes))
                                 : std::string{"-"});
   summary += fmt::format(
-    "| VRAM (the session's own account, GpuMemoryAccount) | peak {} (second Start's "
-    "process peak {}) | — | — |\n\n",
+    "| VRAM (the session's own account, GpuMemoryAccount) | peak {} = the texture "
+    "heaps' capacity {} + the dedicated slot textures {} + the geometry arenas {} + the "
+    "render targets and buffers {} + released, waiting for their frames {} (second "
+    "Start's process peak {}) | — | — |\n",
     mb(double(firstAccountPeak)),
+    mb(double(firstAccountPeakStatus.vramHeapBytes)),
+    mb(double(firstAccountPeakStatus.vramDedicatedTextureBytes)),
+    mb(double(firstAccountPeakStatus.vramArenaBytes)),
+    mb(double(firstAccountPeakStatus.vramRenderTargetBytes)),
+    mb(double(firstAccountPeakStatus.vramReleasedBytes)),
     mb(double(secondVramPeak)));
+  // LP6.4a (C68 (a), D171, P8.3): the texture heaps at the first Start's settled frame
+  {
+    const auto* settled = first.record(first.settledFrame);
+    const auto heaps = settled ? settled->status.heaps : lit::TextureHeapStatus{};
+    const auto rowField = [&](const std::size_t c) {
+      if (first.settledFrame == 0 || first.settledFrame > firstRows.size())
+      {
+        return std::string{"-"};
+      }
+      const auto& text = firstRows[first.settledFrame - 1].at(c);
+      return text.empty() ? std::string{"-"} : text;
+    };
+    summary += fmt::format(
+      "| Texture heaps (LP6.4a, C68 (a)) | at the first Start's settled frame (frame "
+      "{}): texture_heaps {}, heap_bytes {} ({} of the heaps' {}; the images' own {}, "
+      "{} free ranges, the largest {}), {} textures in heaps ({} placed so far, the "
+      "largest {}, the smallest {} bytes); textures_dedicated {} "
+      "({}; made dedicated so far: {} a class refused, {} larger than a heap, {} no "
+      "heap, {} before the probe, {} a bind refused; the largest {}); the Start probe "
+      "{:.1f} ms at the first frame: {} | — | — |\n\n",
+      first.settledFrame,
+      rowField(column::TextureHeaps),
+      rowField(column::HeapBytes),
+      mb(double(heaps.usedBytes)),
+      mb(double(heaps.capacityBytes)),
+      mb(double(heaps.placedImageBytes)),
+      heaps.freeRanges,
+      mb(double(heaps.largestFreeBytes)),
+      heaps.placed,
+      heaps.texturesPlaced,
+      mb(double(heaps.largestPlacedBytes)),
+      heaps.smallestPlacedBytes,
+      rowField(column::TexturesDedicated),
+      mb(double(heaps.dedicatedBytes)),
+      heaps.dedicatedRefusedClass,
+      heaps.dedicatedTooLarge,
+      heaps.dedicatedNoHeap,
+      heaps.dedicatedNoProbe,
+      heaps.dedicatedBindRefused,
+      mb(double(heaps.largestDedicatedBytes)),
+      heaps.probeMs,
+      firstProbeLine.empty() ? std::string{"(no line)"} : firstProbeLine);
+    CHECK(heaps.dedicatedBindRefused == 0u);
+    CHECK(!firstProbeLine.empty());
+  }
 
   summary += "Camera moving, per frame (median / p95 / max, count):\n\n";
   const auto line = [&](const std::string& what, const std::size_t c) {

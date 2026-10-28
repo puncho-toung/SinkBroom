@@ -92,6 +92,43 @@ struct ProgramReport
  * the session's own resources take (GpuMemoryAccount). Published by the render thread
  * after each frame it shows; read on any thread.
  */
+/**
+ * LP6.4a (C68 (a), D171): the slots' texture heaps as the last frame shown left them:
+ * the heaps, their capacity and the bytes their ranges hold (freed ranges waiting for
+ * their frames included), the textures in them and the slots' textures outside them
+ * (live) with their bytes; so far: the textures placed, the dedicated ones by why (no
+ * probe yet, a class refused, larger than a heap, no heap made, a bind refused), the
+ * largest and the smallest range placed, the largest dedicated texture; the Start
+ * probe's time (P8.3). For the measurements.
+ */
+struct TextureHeapStatus
+{
+  std::size_t heaps = 0;
+  std::uint64_t capacityBytes = 0;
+  std::uint64_t usedBytes = 0;
+  std::size_t placed = 0;
+  // LP6.4b's figures: the image bytes of the textures in heaps (their levels as written:
+  // usedBytes minus this is the drivers' padding of the images and the freed ranges),
+  // and the free ranges the heaps hold (their fragments)
+  std::uint64_t placedImageBytes = 0;
+  std::size_t freeRanges = 0;
+  std::uint64_t largestFreeBytes = 0;
+  std::size_t dedicated = 0;
+  std::uint64_t dedicatedBytes = 0;
+  std::uint64_t texturesPlaced = 0;
+  std::uint64_t dedicatedNoProbe = 0;
+  std::uint64_t dedicatedRefusedClass = 0;
+  std::uint64_t dedicatedTooLarge = 0;
+  std::uint64_t dedicatedNoHeap = 0;
+  std::uint64_t dedicatedBindRefused = 0;
+  std::uint64_t largestPlacedBytes = 0;
+  std::uint64_t smallestPlacedBytes = 0;
+  std::uint64_t largestDedicatedBytes = 0;
+  double probeMs = -1.0;
+
+  bool operator==(const TextureHeapStatus&) const = default;
+};
+
 struct SessionStatus
 {
   // frames shown so far; 0: none yet
@@ -112,6 +149,16 @@ struct SessionStatus
   std::size_t pendingPipelines = 0;
   // the session's arenas, textures and targets (GpuMemoryAccount::total)
   std::uint64_t vramBytes = 0;
+  // LP6.4a (C68 (a), (e)): its lines: the texture heaps' capacity and the dedicated slot
+  // textures (the texture line), the arenas, the render targets and buffers, and what
+  // was released and waits for its frames
+  std::uint64_t vramHeapBytes = 0;
+  std::uint64_t vramDedicatedTextureBytes = 0;
+  std::uint64_t vramArenaBytes = 0;
+  std::uint64_t vramRenderTargetBytes = 0;
+  std::uint64_t vramReleasedBytes = 0;
+  // LP6.4a: the slots' texture heaps
+  TextureHeapStatus heaps;
   // LP4.1 (D90's first half, C32): the view's portal flow: the view's area (-1 outside
   // the world), the areas flowed, the tree's area count (0 without a tree: no flow) and
   // the view lights that went on to the pairing
@@ -781,6 +828,9 @@ public:
    * step 1.
    */
   SessionStatus status() const;
+  // LP6.4a (P8.3), any thread: the Start probe's line (the classes, their alignments, the
+  // classes kept dedicated), empty before the first frame; measurements only
+  std::string formatClassLineForTesting() const;
   // LP2.4 (Q14), any thread: the compile thread's timings so far; empty once teardown
   // step 2 released the compiler
   CompileTimings compileTimingsForTesting() const;
