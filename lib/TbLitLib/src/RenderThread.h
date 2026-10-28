@@ -27,6 +27,7 @@
 #include "LitPasses.h"
 #include "PipelineCompiler.h"
 #include "SamplerSet.h"
+#include "TextureHeaps.h"
 #include "TextureUploads.h"
 #include "TonemapPasses.h"
 #include "base/Macros.h"
@@ -288,6 +289,8 @@ struct RenderFrameAccess
   // LP7.5 step 0: the pacer's stamp of the frame's start (FramePacer::frameStarted),
   // taken before the snapshot, the acquire and the uploads
   FrameClock::time_point frameStart;
+  // LP6.4a (C68 (a)): the slots' texture heaps and the Start probe's format classes
+  TextureHeaps& heaps;
 };
 
 /**
@@ -353,6 +356,9 @@ private:
   BindingSetCache m_bindingSets{BindingSetCacheSize};
   // LP2.1 (SC268, P2.14c): the textures made from the slots' images, low mips first
   TextureUploads m_textureUploads;
+  // LP6.4a (C68 (a), D171): the heaps the slots' textures are placed in, and the format
+  // classes the session's first frame probed (P8.3); released after the slots
+  TextureHeaps m_textureHeaps;
   // LP2.1 (D68): the engine's common samplers and the images' own
   SamplerSet m_samplers;
   // LP2.2a: the depth prepass and the interactions into hdrFBO
@@ -714,6 +720,8 @@ private:
   bool prepareFrameResources(vk::Extent2D extent);
   // C11, §3.10: at the first frame, the account against VK_EXT_memory_budget's budget
   void checkVramBudget();
+  // LP6.4a (P8.3): the Start probe of the format classes, its line, the heaps' table
+  void probeFormatClassesAtStart();
   void runFrameHooks(nvrhi::ICommandList& commandList);
   void runAfterPassHooks(nvrhi::ICommandList& commandList);
   void runAfterTonemapHooks(nvrhi::ICommandList& commandList);

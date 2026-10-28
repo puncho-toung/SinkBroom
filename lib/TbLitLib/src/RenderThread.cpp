@@ -237,6 +237,10 @@ Result<void> RenderThread::createFrameResources(
     nvrhi::CommandListParameters{}.setUploadChunkSize(UploadChunkBytes));
   m_arenas.setDevice(device, ArenaBytes);
   m_arenas.setAllocationRoom([this] { return allocationRoom(); });
+  // LP6.4a (C68 (a), D171, Q47): the slots' textures in heaps of HeapBytes, a new heap
+  // under U2.3's room (the director's reading (1))
+  m_textureHeaps.setDevice(device, HeapBytes);
+  m_textureHeaps.setAllocationRoom([this] { return allocationRoom(); });
   m_textureUploads.setD24s8Supported(m_device.gpu().d24s8Supported);
   for (auto& event : m_frameEvents)
   {
@@ -586,6 +590,8 @@ void RenderThread::releaseFrameResources()
   m_pipelines.clear();
   m_bindingSets.clear();
   m_images.releaseAll();
+  // LP6.4a (C68 (a)): a heap outlives every texture bound into it, so after the slots
+  m_textureHeaps.releaseAll();
   m_samplers.releaseAll();
   m_arenaTestChunks.reset();
   m_commandList = nullptr;
@@ -1149,6 +1155,19 @@ bool RenderThread::prepareFrameResources(const vk::Extent2D extent)
          | kdl::value_or(false);
 }
 
+void RenderThread::probeFormatClassesAtStart()
+{
+  // LP6.4a (P8.3, D171): NVRHI places a texture in a heap without checking its memory
+  // type, alignment or dedicated requirement, so the session asks the driver itself for
+  // every class it can make, once; the classes kept dedicated (none expected) are said
+  // in the one line
+  const auto& gpu = m_device.gpu();
+  auto table = probeFormatClasses(
+    m_device.device(), m_device.vkDevice(), gpu.physicalDevice, gpu.d24s8Supported);
+  m_events.post(SessionEvent::MaterialInfo, formatClassLine(table));
+  m_textureHeaps.setFormatClasses(std::move(table));
+}
+
 void RenderThread::checkVramBudget()
 {
   // §3.10, C11 (U2.6, V2.6): the device-local heaps' usage, as the driver counts it for
@@ -1238,7 +1257,8 @@ RenderFrameAccess RenderThread::frameAccess(nvrhi::ICommandList& commandList)
     arenaInstances(),
     models,
     dress,
-    m_frameStart};
+    m_frameStart,
+    m_textureHeaps};
 }
 
 void RenderThread::runAfterPassHooks(nvrhi::ICommandList& commandList)
@@ -2013,6 +2033,12 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       {
         return FrameOutcome::Stopped;
       }
+      // LP6.4a (P8.3, the director's reading (3)): at Start, before the first upload,
+      // every format class the slots can make is probed once for the session
+      if (!m_textureHeaps.formatClassesForTesting())
+      {
+        probeFormatClassesAtStart();
+      }
       const auto uploadStart = FrameClock::now();
       const auto uploaded = recordUploads(commandList);
       uploadMs = millisecondsSince(uploadStart);
@@ -2320,6 +2346,11 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       // LP6.2 (C66, D169): the caster sets made, the tiles drawn again for an image
       row.casterSetsBuilt = litStats.casterSetsBuilt;
       row.tilesImageRedrawn = litStats.tilesImageRedrawn;
+      // LP6.4a (C68 (a)): the texture heaps, their ranges' bytes, the slots' textures
+      // outside them
+      row.textureHeaps = m_textureHeaps.heaps();
+      row.heapBytes = m_textureHeaps.usedBytes();
+      row.texturesDedicated = m_images.dedicatedTextures(&m_textureHeaps);
       m_timers.frameShown(slot, row);
       ++m_framesPresented;
       // LP2.3 (D9): the panel's status line reads the frame's counts
@@ -2749,6 +2780,10 @@ void RenderThread::appendSessionRow(const FrameLogEvent event)
     row.arenaBytes = m_arenas.capacityBytes();
     // LP7.0 (C54): the adopted bake's tree, taken before the scene went
     row.procBytes = m_stopProcBytes;
+    // LP6.4a (C68 (a)): what the heaps hold at the stop, before step 2 releases them
+    row.textureHeaps = m_textureHeaps.heaps();
+    row.heapBytes = m_textureHeaps.usedBytes();
+    row.texturesDedicated = m_images.dedicatedTextures(&m_textureHeaps);
   }
   m_timers.append(row);
 }

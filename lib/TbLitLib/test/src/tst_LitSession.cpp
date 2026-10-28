@@ -377,8 +377,9 @@ using namespace std::chrono_literals;
 // shadow-atlas interaction draws, LP3.4's perforated_draws (D155), LP6.0's ten split
 // columns of the CPU record and three reserved GPU columns (C65), LP6.1's two draw-record
 // counts (C64), LP6.2's three parts of lists_ms (C65), caster sets made and tiles drawn
-// again for an image (C66, D169)
-constexpr auto FrameLogFields = std::size_t{115};
+// again for an image (C66, D169), LP6.4a's texture heaps, their bytes and the dedicated
+// slot textures (C68 (a))
+constexpr auto FrameLogFields = std::size_t{118};
 
 // LP2.0, T0.2: the validation layer's id of "Vertex attribute at location N not consumed
 // by vertex shader" (mirror.json M-PIPE-DEFECT-01), as this machine's layer names it

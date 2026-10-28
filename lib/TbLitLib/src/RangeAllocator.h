@@ -72,6 +72,16 @@ public:
   // when no free range holds it; a size of 0 has no range
   std::optional<ArenaRange> allocate(std::uint64_t size);
 
+  /**
+   * LP6.4a (C68 (a), the director's reading (6)): as allocate, the range's offset also a
+   * multiple of alignment (a power of two; one below the allocator's own is the
+   * allocator's own), for a texture's own requirement. The best fit is the smallest free
+   * range that holds the padding up to the aligned offset and the size; the padding stays
+   * free (split off, merged back with the range when it is reclaimed). nullopt for an
+   * alignment that is not a power of two.
+   */
+  std::optional<ArenaRange> allocate(std::uint64_t size, std::uint64_t alignment);
+
   // range, handed out by allocate, is no longer used from frame frame on: it is free
   // again once completedFrames > frame (reclaim)
   void free(const ArenaRange& range, std::uint64_t frame);

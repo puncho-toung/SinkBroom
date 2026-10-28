@@ -26,6 +26,7 @@
 #include "SessionEvents.h"
 #include "StackThread.h"
 #include "Swapchain.h"
+#include "TextureHeaps.h"
 #include "lit/CpuPool.h"
 #include "lit/EngineBuiltins.h"
 #include "lit/GridTable.h"
@@ -827,6 +828,12 @@ void LitSession::setMapPathOverrideForTesting(const char* gameRelativeMapPath)
 void LitSession::holdProbeBuildsForTesting(const bool hold)
 {
   setProbeBuildsHeldForTesting(hold);
+}
+
+void LitSession::setFormatClassRefusedForTesting(
+  const nvrhi::Format format, const nvrhi::TextureDimension dimension, const bool refused)
+{
+  lit::setFormatClassRefusedForTesting(FormatClass{format, dimension}, refused);
 }
 
 std::int64_t LitSession::liveDeviceMemoryAllocationsForTesting()

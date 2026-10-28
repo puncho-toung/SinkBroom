@@ -121,6 +121,89 @@ TEST_CASE("RangeAllocator")
     CHECK(ranges.allocate(4096) == ArenaRange{0, 4096});
   }
 
+  SECTION("allocate with an alignment: aligned offsets, the padding free (LP6.4a)")
+  {
+    auto ranges = RangeAllocator{4096, 16};
+    // 100 bytes at 0, then 256 aligned to 256: the offset rounds up to 256, the 144 bytes
+    // between stay free
+    const auto a = ranges.allocate(100);
+    REQUIRE(a);
+    CHECK(*a == ArenaRange{0, 112});
+    const auto b = ranges.allocate(256, 256);
+    REQUIRE(b);
+    CHECK(*b == ArenaRange{256, 256});
+    CHECK(ranges.usedBytes() == 112u + 256u);
+    CHECK(ranges.freeBytes() == 4096u - 112u - 256u);
+    CHECK(ranges.freeRanges() == 2u);
+    // the padding is handed out to what fits it
+    const auto c = ranges.allocate(144);
+    REQUIRE(c);
+    CHECK(*c == ArenaRange{112, 144});
+    CHECK(ranges.freeRanges() == 1u);
+
+    // an alignment below the allocator's own is its own; not a power of two: nothing
+    CHECK(ranges.allocate(16, 4) == ArenaRange{512, 16});
+    CHECK_FALSE(ranges.allocate(16, 48));
+    // the size is rounded to the allocator's own alignment, not to the offset's
+    const auto d = ranges.allocate(20, 1024);
+    REQUIRE(d);
+    CHECK(*d == ArenaRange{1024, 32});
+    CHECK_FALSE(ranges.allocate(0, 256));
+    CHECK_FALSE(ranges.allocate(8192, 256));
+  }
+
+  SECTION("allocate with an alignment: the best fit among the aligned candidates")
+  {
+    auto ranges = RangeAllocator{8192, 16};
+    auto taken = std::vector<ArenaRange>{};
+    for (auto i = 0; i < 8; ++i)
+    {
+      const auto range = ranges.allocate(1024);
+      REQUIRE(range);
+      taken.push_back(*range);
+    }
+    // two free ranges: 1024 bytes at 1024 and 2048 bytes at 4096
+    ranges.free(taken[1], 0);
+    ranges.free(taken[4], 0);
+    ranges.free(taken[5], 0);
+    ranges.reclaim(1);
+    CHECK(ranges.freeRanges() == 2u);
+    // 512 aligned to 2048: the 1024-byte range at 1024 holds no 2048-aligned offset
+    // inside it with room (2048 is its end), so the larger range at 4096 takes it
+    const auto a = ranges.allocate(512, 2048);
+    REQUIRE(a);
+    CHECK(*a == ArenaRange{4096, 512});
+    // 512 aligned to 512: the smaller free range (1024 at 1024) is the best fit
+    const auto b = ranges.allocate(512, 512);
+    REQUIRE(b);
+    CHECK(*b == ArenaRange{1024, 512});
+  }
+
+  SECTION("allocate with an alignment: reclaim merges the padding back")
+  {
+    auto ranges = RangeAllocator{4096, 16};
+    const auto a = ranges.allocate(48);
+    REQUIRE(a);
+    const auto b = ranges.allocate(1024, 1024);
+    REQUIRE(b);
+    CHECK(*b == ArenaRange{1024, 1024});
+    // the padding [48, 1024) and the tail [2048, 4096) are free
+    CHECK(ranges.freeRanges() == 2u);
+    ranges.free(*b, 3);
+    // freed, not free until frame 3 has finished
+    CHECK(ranges.pendingBytes() == 1024u);
+    CHECK(ranges.freeRanges() == 2u);
+    ranges.reclaim(4);
+    // the range, its padding and the tail are one free range again
+    CHECK(ranges.freeRanges() == 1u);
+    CHECK(ranges.largestFree() == 4096u - 48u);
+    ranges.free(*a, 4);
+    ranges.reclaim(5);
+    CHECK(ranges.freeRanges() == 1u);
+    CHECK(ranges.freeBytes() == 4096u);
+    CHECK(ranges.allocate(4096, 4096) == ArenaRange{0, 4096});
+  }
+
   SECTION("a fragmentation bound: random churn never splits the free space further")
   {
     // coalesced free ranges are separated by used or pending ones, so there is at most

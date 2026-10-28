@@ -61,6 +61,51 @@ std::optional<ArenaRange> RangeAllocator::allocate(const std::uint64_t size)
   return ArenaRange{offset, aligned};
 }
 
+std::optional<ArenaRange> RangeAllocator::allocate(
+  const std::uint64_t size, const std::uint64_t alignment)
+{
+  const auto offsetAlignment = std::max(alignment, m_alignment);
+  if ((offsetAlignment & (offsetAlignment - 1)) != 0)
+  {
+    return std::nullopt;
+  }
+  if (offsetAlignment == m_alignment)
+  {
+    return allocate(size);
+  }
+  if (size == 0 || size > m_capacity)
+  {
+    return std::nullopt;
+  }
+  const auto aligned = (size + m_alignment - 1) / m_alignment * m_alignment;
+  // the best fit with the padding: the smallest free range that holds the padding up to
+  // its first aligned offset and the size, the lowest offset among equals
+  for (auto it = m_freeBySize.lower_bound(std::pair{aligned, std::uint64_t{0}});
+       it != m_freeBySize.end();
+       ++it)
+  {
+    const auto [freeSize, offset] = *it;
+    const auto start = (offset + offsetAlignment - 1) & ~(offsetAlignment - 1);
+    const auto padding = start - offset;
+    if (padding + aligned > freeSize)
+    {
+      continue;
+    }
+    eraseFree(m_freeByOffset.find(offset));
+    if (padding > 0)
+    {
+      insertFree(offset, padding);
+    }
+    if (freeSize > padding + aligned)
+    {
+      insertFree(start + aligned, freeSize - padding - aligned);
+    }
+    m_used += aligned;
+    return ArenaRange{start, aligned};
+  }
+  return std::nullopt;
+}
+
 void RangeAllocator::free(const ArenaRange& range, const std::uint64_t frame)
 {
   if (range.size == 0)

@@ -38,6 +38,7 @@
 
 namespace tb::lit
 {
+class TextureHeaps;
 
 // a slot of the image-slot table (C28): an index, stable for the session
 using ImageSlotId = std::uint32_t;
@@ -253,6 +254,9 @@ public:
   std::size_t resident() const;
   std::uint64_t textureBytes() const;
   std::uint64_t retiredBytes() const;
+  // LP6.4a (C68 (a)): the slots' textures (a Replacing slot's both) not placed in heaps,
+  // live: the frame log's textures_dedicated
+  std::size_t dedicatedTextures(const TextureHeaps* heaps) const;
 
   // the slots whose version changed since the last call, each once
   std::vector<ImageSlotId> takeChangedSlots();

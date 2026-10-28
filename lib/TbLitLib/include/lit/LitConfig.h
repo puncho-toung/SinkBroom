@@ -50,6 +50,11 @@ constexpr auto UploadBytesPerFrame = std::uint64_t{32} * 1024 * 1024;
 // passes the limit minus this, no new texture or geometry arena is made
 constexpr auto AllocationHeadroom = std::uint64_t{64};
 
+// LP6.4a (C68 (a), D171, Q47): the size of one texture heap, the DeviceLocal memory the
+// slots' textures are placed in; another is made when none holds a texture, and a texture
+// larger than this is made dedicated
+constexpr auto HeapBytes = std::uint64_t{128} * 1024 * 1024;
+
 // D77 (LP2.1): texture arrivals trigger a frame at most this often (10 Hz)
 constexpr auto TextureArrivalInterval = std::chrono::milliseconds{100};
 

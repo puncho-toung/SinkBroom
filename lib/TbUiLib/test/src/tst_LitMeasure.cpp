@@ -1250,8 +1250,13 @@ constexpr auto TilesImageRedrawn = std::size_t{114};
 // columns after it, the 105th, and the three GPU columns reserved for LP6's passes, the
 // 108th; LP6.1 (C64): and the draw records' two (records_held, record_resolves), the
 // 110th; LP6.2 (C65): and lists_ms's three parts (surfaces_ms, lights_ms, links_ms), the
-// 113th, and (C66, D169) caster_sets_built and tiles_image_redrawn, the 115th the last
-constexpr auto Count = std::size_t{115};
+// 113th, and (C66, D169) caster_sets_built and tiles_image_redrawn, the 115th; LP6.4a
+// (C68 (a)): and the texture heaps' three (texture_heaps, heap_bytes,
+// textures_dedicated), the 118th the last
+constexpr auto TextureHeaps = std::size_t{115};
+constexpr auto HeapBytes = std::size_t{116};
+constexpr auto TexturesDedicated = std::size_t{117};
+constexpr auto Count = std::size_t{118};
 } // namespace column
 
 /**

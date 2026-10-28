@@ -267,6 +267,13 @@ struct FrameLogRow
   // empty in a start or stop row, the last columns
   std::optional<std::uint64_t> casterSetsBuilt;
   std::optional<std::uint64_t> tilesImageRedrawn;
+  // LP6.4a (C68 (a), C65), frame rows and the stop row: the texture heaps live, the bytes
+  // their ranges hold (TextureHeaps::usedBytes: handed out, the freed ones waiting for
+  // their frames included) and the slots' textures outside the heaps, live; empty in a
+  // start row, the last columns
+  std::optional<std::uint64_t> textureHeaps;
+  std::optional<std::uint64_t> heapBytes;
+  std::optional<std::uint64_t> texturesDedicated;
 };
 
 // the CSV header line, ending in a newline

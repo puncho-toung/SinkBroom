@@ -19,6 +19,7 @@
 
 #include "ImageSlots.h"
 
+#include "TextureHeaps.h"
 #include "lit/ImageCache.h"
 
 #include <algorithm>
@@ -368,6 +369,20 @@ std::uint64_t ImageSlots::textureBytes() const
 std::uint64_t ImageSlots::retiredBytes() const
 {
   return m_retired.bytes();
+}
+
+std::size_t ImageSlots::dedicatedTextures(const TextureHeaps* heaps) const
+{
+  const auto dedicated = [&](const nvrhi::TextureHandle& texture) {
+    return texture && !(heaps && heaps->placed(texture.Get())) ? std::size_t{1}
+                                                               : std::size_t{0};
+  };
+  auto count = std::size_t{0};
+  for (const auto& slot : m_slots)
+  {
+    count += dedicated(slot.texture) + dedicated(slot.replaced);
+  }
+  return count;
 }
 
 std::vector<ImageSlotId> ImageSlots::takeChangedSlots()

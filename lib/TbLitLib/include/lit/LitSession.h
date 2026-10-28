@@ -30,7 +30,9 @@
 namespace nvrhi
 {
 class IDevice;
-}
+enum class Format : std::uint8_t;
+enum class TextureDimension : std::uint8_t;
+} // namespace nvrhi
 
 #include <array>
 #include <chrono>
@@ -798,6 +800,16 @@ public:
    * geometry poll. Process-wide (setProbeBuildsHeldForTesting); tests only.
    */
   static void holdProbeBuildsForTesting(bool hold);
+  /**
+   * LP6.4a (C68 (a), P8.3), any thread: while refused, the slots' textures of this class
+   * (an engine format's texture format and its dimension: Texture2D, TextureCube,
+   * Texture2DArray) are made dedicated as before the heaps, from the next texture made
+   * on, and the Start probe's line names the class as refused by a test. Process-wide
+   * (TextureHeaps.h); tests only: a test refuses before a Start or before its allocation
+   * limit and clears it when it ends.
+   */
+  static void setFormatClassRefusedForTesting(
+    nvrhi::Format format, nvrhi::TextureDimension dimension, bool refused = true);
   /**
    * LP2.4 (C30, D72), any thread: the device memory allocations the counter of the last
    * session counts now; after a Stop, what that session's teardown left (0 expected).
