@@ -2634,6 +2634,50 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       field(column::StageDraws),
       field(column::FogDraws),
       field(column::ShadowDraws));
+    // LP6.1 (C64): the draw records the settled start view holds and resolves, the moving
+    // frames' resolutions (0 while the textures are settled) and the first Start's
+    // frames' up to the settled one
+    const auto resolves = orbit(column::RecordResolves);
+    const auto heldMoving = orbit(column::RecordsHeld);
+    auto resolving = std::size_t{0};
+    for (auto k = orbitBegin; k <= orbitEnd; ++k)
+    {
+      resolving +=
+        firstRows[k].number(column::RecordResolves).value_or(0.0) > 0.0 ? 1 : 0;
+    }
+    auto startResolves = std::string{};
+    auto startSum = 0.0;
+    for (std::size_t k = 0; k < first.settledFrame && k < firstRows.size(); ++k)
+    {
+      const auto r = firstRows[k].number(column::RecordResolves).value_or(0.0);
+      startSum += r;
+      if (r > 0.0)
+      {
+        startResolves +=
+          fmt::format("{}{}: {:.0f}", startResolves.empty() ? "" : ", ", k + 1, r);
+      }
+    }
+    summary += fmt::format(
+      "| Draw records (LP6.1): the settled start view (first Start, frame {}) | "
+      "records_held {}, record_resolves {}; camera moving: record_resolves median "
+      "{:.0f}, "
+      "p95 {:.0f}, max {:.0f}, {:.0f} in all, {} of {} frames resolving any, "
+      "records_held "
+      "median {:.0f}, max {:.0f}; the first Start's frames to its settled one: {:.0f} "
+      "resolutions ({}) | — | — |\n",
+      first.settledFrame,
+      field(column::RecordsHeld),
+      field(column::RecordResolves),
+      resolves.median,
+      resolves.p95,
+      resolves.max,
+      resolves.sum,
+      resolving,
+      orbitEnd - orbitBegin + 1,
+      heldMoving.median,
+      heldMoving.max,
+      startSum,
+      startResolves.empty() ? std::string{"none"} : startResolves);
   }
   {
     const auto flow = orbit(column::FlowMs);
@@ -2743,6 +2787,9 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
   line("GPU fog ms", column::GpuFogMs);
   // LP7.2 (C52): the models' draws
   line("model draws", column::ModelDraws);
+  // LP6.1 (C64): the draw records held and resolved
+  line("draw records held", column::RecordsHeld);
+  line("draw record resolutions", column::RecordResolves);
   const auto writeBudget = firstRows[orbitBegin].number(column::VolatileWriteBudget);
   // D86 with D76's rule: set 9's own buffer keeps maxVersions 8192 while the most writes
   // a frame made, doubled with a margin of 64, stay within the frame's budget
