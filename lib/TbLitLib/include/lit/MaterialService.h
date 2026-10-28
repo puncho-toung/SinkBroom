@@ -409,8 +409,9 @@ using MaterialListener = std::function<void(const MaterialServiceEvent&)>;
 struct MaterialServiceOptions
 {
   // makes the decl source of a registry; called on the parse thread for every build, so a
-  // reload rescans the game's containers. cancel is the stop flag: a source that scans
-  // stops when it is set (G4).
+  // reload rescans the game's containers (LP6.3: a source from a container index checks
+  // the key and scans only when it moved, lit/GameContainerIndex.h). cancel is the stop
+  // flag: a source that scans stops when it is set (G4).
   std::function<std::unique_ptr<DeclSource>(const std::atomic<bool>& cancel)> makeSource;
   MaterialListener listener;
   // how often the loose decl files are compared with the last build's; 0 never
@@ -468,6 +469,14 @@ struct MaterialServiceStats
   // the containers the last build's source holds (DeclSource::containerCount): fewer
   // than the game has when the stop cut its scan short
   std::size_t sourceContainers = 0;
+  // LP6.3 (C67 (a)): where the last build's source took its container tables from (a
+  // scan, the container index in memory or its file; None without an index), its key
+  // check's seconds (inside sourceSeconds), the index file's write after a scan and its
+  // bytes (written, or read on a file hit)
+  ContainerTablesOrigin::Kind sourceTables = ContainerTablesOrigin::Kind::None;
+  double keyCheckSeconds = 0.0;
+  double indexWriteSeconds = 0.0;
+  std::uint64_t indexFileBytes = 0;
   int materials = 0;
   int tables = 0;
   int defaultedMaterials = 0;

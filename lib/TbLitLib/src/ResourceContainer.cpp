@@ -255,6 +255,39 @@ Result<ResourceContainer> ResourceContainer::open(
            });
 }
 
+std::optional<ResourceContainer> ResourceContainer::fromTable(
+  std::string name,
+  std::filesystem::path path,
+  const std::uint64_t fileSize,
+  const std::int64_t fileTime,
+  std::vector<ResourceEntry> entries)
+{
+  // the checks open made when it read the table: every entry fits in the file
+  if (fileSize < HeaderSize)
+  {
+    return std::nullopt;
+  }
+  for (const auto& entry : entries)
+  {
+    if (std::uint64_t(entry.offset) + std::uint64_t(entry.length) > fileSize)
+    {
+      return std::nullopt;
+    }
+  }
+  auto container = ResourceContainer{};
+  container.m_name = std::move(name);
+  container.m_path = std::move(path);
+  container.m_fileSize = fileSize;
+  container.m_fileTime = fileTime;
+  container.m_entries = std::move(entries);
+  for (std::size_t i = 0; i < container.m_entries.size(); ++i)
+  {
+    // the later of two entries with one name wins, as open indexes them
+    container.m_index[container.m_entries[i].name] = i;
+  }
+  return container;
+}
+
 const std::string& ResourceContainer::name() const
 {
   return m_name;

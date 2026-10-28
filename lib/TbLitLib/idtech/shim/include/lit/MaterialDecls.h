@@ -105,6 +105,29 @@ struct GameFileProbe
   bool operator!=(const GameFileProbe& other) const;
 };
 
+/**
+ * LP6.3 (C67 (a), A52): where a source's container tables came from, for the service's
+ * stats: a scan of the game's containers, the container index's copy in memory or its
+ * file (lit/GameContainerIndex.h); None for a source without an index. keySeconds is the
+ * key check (the containers' listing and one stat each), writeSeconds the index file's
+ * write after a complete scan, fileBytes that file's size (written or read).
+ */
+struct ContainerTablesOrigin
+{
+  enum class Kind
+  {
+    None,
+    Scan,
+    Memory,
+    File,
+  };
+
+  Kind kind = Kind::None;
+  double keySeconds = 0.0;
+  double writeSeconds = 0.0;
+  std::uint64_t fileBytes = 0;
+};
+
 // The game files the registry reads decl text from, and the preview reads its other game
 // files from (images, bakes; C8). It answers the questions the engine's file system
 // answers: the files of a folder with an extension (idFileSystem::ListFiles, names
@@ -179,6 +202,9 @@ public:
   // the containers (.pk4 and .resources files) whose tables the source holds; fewer than
   // the game has when a cancel cut its scan short (G4); none for a source without them
   virtual std::size_t containerCount() const;
+
+  // LP6.3 (C67 (a)): where the container tables came from; the default None
+  virtual ContainerTablesOrigin containerTablesOrigin() const;
 };
 
 // idStr::IcmpPath, the engine's path order (case-insensitive, folders first): negative,

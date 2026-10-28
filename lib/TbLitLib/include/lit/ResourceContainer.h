@@ -85,6 +85,20 @@ public:
     std::vector<std::string>& warnings,
     const std::atomic<bool>* cancel = nullptr);
 
+  /**
+   * LP6.3 (C67 (a)): a container whose table a scan read before, as the container index
+   * keeps it: its name, path, the file's size and time when the table was read, and the
+   * entries in the file's order (their lookup index made as open makes it). nullopt when
+   * an entry does not fit in fileSize, so that no stored table is ever read out of
+   * bounds. Pure; any thread.
+   */
+  static std::optional<ResourceContainer> fromTable(
+    std::string name,
+    std::filesystem::path path,
+    std::uint64_t fileSize,
+    std::int64_t fileTime,
+    std::vector<ResourceEntry> entries);
+
   const std::string& name() const;
   const std::filesystem::path& path() const;
   // the table, in the file's order

@@ -169,6 +169,41 @@ double millisecondsBetween(const Clock::time_point from, const Clock::time_point
   return std::chrono::duration<double, std::milli>(to - from).count();
 }
 
+// LP6.3 (C67 (a)): where a Start's container tables came from
+std::string containerSourceName(const lit::ContainerTablesOrigin::Kind kind)
+{
+  switch (kind)
+  {
+  case lit::ContainerTablesOrigin::Kind::Scan:
+    return "scan";
+  case lit::ContainerTablesOrigin::Kind::Memory:
+    return "index hit in memory";
+  case lit::ContainerTablesOrigin::Kind::File:
+    return "index hit from the file";
+  case lit::ContainerTablesOrigin::Kind::None:
+    break;
+  }
+  return "source (no index)";
+}
+
+// the key check, and the index file's write after a scan or its read on a file hit
+std::string containerSourceText(const lit::MaterialServiceStats& service)
+{
+  auto text = fmt::format("the key check {:.1f} ms", service.keyCheckSeconds * 1000.0);
+  if (service.sourceTables == lit::ContainerTablesOrigin::Kind::Scan)
+  {
+    text += fmt::format(
+      ", the index file written in {:.1f} ms, {} bytes",
+      service.indexWriteSeconds * 1000.0,
+      service.indexFileBytes);
+  }
+  else if (service.sourceTables == lit::ContainerTablesOrigin::Kind::File)
+  {
+    text += fmt::format(", the index file of {} bytes read", service.indexFileBytes);
+  }
+  return text;
+}
+
 // ----- the Version 2 map and its conversion -----
 
 struct Version2Side
@@ -1930,6 +1965,11 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     documentCounts.patches);
   std::cout << loadLine << "\n";
   auto& panel = *harness.panel;
+  // LP6.3 (C67 (a)): the panel's container index persists in the run's own folder, never
+  // the user-data folder; new for every run, so that its first Start scans
+  const auto indexFolder = out / "container-index";
+  std::filesystem::remove_all(indexFolder);
+  panel.setContainerIndexFolderForTesting(indexFolder);
 
   // the camera at the player's start, at eye height, looking along its angle
   const auto startOrigin = vectorOf(playerStart->find("origin"));
@@ -2346,7 +2386,7 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     }
     const auto& service = measure.service;
     return fmt::format(
-      "the material service's build {}: the containers' scan {:.0f} ms, the decl read "
+      "the material service's build {}: the containers' {} {:.0f} ms ({}), the decl read "
       "{:.0f} ms, its first table published at {} (seen by the GUI thread at {}); the "
       "session at {}, its first frame at {}, first snapshot at {}, first batch at {}; "
       "the scene's geometry batches by the first lit frame {}; the {} frames before the "
@@ -2356,7 +2396,9 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       "ms busy ({} pipelines {:.0f} ms, {} shaders {:.0f} ms), its last job so far "
       "ended at {}",
       service.builds,
+      containerSourceName(service.sourceTables),
       service.sourceSeconds * 1000.0,
+      containerSourceText(service),
       (service.buildSeconds - service.sourceSeconds) * 1000.0,
       msText(measure.firstTablePublishedMs),
       msText(measure.firstTableMs),

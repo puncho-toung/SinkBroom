@@ -26,6 +26,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -34,6 +35,10 @@
 
 namespace tb::lit
 {
+class GameContainerIndex;
+struct GameContainerListing;
+struct GameContainerTables;
+struct Pk4Table;
 
 /**
  * The game's files as the engine's file system finds them (C8, C1, D23, D55): every game
@@ -67,9 +72,20 @@ namespace tb::lit
  * TbFsLib, without delete sharing (mirror.json M-FS-DIFF-02). The container tables are
  * read once, at construction: a reload makes a new source.
  *
+ * LP6.3 (C67 (a), A52): the tables are immutable objects shared by the sources made from
+ * them (lit/GameContainerIndex.h); a source keeps only its own open handles, loose
+ * folders and warnings. A source made with a container index lists the containers and
+ * stats each (the key check), takes the key's tables from the index when it holds them
+ * (replaying the scan's warnings), and scans otherwise; a reload checks the key again and
+ * scans only when it moved. Whether the tables were scanned or found, every read,
+ * listing, probe and the search order are the same. The tables' paths are below the
+ * key's base (the base folder made absolute and spelled as the file system spells it);
+ * the loose files are looked up below the base folder as the game path gives it.
+ *
  * Cancel (R5.20, G4): once the flag is set, the scan and the listings stop; the bound is
  * one directory entry, one container table entry or one .pk4 central directory (TbFsLib
- * reads it in one call). A cancelled source holds what it scanned so far.
+ * reads it in one call). A cancelled source holds what it scanned so far, and is not
+ * complete: the index stores nothing of it.
  *
  * LP1c fix (S2.2): the loose folders a probe or a read looks in are listed once each and
  * kept with their names (case-folded as the file system compares them: without case on
@@ -102,6 +118,12 @@ private:
   std::vector<std::unique_ptr<Resources>> m_resources;
   std::vector<std::string> m_warnings;
   bool m_changedWhileRead = false;
+  // LP6.3: set at the constructor's last line, so never for a cancelled scan; the tables
+  // a complete scan read, for the index to store (null for a hit or without a key); where
+  // the tables came from
+  bool m_complete = false;
+  std::shared_ptr<const GameContainerTables> m_scanned;
+  ContainerTablesOrigin m_origin;
   // LP1c fix (S2.2): the loose folders looked in, by their case-folded path, and the
   // round of polls whose changes they show
   std::unordered_map<std::filesystem::path::string_type, LooseFolder> m_looseFolders;
@@ -111,6 +133,15 @@ private:
 public:
   explicit GameFileSource(
     const std::filesystem::path& gamePath, const std::atomic<bool>* cancel = nullptr);
+  /**
+   * LP6.3 (C67 (a)): with index, the key's tables when the index holds them (a key check
+   * while cancel is set finds none), else a scan, which the index stores once the source
+   * is complete (GameContainerIndex::makeSource). The parse thread
+   */
+  GameFileSource(
+    const std::filesystem::path& gamePath,
+    const std::atomic<bool>* cancel,
+    GameContainerIndex* index);
   ~GameFileSource() override;
 
   std::vector<std::string> listFiles(
@@ -131,6 +162,17 @@ public:
   void looseFilesMayHaveChanged() override;
   bool changedWhileRead() const override;
   std::size_t containerCount() const override;
+  ContainerTablesOrigin containerTablesOrigin() const override;
+
+  // LP6.3: the constructor ran to its end (no cancel cut the scan short)
+  bool complete() const;
+  // LP6.3: the tables a complete scan with a key read (null for a hit, a cancelled scan
+  // or a listing without a key), which the index stores
+  std::shared_ptr<const GameContainerTables> scannedTables() const;
+  // LP6.3: the index's write of the scanned tables: its seconds and bytes, and its
+  // warnings (a write that failed), taken with the source's others
+  void recordIndexWrite(
+    double seconds, std::uint64_t bytes, std::vector<std::string> warnings);
 
   // the containers in the order a read searches them, the first searched first
   std::vector<std::string> searchOrder() const;
@@ -145,7 +187,15 @@ public:
 
 private:
   bool cancelled() const;
-  std::unique_ptr<Pk4> readPk4(const std::string& name);
+  // LP6.3: the containers of a listing read, in the registration order; false once a
+  // cancel cut it short. afterContainer runs after each container's table (tests)
+  bool scan(
+    GameContainerListing listing,
+    const std::function<void(const std::string&)>& afterContainer);
+  // LP6.3: a key's tables found in the index, and the scan's warnings replayed
+  void adopt(const GameContainerTables& tables);
+  std::shared_ptr<const Pk4Table> readPk4(
+    const std::filesystem::path& base, const std::string& name);
   // the loose file a read of this relative path opens, or nullopt; nullopt at once when
   // the folder's listing has no such name (S2.2)
   std::optional<std::filesystem::path> looseFile(const std::filesystem::path& relative);

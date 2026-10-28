@@ -5884,9 +5884,13 @@
         {
           "file": "lib/TbLitLib/src/GameFileSource.cpp",
           "symbol": "GameFileSource::GameFileSource"
+        },
+        {
+          "file": "lib/TbLitLib/src/GameContainerIndex.cpp",
+          "symbol": "listGameContainers"
         }
       ],
-      "note": "the containers of <game path>/base in registration order: Sys_ListFiles( base, \".resources\" ) sorted with idSort_PathStr, then Sys_ListFiles( base/maps, \".resources\" ) sorted, each with \"maps/\" in front; then Sys_ListFiles( base, \".pk4\" ) sorted. A .pk4 holding binary.conf is refused without a message, as Init refuses it. A container whose Init fails is skipped with the engine's warning. On Windows the first listing recurses and lists base/maps' containers too; the engine then registers them twice, and SinkBroom keeps each once at its later place, which finds the same file for every name (M-FS-DIFF-04). With fs_resourceLoadPriority 0, a read searches each kind from the last registered: base/maps' .resources (z to a), then base's (z to a); .pk4 files z to a"
+      "note": "the containers of <game path>/base in registration order: Sys_ListFiles( base, \".resources\" ) sorted with idSort_PathStr, then Sys_ListFiles( base/maps, \".resources\" ) sorted, each with \"maps/\" in front; then Sys_ListFiles( base, \".pk4\" ) sorted. A .pk4 holding binary.conf is refused without a message, as Init refuses it. A container whose Init fails is skipped with the engine's warning. On Windows the first listing recurses and lists base/maps' containers too; the engine then registers them twice, and SinkBroom keeps each once at its later place, which finds the same file for every name (M-FS-DIFF-04). With fs_resourceLoadPriority 0, a read searches each kind from the last registered: base/maps' .resources (z to a), then base's (z to a); .pk4 files z to a. LP6.3 (A52, C67 (a)): the engine reads every container's table again at each start (AddGameDirectory, FileSystem.cpp:3174); the preview keeps the tables under their key (the base folder made absolute, the listing in this order, each container's name, size and stamp; lit/GameContainerIndex.h) across Stop and in a file under the user-data folder, reuses them while the key stands and scans when it moved, the search unchanged"
     },
     {
       "id": "M-FS-03",
@@ -6269,7 +6273,7 @@
           "symbol": "MaterialService::Worker::rebuild"
         }
       ],
-      "note": "a reload builds a new registry from a new source (the containers are scanned again) instead of the engine's per-file Reload, and re-parses the names the consumers asked for before it publishes; only loose decl folders are polled (R4-3.26). G5, G6 (A2.3, A3.5, A3.6): the loose decl files' times, unreadable ones included, are stamped before and after each build; a build whose stamps differ, or whose source read a loose file that kept changing (stat before and after each read, three attempts), asks for one more build, and a change found by a poll does too, at most once per autoReloadInterval (5 s). A file that lists but cannot be read is reported once (the copied 'couldn't load') and builds nothing until its time changes; case-differing loose duplicates on POSIX stamp alike before and after, so they never loop"
+      "note": "a reload builds a new registry from a new source (the containers are scanned again; LP6.3, A52: a source from the lit panel's container index checks the containers' key and scans them only when it moved) instead of the engine's per-file Reload, and re-parses the names the consumers asked for before it publishes; only loose decl folders are polled (R4-3.26). G5, G6 (A2.3, A3.5, A3.6): the loose decl files' times, unreadable ones included, are stamped before and after each build; a build whose stamps differ, or whose source read a loose file that kept changing (stat before and after each read, three attempts), asks for one more build, and a change found by a poll does too, at most once per autoReloadInterval (5 s). A file that lists but cannot be read is reported once (the copied 'couldn't load') and builds nothing until its time changes; case-differing loose duplicates on POSIX stamp alike before and after, so they never loop"
     },
     {
       "id": "M-FS-DIFF-06",

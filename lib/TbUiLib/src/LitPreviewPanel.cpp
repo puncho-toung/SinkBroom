@@ -35,6 +35,7 @@
 #include "base/PreferenceManager.h"
 #include "gl/Camera.h"
 #include "gl/PerspectiveCamera.h"
+#include "lit/GameContainerIndex.h"
 #include "lit/LitSession.h"
 #include "lit/MaterialService.h"
 #include "mdl/GameConfig.h"
@@ -43,6 +44,7 @@
 #include "ui/LitPreviewWindow.h"
 #include "ui/MapDocument.h"
 #include "ui/QPathUtils.h"
+#include "ui/SystemPaths.h"
 #include "ui/ViewConstants.h"
 
 #include "kd/result.h"
@@ -284,6 +286,15 @@ void LitPreviewPanel::start()
     return m_lastCamera ? std::optional{*m_lastCamera} : std::nullopt;
   };
 
+  // LP6.3 (C67 (a), A52, Q42): the container index outlives the hosts, persisted in the
+  // user-data folder (§3.12) unless a test gave a folder of its own
+  if (!m_containerIndex)
+  {
+    m_containerIndex = std::make_shared<lit::GameContainerIndex>(
+      m_containerIndexFolder ? *m_containerIndexFolder
+                             : SystemPaths::userDataDirectory() / "lit-preview");
+  }
+
   // C1: the material service reads the game the document's map belongs to; the host's
   // document observer watches the document for the session
   auto host = std::make_unique<LitSessionHost>(
@@ -292,7 +303,8 @@ void LitPreviewPanel::start()
     std::move(eventHandler),
     std::move(camera),
     m_document,
-    m_document.map().gamePath());
+    m_document.map().gamePath(),
+    m_containerIndex);
   host->start(*m_surfacePage) | kdl::transform([&](QWidget* container) {
     // above the status line, taking the page's height
     static_cast<QVBoxLayout*>(m_surfacePage->layout())->insertWidget(0, container, 1);
@@ -345,6 +357,25 @@ lit::MaterialService* LitPreviewPanel::materialsForTesting() const
 std::uint64_t LitPreviewPanel::materialsVersionForTesting() const
 {
   return m_materialsVersion;
+}
+
+void LitPreviewPanel::setContainerIndexFolderForTesting(std::filesystem::path folder)
+{
+  m_containerIndexFolder = std::move(folder);
+  m_containerIndex.reset();
+}
+
+void LitPreviewPanel::dropContainerIndexMemoryForTesting()
+{
+  if (m_containerIndex)
+  {
+    m_containerIndex->dropMemoryForTesting();
+  }
+}
+
+std::shared_ptr<lit::GameContainerIndex> LitPreviewPanel::containerIndexForTesting() const
+{
+  return m_containerIndex;
 }
 
 bool LitPreviewPanel::claimSessionForTesting(const LitPreviewPanel& panel)

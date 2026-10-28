@@ -47,6 +47,7 @@
 #include "gl/GlManager.h"
 #include "gl/PerspectiveCamera.h"
 #include "lit/CpuPool.h"
+#include "lit/GameContainerIndex.h"
 #include "lit/LitSession.h"
 #include "lit/MaterialService.h"
 #include "lit/Snapshot.h"
@@ -165,6 +166,19 @@ std::unique_ptr<MapDocument> createDoom3Document(AppController& appController)
            appController.taskManager(),
            appController.glManager().resourceManager())
          | kdl::value();
+}
+
+/**
+ * LP6.3 (C67 (a)): the scratch folder a test panel's container index persists in; no test
+ * writes under the user-data folder (SystemPaths::userDataDirectory, which the panel
+ * passes otherwise). Emptied when it is handed out
+ */
+std::filesystem::path containerIndexFolder()
+{
+  const auto folder =
+    std::filesystem::temp_directory_path() / "TbUiLibTest-lit-container-index";
+  std::filesystem::remove_all(folder);
+  return folder;
 }
 
 LitPreviewPanel& findLitPreviewPanel(const MapWindow& window)
@@ -1105,6 +1119,8 @@ public:
   QDockWidget* dock = nullptr;
   LitPreviewPanel* panel = nullptr;
   std::unique_ptr<Reports> reports;
+  // LP6.3: the panel's container index, in a scratch folder
+  std::filesystem::path indexFolder = containerIndexFolder();
 
   PanelHarness()
   {
@@ -1124,6 +1140,7 @@ public:
     dock = manager->registerPanel(std::make_unique<LitPreviewPanel>(fixture.context()));
     panel = qobject_cast<LitPreviewPanel*>(dock->widget());
     REQUIRE(panel != nullptr);
+    panel->setContainerIndexFolderForTesting(indexFolder);
     reports = std::make_unique<Reports>(*panel);
 
     window.resize(1000, 700);
@@ -2159,6 +2176,10 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     panel.stop();
     CHECK(panel.materialsForTesting() == nullptr);
     reports.checkLast();
+    // LP6.3 (C67 (a)): the container index outlives the host, in the test's folder
+    const auto index = panel.containerIndexForTesting();
+    REQUIRE(index != nullptr);
+    CHECK(index->folder() == harness.indexFolder);
 
     REQUIRE(harness.startAndWaitForFrame());
     auto* materials = panel.materialsForTesting();
@@ -2172,6 +2193,12 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     REQUIRE(materials->waitForStatsForTesting(
       [](const auto& s) { return s.parseAllDone; }, 10s));
     CHECK(materials->stats().materials > 0);
+    // the same index, which the second Start's build found its key in (memory), unless
+    // the first Start's stop cut its scan short (then this one scanned)
+    CHECK(panel.containerIndexForTesting() == index);
+    CHECK(
+      (materials->stats().sourceTables == lit::ContainerTablesOrigin::Kind::Memory
+       || materials->stats().sourceTables == lit::ContainerTablesOrigin::Kind::Scan));
     REQUIRE(QTest::qWaitFor(
       [&] { return logger.contains(LogLevel::Info, "Lit preview materials: Parsed "); },
       5000));
@@ -2321,7 +2348,10 @@ TEST_CASE("LitPreviewPanel in a map window on a GPU", "[.][litgpu]")
     dock->show();
     dock->raise();
     QApplication::processEvents();
-    return findLitPreviewPanel(window);
+    auto& panel = findLitPreviewPanel(window);
+    // LP6.3: never the user-data folder
+    panel.setContainerIndexFolderForTesting(containerIndexFolder());
+    return panel;
   };
 
   const auto perspectiveCamera = [](MapWindow& window) -> gl::PerspectiveCamera& {

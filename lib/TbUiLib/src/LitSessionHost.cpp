@@ -27,6 +27,7 @@
 #include <QtLogging>
 
 #include "ServiceSentMessages.h"
+#include "lit/GameContainerIndex.h"
 #include "lit/GameDeclSource.h"
 #include "lit/GameFile.h"
 #include "lit/MaterialService.h"
@@ -136,13 +137,15 @@ LitSessionHost::LitSessionHost(
   EventHandler eventHandler,
   CameraProvider camera,
   MapDocument& document,
-  std::filesystem::path gamePath)
+  std::filesystem::path gamePath,
+  std::shared_ptr<lit::GameContainerIndex> containerIndex)
   : m_options{std::move(options)}
   , m_generation{generation}
   , m_eventHandler{std::move(eventHandler)}
   , m_camera{std::move(camera)}
   , m_document{document}
   , m_gamePath{std::move(gamePath)}
+  , m_containerIndex{std::move(containerIndex)}
 {
 }
 
@@ -275,9 +278,16 @@ void LitSessionHost::startMaterials()
   }
 
   auto options = lit::MaterialServiceOptions{};
-  // C1: the game path's base folder only; a reload scans its containers again, and the
-  // stop flag cuts the scan short (G4)
-  options.makeSource = [gamePath = m_gamePath](const std::atomic<bool>& cancel) {
+  // C1: the game path's base folder only, and the stop flag cuts the scan short (G4).
+  // LP6.3 (C67 (a)): through the owner's container index a build (a Start, a reload)
+  // checks the containers' key and scans them only when it moved; without one, every
+  // build scans them again
+  options.makeSource = [gamePath = m_gamePath,
+                        index = m_containerIndex](const std::atomic<bool>& cancel) {
+    if (index)
+    {
+      return std::unique_ptr<lit::DeclSource>{index->makeSource(gamePath, &cancel)};
+    }
     return std::unique_ptr<lit::DeclSource>{
       std::make_unique<lit::GameDeclSource>(gamePath, &cancel)};
   };

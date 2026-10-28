@@ -34,6 +34,7 @@
 #include "fs/Reader.h"
 #include "fs/TraversalMode.h"
 #include "fs/ZipFileSystem.h"
+#include "lit/GameContainerIndex.h"
 #include "lit/GameFile.h"
 #include "lit/ResourceContainer.h"
 
@@ -58,12 +59,11 @@ namespace
 // framework/File_Zip.cpp: a .pk4 holding this file is a binary pak, which Init refuses
 constexpr auto BinaryConfig = "binary.conf";
 
-void sortEnginePaths(std::vector<std::string>& names)
+using Clock = std::chrono::steady_clock;
+
+double secondsSince(const Clock::time_point start)
 {
-  // idSort_PathStr
-  std::sort(names.begin(), names.end(), [](const auto& lhs, const auto& rhs) {
-    return compareEnginePaths(lhs, rhs) < 0;
-  });
+  return std::chrono::duration<double>(Clock::now() - start).count();
 }
 
 /**
@@ -168,23 +168,16 @@ std::optional<std::string> checkedRelativePath(std::string path)
 
 struct GameFileSource::Pk4
 {
-  // as AddGameDirectory registers it: the name Sys_ListFiles lists below base
-  std::string name;
-  std::filesystem::path path;
-  // the entries as idZipContainer::Init stores them (slashes, lowercased), in the order
-  // the zip file system lists them, and the path to open each with
-  std::vector<std::string> names;
-  std::unordered_map<std::string, std::filesystem::path> index;
-  // Y.2: the file's change stamp and size when its directory was read
-  std::int64_t stamp = 0;
-  std::uint64_t size = 0;
+  // LP6.3 (C67 (a)): the central directory as the scan read it, shared and immutable
+  std::shared_ptr<const Pk4Table> table;
   // open during a read batch only
   std::unique_ptr<fs::ZipFileSystem> open;
 };
 
 struct GameFileSource::Resources
 {
-  ResourceContainer container;
+  // LP6.3 (C67 (a)): the table as the scan read it, shared and immutable
+  std::shared_ptr<const ResourceContainer> container;
   // open during a read batch only (S2.2: statted once, when it is opened)
   std::optional<GameFile> open;
 };
@@ -249,74 +242,155 @@ Result<std::unique_ptr<fs::ZipFileSystem>> openZip(const std::filesystem::path& 
 
 GameFileSource::GameFileSource(
   const std::filesystem::path& gamePath, const std::atomic<bool>* cancel)
+  : GameFileSource{gamePath, cancel, nullptr}
+{
+}
+
+GameFileSource::GameFileSource(
+  const std::filesystem::path& gamePath,
+  const std::atomic<bool>* cancel,
+  GameContainerIndex* index)
   : m_base{gamePath / "base"}
   , m_cancel{cancel}
 {
-  // AddGameDirectory( <game path>, "base" ), FileSystem.cpp:3174-3252
-  auto resourceNames = listOsFiles(m_base, ".resources", &m_warnings, m_cancel);
-  sortEnginePaths(resourceNames);
-  auto mapResourceNames =
-    listOsFiles(m_base / "maps", ".resources", &m_warnings, m_cancel);
-  sortEnginePaths(mapResourceNames);
-  for (auto& name : mapResourceNames)
-  {
-    resourceNames.push_back("maps/" + name);
-  }
+  // AddGameDirectory( <game path>, "base" ), FileSystem.cpp:3174-3252: the containers'
+  // listing; LP6.3 (C67 (a)): with one stat per container it is the index's key
+  const auto keyStart = Clock::now();
+  auto listing = listGameContainers(m_base, m_cancel);
+  m_origin.keySeconds = secondsSince(keyStart);
 
-  // a container listed twice (Windows lists base/maps in both passes) is kept at its
-  // later place: the earlier one finds nothing the later one does not find first
-  auto keep = std::vector<bool>(resourceNames.size(), true);
-  for (std::size_t i = 0; i < resourceNames.size(); ++i)
+  auto found = std::shared_ptr<const GameContainerTables>{};
+  if (index)
   {
-    for (auto k = i + 1; k < resourceNames.size(); ++k)
+    m_origin.kind = ContainerTablesOrigin::Kind::Scan;
+    // a key check while the stop flag is set finds nothing (G4)
+    if (listing.key && !cancelled())
     {
-      if (equalsNoCaseAscii(resourceNames[i], resourceNames[k]))
+      auto fromFile = false;
+      auto fileBytes = std::uint64_t{0};
+      found = index->find(*listing.key, fromFile, fileBytes, m_warnings);
+      if (found)
       {
-        keep[i] = false;
-        break;
+        m_origin.kind = fromFile ? ContainerTablesOrigin::Kind::File
+                                 : ContainerTablesOrigin::Kind::Memory;
+        m_origin.fileBytes = fileBytes;
       }
     }
   }
+  if (found)
+  {
+    adopt(*found);
+  }
+  else if (!scan(
+             std::move(listing),
+             index ? index->afterContainerForTesting()
+                   : std::function<void(const std::string&)>{}))
+  {
+    // cancelled (R5.20, G4): what was scanned so far stays, and the source is not
+    // complete
+    return;
+  }
+  m_complete = true;
+}
 
-  for (std::size_t i = 0; i < resourceNames.size(); ++i)
+bool GameFileSource::scan(
+  GameContainerListing listing,
+  const std::function<void(const std::string&)>& afterContainer)
+{
+  // the scan's own warnings, from here: a damaged index file's line before them is not
+  // stored with the tables
+  const auto firstWarning = m_warnings.size();
+  m_warnings.insert(
+    m_warnings.end(),
+    std::make_move_iterator(listing.resourceWarnings.begin()),
+    std::make_move_iterator(listing.resourceWarnings.end()));
+
+  for (const auto& name : listing.resources)
   {
     if (cancelled())
     {
-      return;
+      return false;
     }
-    const auto path = pathFromUtf8(resourceNames[i]);
-    if (!keep[i] || !path)
+    if (const auto path = pathFromUtf8(name))
     {
-      continue;
+      ResourceContainer::open(listing.base / *path, name, m_warnings, m_cancel)
+        | kdl::transform([&](ResourceContainer container) {
+            m_resources.push_back(std::make_unique<Resources>(Resources{
+              std::make_shared<const ResourceContainer>(std::move(container)),
+              std::nullopt}));
+          })
+        | kdl::transform_error([&](const auto& e) {
+            if (!cancelled())
+            {
+              m_warnings.push_back(e.msg);
+            }
+          });
     }
-    ResourceContainer::open(m_base / *path, resourceNames[i], m_warnings, m_cancel)
-      | kdl::transform([&](ResourceContainer container) {
-          m_resources.push_back(
-            std::make_unique<Resources>(Resources{std::move(container), std::nullopt}));
-        })
-      | kdl::transform_error([&](const auto& e) {
-          if (!cancelled())
-          {
-            m_warnings.push_back(e.msg);
-          }
-        });
+    if (afterContainer)
+    {
+      afterContainer(name);
+    }
   }
 
   // RB: Zip support, the base pass only
-  auto pk4Names = listOsFiles(m_base, ".pk4", &m_warnings, m_cancel);
-  sortEnginePaths(pk4Names);
-  for (const auto& name : pk4Names)
+  m_warnings.insert(
+    m_warnings.end(),
+    std::make_move_iterator(listing.pk4Warnings.begin()),
+    std::make_move_iterator(listing.pk4Warnings.end()));
+  for (const auto& name : listing.pk4s)
   {
     // a .pk4's central directory is read in one call (TbFsLib), so a stop waits for one
     if (cancelled())
     {
-      return;
+      return false;
     }
-    if (auto pk4 = readPk4(name))
+    if (auto pk4 = readPk4(listing.base, name))
     {
-      m_pk4s.push_back(std::move(pk4));
+      m_pk4s.push_back(std::make_unique<Pk4>(Pk4{std::move(pk4), nullptr}));
+    }
+    if (afterContainer)
+    {
+      afterContainer(name);
     }
   }
+  if (cancelled())
+  {
+    return false;
+  }
+
+  // LP6.3: what the index stores, when the listing had a key
+  if (listing.key)
+  {
+    auto tables = std::make_shared<GameContainerTables>();
+    tables->key = std::move(*listing.key);
+    for (const auto& resources : m_resources)
+    {
+      tables->resources.push_back(resources->container);
+    }
+    for (const auto& pk4 : m_pk4s)
+    {
+      tables->pk4s.push_back(pk4->table);
+    }
+    tables->warnings.assign(
+      m_warnings.begin() + std::ptrdiff_t(firstWarning), m_warnings.end());
+    m_scanned = std::move(tables);
+  }
+  return true;
+}
+
+void GameFileSource::adopt(const GameContainerTables& tables)
+{
+  for (const auto& container : tables.resources)
+  {
+    m_resources.push_back(
+      std::make_unique<Resources>(Resources{container, std::nullopt}));
+  }
+  for (const auto& table : tables.pk4s)
+  {
+    m_pk4s.push_back(std::make_unique<Pk4>(Pk4{table, nullptr}));
+  }
+  // the scan's warnings, as the scan gave them
+  m_warnings.insert(m_warnings.end(), tables.warnings.begin(), tables.warnings.end());
 }
 
 GameFileSource::~GameFileSource() = default;
@@ -326,7 +400,8 @@ bool GameFileSource::cancelled() const
   return m_cancel && m_cancel->load();
 }
 
-std::unique_ptr<GameFileSource::Pk4> GameFileSource::readPk4(const std::string& name)
+std::shared_ptr<const Pk4Table> GameFileSource::readPk4(
+  const std::filesystem::path& base, const std::string& name)
 {
   const auto path = pathFromUtf8(name);
   if (!path)
@@ -334,9 +409,9 @@ std::unique_ptr<GameFileSource::Pk4> GameFileSource::readPk4(const std::string& 
     return nullptr;
   }
 
-  auto pk4 = std::make_unique<Pk4>();
+  auto pk4 = std::make_shared<Pk4Table>();
   pk4->name = name;
-  pk4->path = m_base / *path;
+  pk4->path = base / *path;
   if (const auto stat = statGameFile(pk4->path))
   {
     pk4->stamp = stat->time;
@@ -384,12 +459,12 @@ std::unique_ptr<GameFileSource::Pk4> GameFileSource::readPk4(const std::string& 
              })
            | kdl::transform([&](const bool binary) {
                // "ignore all binary paks", without a message
-               return binary ? nullptr : std::move(pk4);
+               return binary ? nullptr : std::shared_ptr<const Pk4Table>{std::move(pk4)};
              })
            | kdl::transform_error([&](const auto& e) {
                m_warnings.push_back(
                  fmt::format("Unable to open zip file {}: {}", name, e.msg));
-               return std::unique_ptr<Pk4>{};
+               return std::shared_ptr<const Pk4Table>{};
              })
            | kdl::value();
   }
@@ -416,7 +491,7 @@ std::vector<std::string> GameFileSource::listFiles(
   // order; then the .pk4 files the same way; then the loose files
   for (auto it = m_resources.rbegin(); it != m_resources.rend(); ++it)
   {
-    for (const auto& entry : (*it)->container.entries())
+    for (const auto& entry : (*it)->container->entries())
     {
       if (auto name = flatName(entry.name, folder, extension))
       {
@@ -426,7 +501,7 @@ std::vector<std::string> GameFileSource::listFiles(
   }
   for (auto it = m_pk4s.rbegin(); it != m_pk4s.rend(); ++it)
   {
-    for (const auto& entryName : (*it)->names)
+    for (const auto& entryName : (*it)->table->names)
     {
       if (auto name = flatName(entryName, folder, extension))
       {
@@ -546,8 +621,9 @@ std::optional<std::string> GameFileSource::read(
   for (auto it = m_pk4s.rbegin(); it != m_pk4s.rend(); ++it)
   {
     auto& pk4 = **it;
-    const auto entry = pk4.index.find(canonical);
-    if (entry == pk4.index.end())
+    const auto& table = *pk4.table;
+    const auto entry = table.index.find(canonical);
+    if (entry == table.index.end())
     {
       continue;
     }
@@ -555,9 +631,9 @@ std::optional<std::string> GameFileSource::read(
     if (text && found)
     {
       // a zip's file has time 0 (idFile_InZip::Timestamp)
-      *found = GameFileProbe{GameFileProbe::Kind::Pk4, pk4.name, 0, text->size(), 0};
-      found->containerStamp = pk4.stamp;
-      found->containerSize = pk4.size;
+      *found = GameFileProbe{GameFileProbe::Kind::Pk4, table.name, 0, text->size(), 0};
+      found->containerStamp = table.stamp;
+      found->containerSize = table.size;
     }
     if (text && text->size() > maxBytes)
     {
@@ -570,7 +646,8 @@ std::optional<std::string> GameFileSource::read(
   for (auto it = m_resources.rbegin(); it != m_resources.rend(); ++it)
   {
     auto& resources = **it;
-    const auto* entry = resources.container.find(canonical);
+    const auto& container = *resources.container;
+    const auto* entry = container.find(canonical);
     if (!entry)
     {
       continue;
@@ -583,35 +660,34 @@ std::optional<std::string> GameFileSource::read(
       {
         return kdl::void_success;
       }
-      return resources.container.unchanged()
-             | kdl::or_else([&](const auto& e) -> Result<void> {
-                 return Error{
-                   fmt::format("{}; '{}' is not read from it", e.msg, entry->name)};
-               })
+      return container.unchanged() | kdl::or_else([&](const auto& e) -> Result<void> {
+               return Error{
+                 fmt::format("{}; '{}' is not read from it", e.msg, entry->name)};
+             })
              | kdl::and_then([&]() {
-                 return GameFile::open(resources.container.path())
+                 return GameFile::open(container.path())
                         | kdl::transform(
                           [&](GameFile file) { resources.open = std::move(file); });
                });
     };
-    auto text =
-      openContainer() | kdl::and_then([&]() {
-        return resources.container.readOpened(*entry, *resources.open, maxBytes);
-      })
-      | kdl::transform(
-        [](std::string bytes) { return std::optional<std::string>{std::move(bytes)}; })
-      | kdl::transform_error([&](const auto& e) {
-          m_warnings.push_back(e.msg);
-          return std::optional<std::string>{};
-        })
-      | kdl::value();
+    auto text = openContainer() | kdl::and_then([&]() {
+                  return container.readOpened(*entry, *resources.open, maxBytes);
+                })
+                | kdl::transform([](std::string bytes) {
+                    return std::optional<std::string>{std::move(bytes)};
+                  })
+                | kdl::transform_error([&](const auto& e) {
+                    m_warnings.push_back(e.msg);
+                    return std::optional<std::string>{};
+                  })
+                | kdl::value();
     if (text && found)
     {
       // an inner resource has time 0 (idFile_InnerResource)
       *found = GameFileProbe{
-        GameFileProbe::Kind::Resources, resources.container.name(), 0, entry->length, 0};
-      found->containerStamp = resources.container.fileTime();
-      found->containerSize = resources.container.fileSize();
+        GameFileProbe::Kind::Resources, container.name(), 0, entry->length, 0};
+      found->containerStamp = container.fileTime();
+      found->containerSize = container.fileSize();
     }
     return text;
   }
@@ -720,14 +796,14 @@ std::vector<std::string> GameFileSource::containerEntryNamesForTesting() const
   auto names = std::vector<std::string>{};
   for (const auto& resources : m_resources)
   {
-    for (const auto& entry : resources->container.entries())
+    for (const auto& entry : resources->container->entries())
     {
       names.push_back(entry.name);
     }
   }
   for (const auto& pk4 : m_pk4s)
   {
-    names.insert(names.end(), pk4->names.begin(), pk4->names.end());
+    names.insert(names.end(), pk4->table->names.begin(), pk4->table->names.end());
   }
   return names;
 }
@@ -761,22 +837,24 @@ GameFileProbe GameFileSource::probeFile(const std::string& path)
   const auto canonical = canonicalResourceName(*relative);
   for (auto it = m_pk4s.rbegin(); it != m_pk4s.rend(); ++it)
   {
-    if ((*it)->index.count(canonical))
+    const auto& table = *(*it)->table;
+    if (table.index.count(canonical))
     {
-      auto found = GameFileProbe{GameFileProbe::Kind::Pk4, (*it)->name, 0, 0, 0};
-      found.containerStamp = (*it)->stamp;
-      found.containerSize = (*it)->size;
+      auto found = GameFileProbe{GameFileProbe::Kind::Pk4, table.name, 0, 0, 0};
+      found.containerStamp = table.stamp;
+      found.containerSize = table.size;
       return found;
     }
   }
   for (auto it = m_resources.rbegin(); it != m_resources.rend(); ++it)
   {
-    if (const auto* entry = (*it)->container.find(canonical))
+    const auto& container = *(*it)->container;
+    if (const auto* entry = container.find(canonical))
     {
       auto found = GameFileProbe{
-        GameFileProbe::Kind::Resources, (*it)->container.name(), 0, entry->length, 0};
-      found.containerStamp = (*it)->container.fileTime();
-      found.containerSize = (*it)->container.fileSize();
+        GameFileProbe::Kind::Resources, container.name(), 0, entry->length, 0};
+      found.containerStamp = container.fileTime();
+      found.containerSize = container.fileSize();
       return found;
     }
   }
@@ -865,12 +943,12 @@ std::optional<std::string> GameFileSource::readFromPk4(
       {
         return kdl::void_success;
       }
-      return openZip(pk4.path)
+      return openZip(pk4.table->path)
              | kdl::transform(
                [&](std::unique_ptr<fs::ZipFileSystem> zip) { pk4.open = std::move(zip); })
              | kdl::or_else([&](const auto& e) -> Result<void> {
                  return Error{fmt::format(
-                   "{}: {} cannot be opened again: {}", path, pk4.name, e.msg)};
+                   "{}: {} cannot be opened again: {}", path, pk4.table->name, e.msg)};
                });
     };
     return openPk4() | kdl::and_then([&]() {
@@ -878,7 +956,7 @@ std::optional<std::string> GameFileSource::readFromPk4(
                     | kdl::or_else(
                       [&](const auto& e) -> Result<std::shared_ptr<fs::File>> {
                         return Error{fmt::format(
-                          "{} cannot be read from {}: {}", path, pk4.name, e.msg)};
+                          "{} cannot be read from {}: {}", path, pk4.table->name, e.msg)};
                       });
            })
            | kdl::transform([](std::shared_ptr<fs::File> file) {
@@ -897,7 +975,7 @@ std::optional<std::string> GameFileSource::readFromPk4(
   catch (const std::exception& e)
   {
     m_warnings.push_back(
-      fmt::format("{} cannot be read from {}: {}", path, pk4.name, e.what()));
+      fmt::format("{} cannot be read from {}: {}", path, pk4.table->name, e.what()));
     return std::nullopt;
   }
 }
@@ -957,16 +1035,42 @@ std::size_t GameFileSource::containerCount() const
   return m_pk4s.size() + m_resources.size();
 }
 
+ContainerTablesOrigin GameFileSource::containerTablesOrigin() const
+{
+  return m_origin;
+}
+
+bool GameFileSource::complete() const
+{
+  return m_complete;
+}
+
+std::shared_ptr<const GameContainerTables> GameFileSource::scannedTables() const
+{
+  return m_scanned;
+}
+
+void GameFileSource::recordIndexWrite(
+  const double seconds, const std::uint64_t bytes, std::vector<std::string> warnings)
+{
+  m_origin.writeSeconds = seconds;
+  m_origin.fileBytes = bytes;
+  m_warnings.insert(
+    m_warnings.end(),
+    std::make_move_iterator(warnings.begin()),
+    std::make_move_iterator(warnings.end()));
+}
+
 std::vector<std::string> GameFileSource::searchOrder() const
 {
   auto order = std::vector<std::string>{};
   for (auto it = m_pk4s.rbegin(); it != m_pk4s.rend(); ++it)
   {
-    order.push_back((*it)->name);
+    order.push_back((*it)->table->name);
   }
   for (auto it = m_resources.rbegin(); it != m_resources.rend(); ++it)
   {
-    order.push_back((*it)->container.name());
+    order.push_back((*it)->container->name());
   }
   return order;
 }

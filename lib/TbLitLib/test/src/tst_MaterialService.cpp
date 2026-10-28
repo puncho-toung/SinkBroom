@@ -20,6 +20,7 @@
 #include "ImageTestFiles.h"
 #include "LitTestUtils.h"
 #include "fs/TestEnvironment.h"
+#include "lit/GameContainerIndex.h"
 #include "lit/GameFileSource.h"
 #include "lit/MaterialDecls.h"
 #include "lit/MaterialService.h"
@@ -2335,6 +2336,71 @@ TEST_CASE("MaterialService start, stop and reload leak nothing")
       waitUntilIdle();
     });
     CHECK_FALSE(grew);
+  }
+
+  SECTION("reload a game folder 30 times through the container index (LP6.3)")
+  {
+    // C67 (a): the first build scans and stores the tables, every reload hits them in
+    // memory (the key stands), and nothing grows
+    const auto folder = fs::TestEnvironment{};
+    const auto base = folder.dir() / "base";
+    writeTextFile(
+      base / "materials" / "loose.mtr",
+      materialText("textures/leak/loose", "textures/leak/loose"));
+    writePk4(
+      base / "leak.pk4",
+      {{"materials/pk4.mtr", materialText("textures/leak/pk4", "textures/leak/pk4")}});
+    writeTextFile(
+      base / "leak.resources",
+      resourcesBytes(
+        {{"materials/res.mtr", materialText("textures/leak/res", "textures/leak/res")}}));
+    const auto names = std::vector<std::string>{
+      "textures/leak/loose",
+      "textures/leak/pk4",
+      "textures/leak/res",
+      "textures/leak/nodecl",
+    };
+
+    auto index = std::make_shared<GameContainerIndex>(folder.dir() / "index");
+    auto service = start(options(
+      [path = folder.dir(), index](const std::atomic<bool>& cancel) {
+        return std::unique_ptr<DeclSource>{index->makeSource(path, &cancel)};
+      },
+      counting,
+      true));
+    const auto reloadAndUse = [&](const std::uint64_t builds) {
+      service->reload();
+      REQUIRE(service->waitForStatsForTesting(
+        [&](const auto& s) { return s.builds == builds && s.parseAllDone; }, Timeout));
+      useService(*service, names);
+    };
+    const auto waitUntilIdle = [&] {
+      REQUIRE(
+        service->waitForStatsForTesting([](const auto& s) { return s.idle; }, Timeout));
+    };
+    useService(*service, names);
+    REQUIRE(service->waitForStatsForTesting(
+      [](const auto& s) { return s.builds == 1 && s.parseAllDone; }, Timeout));
+    CHECK(service->stats().sourceTables == ContainerTablesOrigin::Kind::Scan);
+    CHECK(service->stats().indexFileBytes > 0u);
+    CHECK(service->stats().sourceContainers == 2u);
+    reloadAndUse(2);
+    waitUntilIdle();
+    CHECK(service->stats().sourceTables == ContainerTablesOrigin::Kind::Memory);
+    CHECK(service->stats().indexWriteSeconds == 0.0);
+    CHECK(service->stats().keyCheckSeconds <= service->stats().sourceSeconds);
+
+    const auto grew = heapGrows([&] {
+      for (std::uint64_t i = 0; i < 30; ++i)
+      {
+        reloadAndUse(i + 3);
+      }
+      waitUntilIdle();
+    });
+    CHECK_FALSE(grew);
+    CHECK(service->stats().sourceTables == ContainerTablesOrigin::Kind::Memory);
+    CHECK(service->stats().sourceContainers == 2u);
+    CHECK(index->memoryEntriesForTesting() == 1u);
   }
 
   SECTION("S2.6: image lookups, the fallback, sizes, re-probes and bakes, 50 times")

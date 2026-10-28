@@ -27,6 +27,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
@@ -45,6 +46,7 @@ class Camera;
 namespace tb::lit
 {
 struct CameraState;
+class GameContainerIndex;
 class LitSession;
 class MaterialService;
 enum class SessionEvent;
@@ -106,6 +108,12 @@ struct LitPreviewReport
  * panel keeps only these two watches. Every other document subscription belongs to the
  * session's document observer (LitDocumentObserver, R5.24), made at Start and dropped at
  * Stop, which also reloads the material service when the material collections change.
+ *
+ * LP6.3 (C67 (a), A52, Q42): the panel keeps the game's container index (the .resources
+ * tables and the .pk4 directories, lit/GameContainerIndex.h) across Stop, since the host
+ * is made per Start, and hands it to each host's material service; it is made at the
+ * first Start, persisted under SystemPaths::userDataDirectory() / "lit-preview" (§3.12),
+ * so the first Start of a launch finds it too. Tests pass a folder of their own.
  */
 class LitPreviewPanel : public SidebarPanel
 {
@@ -135,6 +143,10 @@ private:
   // the version of the last material table the session's service published, as the GUI
   // thread saw it
   std::uint64_t m_materialsVersion = 0;
+  // LP6.3 (C67 (a)): made at the first Start, in the user-data folder's lit-preview
+  // folder unless a test gave its own
+  std::shared_ptr<lit::GameContainerIndex> m_containerIndex;
+  std::optional<std::filesystem::path> m_containerIndexFolder;
 
   NotifierConnection m_notifierConnection;
 
@@ -176,6 +188,17 @@ public:
   lit::MaterialService* materialsForTesting() const;
   // the version of the last material table this panel was told of on the GUI thread
   std::uint64_t materialsVersionForTesting() const;
+  /**
+   * LP6.3 (C67 (a)): the container index persists in folder instead of the user-data
+   * folder's (no test writes there); a new index from the next Start on, its memory
+   * empty. Not while a session runs
+   */
+  void setContainerIndexFolderForTesting(std::filesystem::path folder);
+  // LP6.3 (P8.18): the index's memory copy dropped, as at a new launch: the next Start
+  // reads the persisted file
+  void dropContainerIndexMemoryForTesting();
+  // LP6.3: the container index, null before the first Start
+  std::shared_ptr<lit::GameContainerIndex> containerIndexForTesting() const;
   /**
    * The process's one session is claimed by Start and released by the teardown or the
    * panel's destructor, and every change updates the Start pages of all panels (D29,

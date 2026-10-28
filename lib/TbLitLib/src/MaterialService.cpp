@@ -1924,6 +1924,7 @@ private:
     const auto fileBytes = m_decls->declFileBytes();
     const auto registry = m_decls->id();
     const auto containers = m_source->containerCount();
+    const auto origin = m_source->containerTablesOrigin();
     updateStats([&](MaterialServiceStats& stats) {
       ++stats.builds;
       stats.registry = registry;
@@ -1933,6 +1934,10 @@ private:
       stats.parseAllDone = false;
       stats.buildCancelled = cancelled;
       stats.sourceContainers = containers;
+      stats.sourceTables = origin.kind;
+      stats.keyCheckSeconds = origin.keySeconds;
+      stats.indexWriteSeconds = origin.writeSeconds;
+      stats.indexFileBytes = origin.fileBytes;
       stats.materials = materials;
       stats.tables = tables;
       stats.defaultedMaterials = 0;

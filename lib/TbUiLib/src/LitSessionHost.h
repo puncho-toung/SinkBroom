@@ -46,8 +46,9 @@ class QWidget;
 
 namespace tb::lit
 {
+class GameContainerIndex;
 class MaterialService;
-}
+} // namespace tb::lit
 
 namespace tb::ui
 {
@@ -72,7 +73,10 @@ class MapDocument;
  * cannot wait: Qt destroys the surface when it returns, so the swapchain goes first.
  *
  * The material service (lit/MaterialService.h, the parse thread) starts with phase A,
- * over the game path the owner gives, and its log lines come through the same queue as
+ * over the game path the owner gives, its decl sources made through the owner's container
+ * index when it gives one (LP6.3, C67 (a): the index outlives the host, which is made per
+ * Start, so a Start or a reload whose containers' key stands skips their scan), and its
+ * log lines come through the same queue as
  * the session's messages, as MaterialInfo and MaterialWarning. A new table comes the same
  * way, as MaterialsPublished: the parse thread's listener posts it without blocking, at
  * most one at a time until this host has handled it, and the owner reads the latest
@@ -163,6 +167,9 @@ private:
   MapDocument& m_document;
   // the game whose decls the material service reads; empty: no service
   std::filesystem::path m_gamePath;
+  // LP6.3 (C67 (a), A52): the owner's container index, which the parse thread's
+  // makeSource holds too; null: every build scans
+  std::shared_ptr<lit::GameContainerIndex> m_containerIndex;
   std::shared_ptr<UndeliveredMessages> m_undelivered =
     std::make_shared<UndeliveredMessages>();
   // a MaterialsPublished is queued and not yet handled; set by the parse thread's
@@ -211,7 +218,8 @@ public:
     EventHandler eventHandler,
     CameraProvider camera,
     MapDocument& document,
-    std::filesystem::path gamePath = {});
+    std::filesystem::path gamePath = {},
+    std::shared_ptr<lit::GameContainerIndex> containerIndex = nullptr);
   ~LitSessionHost() override;
 
   std::uint64_t generation() const;
