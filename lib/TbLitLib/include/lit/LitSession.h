@@ -81,6 +81,9 @@ struct SessionOptions
   // ambient occlusion the ambient pass reads at t4. Off in TbLitLib tests (a case opts
   // in), on in sessions (LitSessionHost, Q43); the panel's switch is C74's (LP6.6)
   bool ssaoForTesting = false;
+  // LP6.5a (P8.14, D181): LP6.6's progressive TAA, off in TbLitLib tests and on in
+  // sessions once C73 lands; nothing reads it before LP6.6
+  bool progressiveAaForTesting = false;
 };
 
 // D9: a program the compile thread was asked for, and whether the preview can draw with

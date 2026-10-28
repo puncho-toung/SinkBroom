@@ -69,6 +69,66 @@
 namespace tb::lit
 {
 
+/**
+ * LP6.5a (C70, SC812): SsaoConstants (SsaoPass_cb.h), the 272 bytes the three SSAO
+ * shaders read at b1 (engineSsaoBlock's offsets): idVec2 the shaders' float2, idVec2i
+ * their int2, idRenderMatrix their row-major float4x4.
+ */
+struct EngineSsaoConstants
+{
+  std::array<float, 2> viewportOrigin = {0.0f, 0.0f};
+  std::array<float, 2> viewportSize = {0.0f, 0.0f};
+  std::array<float, 2> pixelOffset = {0.0f, 0.0f};
+  std::array<float, 2> unused = {0.0f, 0.0f};
+
+  std::array<float, 16> matClipToView = {};
+  std::array<float, 16> matWorldToView = {};
+  std::array<float, 16> matViewToWorld = {};
+
+  std::array<float, 2> clipToView = {0.0f, 0.0f};
+  std::array<float, 2> invQuantizedGbufferSize = {0.0f, 0.0f};
+
+  std::array<std::int32_t, 2> quantizedViewportOrigin = {0, 0};
+  float amount = 0.0f;
+  float invBackgroundViewDepth = 0.0f;
+  float radiusWorld = 0.0f;
+  float surfaceBias = 0.0f;
+
+  float radiusToScreen = 0.0f;
+  float powerExponent = 0.0f;
+
+  bool operator==(const EngineSsaoConstants&) const = default;
+};
+static_assert(sizeof(EngineSsaoConstants) == 272);
+
+/**
+ * LP6.5a (C70, SC812, D177, K54, P8.20): SsaoPass::Render's constant block for a view
+ * drawn into a target of width × height (the pass's quantized size from the target's,
+ * SsaoPass.cpp:65) whose viewport is the whole target (x1 = y1 = 0, x2 = width - 1, y2 =
+ * height - 1): viewportOrigin (x1, y1), viewportSize (w, h); pixelOffset (0, 0), the
+ * r_taaJitter 0 picture (GetCurrentPixelOffset, TemporalAntiAliasingPass.cpp:304-307:
+ * the preview has no tr.frameCount % 8 sample-window jitter, K54); matClipToView
+ * idRenderMatrix::Inverse of the projection matrix's 16 floats (unjittered: no TAA before
+ * LP6.6); matWorldToView the view's modelViewMatrix bytes (Transpose twice);
+ * matViewToWorld 0 (unused); clipToView (P[2·4+3] / P[0], P[2·4+3] / P[1·4+1]);
+ * invQuantizedGbufferSize 1 / (4 ceil(w / 4), 4 ceil(h / 4)); quantizedViewportOrigin
+ * the quarter origin × 4 (0, 0); amount r_ssaoAmount 4, invBackgroundViewDepth 1 /
+ * r_ssaoBackgroundViewDepth (100 m), radiusWorld 1.0 m, surfaceBias 0.05 m,
+ * powerExponent 2 (the shaders take the depth in metres: DOOM_TO_METERS, SSD:63-95),
+ * radiusToScreen 0.5 · h · |P[1·4+1]|. Pure.
+ */
+EngineSsaoConstants engineSsaoConstants(
+  const LitView& view, std::uint32_t width, std::uint32_t height);
+
+/**
+ * LP6.5a (C70, SC812): SsaoPass::Render's dispatches for a target of width × height: the
+ * deinterleave and the compute over ceil(ceil(w / 4) / 8) × ceil(ceil(h / 4) / 8) groups
+ * (the compute × 16 slices), the blur over ceil(w / 16) × ceil(h / 16) (the "RB HACK +1"
+ * extent: x2 + 1 - x1 = w). Pure.
+ */
+std::array<std::array<std::uint32_t, 3>, 3> engineSsaoDispatches(
+  std::uint32_t width, std::uint32_t height);
+
 // what one frame's lit passes read and record into (render thread)
 struct LitFrameInputs
 {
@@ -122,6 +182,8 @@ struct LitFrameInputs
   nvrhi::ITimerQuery* ambientTimer = nullptr;
   // LP6.5a (C69, C65): pass 3's (TimedPass::Gbuffer), or null
   nvrhi::ITimerQuery* gbufferTimer = nullptr;
+  // LP6.5a (C70, C65): pass 4's (TimedPass::Ssao), or null
+  nvrhi::ITimerQuery* ssaoTimer = nullptr;
   // LP5.2a (C46, C16): the stage pass's, or null
   nvrhi::ITimerQuery* stageTimer = nullptr;
   // LP5.3 (C49, C16): pass 9's (FogAllLights), or null
@@ -285,6 +347,20 @@ struct LitFrameStats
   bool gbufferTimed = false;
   bool gbufferDisabled = false;
   double gbufferRecordMs = 0.0;
+  // ----- LP6.5a (C70, P8.12, P8.13): pass 4, DrawScreenSpaceAmbientOcclusion2 -----
+  // its three pipelines pending this frame (also in pendingPipelines: the frame is
+  // unconverged and t4 _white), whether it ran (_ao0 cleared to 1, the constants written,
+  // the three dispatches; the ambient pass bound _ao0 at t4), the dispatches, its timer,
+  // a failed pipeline or binding set disabled it (D9, disabledReason: t4 _white, the
+  // frame converges), its CPU record time (inside record_other_ms), and the constants it
+  // wrote
+  std::size_t ssaoPendingPipelines = 0;
+  bool ssaoRan = false;
+  std::size_t ssaoDispatches = 0;
+  bool ssaoTimed = false;
+  bool ssaoDisabled = false;
+  double ssaoRecordMs = 0.0;
+  EngineSsaoConstants ssaoConstants;
   // C38 (LP4.2b's ambient-only rows): the interactions were not recorded
   // (skipInteractionsForTesting, r_skipInteractions 1)
   bool interactionsSkipped = false;
@@ -887,6 +963,15 @@ private:
   std::vector<StageLink> m_stageLinks;
   std::vector<InteractionLink> m_interactionLinks;
   bool m_linksStale = false;
+  // LP6.5a (C70, the director's reading (6)): pass 4's binding sets (deinterleave,
+  // compute, blur; they bind render targets) and the render-target generation they were
+  // made for, its SsaoConstants volatile constant buffer (SsaoPass.cpp:47-54: 16
+  // versions), and the frame's _ao0 when pass 4 ran (the ambient pass's t4), else null
+  // (_white)
+  std::array<nvrhi::BindingSetHandle, 3> m_ssaoSets;
+  std::uint64_t m_ssaoSetsGeneration = 0;
+  nvrhi::BufferHandle m_ssaoConstants;
+  nvrhi::ITexture* m_ssaoImage = nullptr;
   // LP6.1 (C64): the frame's ambient view sets, and AMBIENT_LIGHTING_IBL's layouts (every
   // ambient program's, kept at the first ambient record's resolution) they are made for
   std::vector<AmbientViewSet> m_ambientViewSets;
@@ -1156,6 +1241,21 @@ private:
   void recordGbuffer(Frame& frame);
   // LP6.5a: AmbientPass' parms before its loop (:2292-2423), the same for both calls
   void setAmbientPassParms(Frame& frame);
+  /**
+   * LP6.5a (C70, SC810-SC815, P8.13, P8.21): DrawScreenSpaceAmbientOcclusion2
+   * (RenderBackend.cpp:5634-5677) and SsaoPass::Render (SsaoPass.cpp:214-295) with the
+   * three named programs' pipelines (ready): _ao0 cleared to 1; the SsaoConstants of
+   * engineSsaoConstants written to the pass's volatile constant buffer; the deinterleave
+   * (_currentDepth as an SRV: NVRHI tracks DepthWrite -> ShaderResource and back for the
+   * next pass's framebuffer), the compute over 16 slices (_currentNormals as an SRV) and
+   * the blur into _ao0 (a UAV; ShaderResource for the ambient pass's t4). The three
+   * binding sets are the render thread's, made against the compile thread's layouts at
+   * the first run and again on a new render-target generation (they bind the targets),
+   * let go in releaseAll (teardown step 2): never BindingSetCache's (slot-keyed, the
+   * director's reading (6)). Whether it ran; false with ssaoDisabled when a set cannot be
+   * made. Render thread.
+   */
+  bool recordSsao(Frame& frame, const std::array<ComputePipelineLookup, 3>& pipelines);
   /**
    * LP3.1 (C59, D142, D145, D147, SC714-SC720): ShadowAtlasPass (RenderBackend.cpp:
    * 3603-3922): nothing under r_skipShadows (the test's stand-in) or without view lights

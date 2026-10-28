@@ -1169,6 +1169,21 @@ void RenderThread::setBudgetPassHook(std::function<void(const BudgetPassReport&)
   m_budgetPassHook = std::move(hook);
 }
 
+std::vector<int> RenderThread::startComputePrograms() const
+{
+  auto programs =
+    std::vector<int>{TonemapComputePrograms.begin(), TonemapComputePrograms.end()};
+  if (m_options.ssaoForTesting)
+  {
+    // LP6.5a (C70, P8.12): pass 4's three named programs
+    for (const auto& named : EngineNamedPrograms)
+    {
+      programs.push_back(named.row.index);
+    }
+  }
+  return programs;
+}
+
 std::vector<PipelineKey> RenderThread::startPipelineKeys() const
 {
   const auto depth = m_frameResources.depthFormat();
@@ -1817,8 +1832,9 @@ bool RenderThread::recordLitPasses(
   inputs.prepassTimer = m_timers.query(slot, TimedPass::Prepass);
   inputs.interactionTimer = m_timers.query(slot, TimedPass::Interactions);
   inputs.ambientTimer = m_timers.query(slot, TimedPass::Ambient);
-  // LP6.5a (C69, C65): pass 3's, reserved by LP6.0
+  // LP6.5a (C69, C70, C65): passes 3 and 4's, reserved by LP6.0
   inputs.gbufferTimer = m_timers.query(slot, TimedPass::Gbuffer);
+  inputs.ssaoTimer = m_timers.query(slot, TimedPass::Ssao);
   // LP5.2a (C46, C47): the stage pass's timer, and the game folder of its material
   // programs' blobs
   inputs.stageTimer = m_timers.query(slot, TimedPass::Stages);
@@ -1852,6 +1868,10 @@ bool RenderThread::recordLitPasses(
   if (stats.gbufferTimed)
   {
     m_timers.passTimed(slot, TimedPass::Gbuffer);
+  }
+  if (stats.ssaoTimed)
+  {
+    m_timers.passTimed(slot, TimedPass::Ssao);
   }
   if (stats.interactionsTimed)
   {
@@ -2638,7 +2658,8 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.feedMs = landFeeds(FrameClock::now());
       // C16 (LP2.2b): the lit passes' counts (LitFrameStats) and the tonemap passes'
       const auto& tonemap = m_tonemap.lastStats();
-      row.draws = litStats.prepassDraws + litStats.ambientDraws
+      // LP6.5a (C69): pass 3's draws among the lit passes'
+      row.draws = litStats.prepassDraws + litStats.gbufferDraws + litStats.ambientDraws
                   + litStats.interactionDraws + litStats.stageDraws + litStats.fogDraws
                   + litStats.blendDraws + tonemap.draws;
       row.prepassDraws = litStats.prepassDraws;
@@ -2775,9 +2796,10 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         // LP3.4 (D158): the lights the atlas left unshadowed, by name
         status.lightsUnshadowed = litStats.lightsUnplaced;
         status.unshadowedLights = litStats.unplacedLights;
-        status.draws = litStats.prepassDraws + litStats.ambientDraws
-                       + litStats.interactionDraws + litStats.stageDraws
-                       + litStats.fogDraws + litStats.blendDraws + tonemap.draws;
+        status.draws = litStats.prepassDraws + litStats.gbufferDraws
+                       + litStats.ambientDraws + litStats.interactionDraws
+                       + litStats.stageDraws + litStats.fogDraws + litStats.blendDraws
+                       + tonemap.draws;
         status.skippedDraws = litStats.skippedDraws;
         status.pendingPipelines = litStats.pendingPipelines + tonemap.pendingPipelines;
         const auto account = accountGpuMemory(

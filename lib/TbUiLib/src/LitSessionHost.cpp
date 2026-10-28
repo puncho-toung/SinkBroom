@@ -382,6 +382,9 @@ lit::SessionOptions LitSessionHost::sessionOptions() const
   // document's map belongs to
   auto options = m_options;
   options.gamePath = m_document.map().gamePath();
+  // LP6.5a (C70, D177, Q43): SSAO on in sessions, the game's r_useSSAO 1 (the panel's
+  // switch to turn it off is C74's, LP6.6)
+  options.ssaoForTesting = true;
   return options;
 }
 

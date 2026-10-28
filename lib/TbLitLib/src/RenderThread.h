@@ -752,6 +752,9 @@ public:
   // pipelines the first lit frames ask for (litStartPipelineKeys, the tonemap pass's and
   // the blit's against this session's targets)
   std::vector<PipelineKey> startPipelineKeys() const;
+  // DX.5, likewise: the compute programs (the tonemap pass's two; LP6.5a: SSAO's three
+  // when the session's SSAO is on)
+  std::vector<int> startComputePrograms() const;
 
 private:
   void main() noexcept;

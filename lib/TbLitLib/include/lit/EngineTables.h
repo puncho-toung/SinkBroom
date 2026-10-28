@@ -998,10 +998,19 @@ struct EngineFrameDefaults
   // r_useLightGrid "1" (:299): a surface with a grid area takes the light-grid path
   // (LP4.3; LP4.2a draws the probe path only)
   bool useLightGrid = true;
-  // r_useSSAO: the engine's default is "1", ARCHIVE (:290), which binds _ao0 at t4; the
-  // preview has no SSAO pass before LP6 and binds _white at t4 as r_useSSAO 0 does (K31),
-  // so this is the preview's behaviour, not the engine's default
-  bool useSsao = false;
+  // r_useSSAO "1", ARCHIVE (:290), with r_useNewSSAOPass "1": the ambient pass binds
+  // _ao0 at t4 (SC810, SC815). LP6.5a (C70, D177): the engine's default, which the
+  // preview takes per session (SessionOptions::ssaoForTesting: on in sessions, off in
+  // TbLitLib tests); r_taaJitter's sample-window offset is not mirrored (K54)
+  bool useSsao = true;
+  // SsaoPass.cpp:33-38, the new pass's cvars: r_ssaoBackgroundViewDepth "100",
+  // r_ssaoRadiusWorld "1.0", r_ssaoSurfaceBias "0.05" (metres), r_ssaoPowerExponent "2",
+  // r_ssaoAmount "4"; r_ssaoBlurSharpness "16" is never read
+  float ssaoBackgroundViewDepth = 100.0f;
+  float ssaoRadiusWorld = 1.0f;
+  float ssaoSurfaceBias = 0.05f;
+  float ssaoPowerExponent = 2.0f;
+  float ssaoAmount = 4.0f;
   // LP5.0 (C46, C47, C49, D118): the cvars of passes 7-9, each at the engine's default
   // (RenderSystem_init.cpp and RenderBackend.cpp at 285ea4d1)
   // r_skipFogLights "0" (RenderSystem_init.cpp:139): FogAllLights draws the fog lights

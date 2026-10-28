@@ -20828,7 +20828,6 @@ TEST_CASE("LitSession the G-buffer and SSAO on a GPU (LP6.5a)", "[.][litgpu4]")
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
     auto offHdr = std::optional<TargetFrame>{};
-    auto onHdr = std::optional<TargetFrame>{};
     {
       const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
@@ -20888,7 +20887,6 @@ TEST_CASE("LitSession the G-buffer and SSAO on a GPU (LP6.5a)", "[.][litgpu4]")
       const auto wall =
         settledTargets(*session, wallView, {fr::CurrentNormals, fr::CurrentRenderHdr});
       REQUIRE(wall);
-      onHdr = wall;
       const auto& stats = wall->frame.lit;
       CHECK(stats.gbufferRan);
       CHECK_FALSE(stats.gbufferDisabled);
@@ -21034,12 +21032,8 @@ TEST_CASE("LitSession the G-buffer and SSAO on a GPU (LP6.5a)", "[.][litgpu4]")
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
 
-    // (b) pass 3 leaves the ambient picture as it was (no pass 4 reads it yet)
+    // (b) the SSAO-off picture is the control of C70's (b) and (c) sections
     REQUIRE(offHdr);
-    REQUIRE(onHdr);
-    const auto& off = offHdr->image(fr::CurrentRenderHdr);
-    const auto& on = onHdr->image(fr::CurrentRenderHdr);
-    CHECK(off.values == on.values);
 
     // the frame logs: gpu_gbuffer_ms filled on the frames that ran pass 3, never without
     // SSAO
@@ -21069,6 +21063,513 @@ TEST_CASE("LitSession the G-buffer and SSAO on a GPU (LP6.5a)", "[.][litgpu4]")
     CHECK(offTimed == 0);
     std::filesystem::remove(logPath);
     std::filesystem::remove(offLogPath);
+  }
+
+
+  // C70: the inside corner of area 0 at (256 -128 0): the south wall (y -128, normal +y)
+  // 68 units away, looking -y from (230 -60 30); at the wall plane the view spans x 298
+  // (left) to 162 (right) and z -21 to 81, the corner's vertical edge at column 49, the
+  // floor's crease at row 95; 1 m (39.4 units) is 46 pixels there (radiusToScreen 80)
+  const auto cornerView = litCamera({230, -60, 30}, {0, -1, 0}, {0, 0, 1});
+  // the open wall: x 176-206, z 50-74, a metre and more from the floor and the corner
+  // (columns 110-142, rows 8-36); the crease band: the wall's lowest 8 units and the
+  // floor before it, from the corner on (columns 40-150, rows 86-100)
+  const auto openWall = std::array<std::uint32_t, 4>{110, 8, 142, 36};
+  const auto crease = std::array<std::uint32_t, 4>{40, 86, 150, 100};
+  const auto window = [](
+                        const TargetImage& image,
+                        const std::array<std::uint32_t, 4>& w,
+                        const std::uint32_t c) {
+    return image.stats(w[0], w[1], w[2], w[3], c);
+  };
+  // an SSAO-off session's settled corner frame (the control) or an SSAO-on one's
+  const auto cornerFrame = [&](
+                             const VulkanInstance& instance,
+                             MaterialService& service,
+                             const bool ssao) -> std::optional<TargetFrame> {
+    auto events = Events{};
+    auto session = lp65aSession(instance, events, service, root, ssao);
+    session->setExposed(true);
+    if (!waitFor(
+          [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+          5000ms,
+          false))
+    {
+      return std::nullopt;
+    }
+    session->offerSnapshot(lp22aSnapshot(lp65aMapText(), root, 7, 1));
+    auto frame =
+      settledTargets(*session, cornerView, {fr::CurrentRenderHdr, fr::CurrentRenderLdr});
+    teardown(*session);
+    return frame;
+  };
+
+  SECTION("C70: (a) SSAO on the baked corner, (e) a resize, (f) Stop")
+  {
+    const auto logPath =
+      std::filesystem::temp_directory_path() / "TbLitLibTest-lp65a-ssao-frame-log.csv";
+    std::filesystem::remove(logPath);
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    auto control = std::optional<TargetFrame>{};
+    auto on = std::optional<TargetFrame>{};
+    auto resized = std::optional<TargetFrame>{};
+    auto arrays = std::array<nvrhi::TextureDesc, 2>{};
+    auto resizedArrays = std::array<nvrhi::TextureDesc, 2>{};
+    auto resizedAo = nvrhi::TextureDesc{};
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      control = cornerFrame(instance, *service, false);
+      REQUIRE(control);
+      CHECK_FALSE(control->frame.lit.ssaoRan);
+
+      auto events = Events{};
+      auto session = lp65aSession(instance, events, *service, root, true, logPath);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp65aMapText(), root, 7, 1)));
+      on = settledTargets(
+        *session, cornerView, {fr::Ao0, fr::CurrentRenderHdr, fr::CurrentRenderLdr});
+      REQUIRE(on);
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        arrays[0] = access.frame.find(fr::SsaoDeinterleavedDepth)->texture->getDesc();
+        arrays[1] = access.frame.find(fr::SsaoDeinterleavedOcclusion)->texture->getDesc();
+      }));
+
+      // (e) a resize: the arrays, _ao0 and pass 4's sets made again (the generation)
+      session->resizeHeadlessForTesting(200, 150);
+      REQUIRE(waitFor(
+        [&] { return session->renderTargetGenerationForTesting() == 2u; },
+        5000ms,
+        false));
+      resized = settledTargets(*session, cornerView, {fr::Ao0});
+      REQUIRE(resized);
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        resizedArrays[0] =
+          access.frame.find(fr::SsaoDeinterleavedDepth)->texture->getDesc();
+        resizedArrays[1] =
+          access.frame.find(fr::SsaoDeinterleavedOcclusion)->texture->getDesc();
+        resizedAo = access.frame.find(fr::Ao0)->texture->getDesc();
+      }));
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      // (f) Stop: every allocation freed
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      CHECK(events.count(SessionEvent::Warning) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+    messages.print("LP6.5a C70 (a) (e) (f), validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+
+    // (a) pass 4 ran, its constants SC812's
+    const auto& stats = on->frame.lit;
+    CHECK(stats.gbufferRan);
+    CHECK(stats.ssaoRan);
+    CHECK_FALSE(stats.ssaoDisabled);
+    CHECK(stats.ssaoPendingPipelines == 0u);
+    CHECK(stats.ssaoDispatches == 3u);
+    CHECK(stats.ssaoTimed);
+    CHECK(stats.gbufferTimed);
+    const auto& constants = stats.ssaoConstants;
+    CHECK(constants.viewportSize == std::array<float, 2>{160.0f, 120.0f});
+    CHECK(constants.pixelOffset == std::array<float, 2>{0.0f, 0.0f});
+    CHECK(
+      constants.invQuantizedGbufferSize
+      == std::array<float, 2>{1.0f / 160.0f, 1.0f / 120.0f});
+    CHECK(constants.quantizedViewportOrigin == std::array<std::int32_t, 2>{0, 0});
+    CHECK(constants.amount == 4.0f);
+    CHECK(constants.invBackgroundViewDepth == 1.0f / 100.0f);
+    CHECK(constants.radiusWorld == 1.0f);
+    CHECK(constants.surfaceBias == 0.05f);
+    CHECK(constants.powerExponent == 2.0f);
+    CHECK(constants.radiusToScreen == Catch::Approx(80.0f).epsilon(1e-5));
+    CHECK(constants.matViewToWorld == std::array<float, 16>{});
+    // the arrays: ceil(w / 4) × ceil(h / 4) × 16
+    for (const auto& desc : arrays)
+    {
+      CHECK(desc.width == 40u);
+      CHECK(desc.height == 30u);
+      CHECK(desc.arraySize == 16u);
+      CHECK(desc.dimension == nvrhi::TextureDimension::Texture2DArray);
+    }
+    CHECK(arrays[0].format == nvrhi::Format::R32_FLOAT);
+    CHECK(arrays[1].format == nvrhi::Format::R8_UNORM);
+
+    // _ao0 in [0, 1] everywhere (R8_UNORM), 1 (>= 254/255) on the open wall, below 0.9 in
+    // the crease
+    const auto& ao = on->image(fr::Ao0);
+    REQUIRE(ao.width == 160u);
+    REQUIRE(ao.height == 120u);
+    const auto aoAll = ao.stats(0, 0, 160, 120, 0);
+    CHECK(aoAll[1] >= 0.0);
+    CHECK(aoAll[2] <= 1.0);
+    const auto aoOpen = window(ao, openWall, 0);
+    const auto aoCrease = window(ao, crease, 0);
+    CHECK(aoOpen[1] >= 254.0 / 255.0);
+    CHECK(aoCrease[1] < 0.9);
+    // the LDR corner darker with SSAO than the control's; the open wall's HDR the
+    // control's (min( material ao, 1 ) is the material's)
+    const auto& ldr = on->image(fr::CurrentRenderLdr);
+    const auto& controlLdr = control->image(fr::CurrentRenderLdr);
+    const auto& hdr = on->image(fr::CurrentRenderHdr);
+    const auto& controlHdr = control->image(fr::CurrentRenderHdr);
+    auto ldrCrease = 0.0;
+    auto controlLdrCrease = 0.0;
+    auto ldrOpen = 0.0;
+    auto controlLdrOpen = 0.0;
+    auto hdrOpen = 0.0;
+    auto controlHdrOpen = 0.0;
+    for (std::uint32_t c = 0; c < 3; ++c)
+    {
+      ldrCrease += window(ldr, crease, c)[0] / 3.0;
+      controlLdrCrease += window(controlLdr, crease, c)[0] / 3.0;
+      ldrOpen += window(ldr, openWall, c)[0] / 3.0;
+      controlLdrOpen += window(controlLdr, openWall, c)[0] / 3.0;
+      hdrOpen += window(hdr, openWall, c)[0] / 3.0;
+      controlHdrOpen += window(controlHdr, openWall, c)[0] / 3.0;
+    }
+    CHECK(ldrCrease < controlLdrCrease);
+    CHECK(std::abs(hdrOpen - controlHdrOpen) <= controlHdrOpen / 255.0);
+    std::cout << fmt::format(
+      "LP6.5a C70 (a): _ao0 min {:.4f} max {:.4f}; the open wall's min {:.4f} (mean "
+      "{:.4f}), the crease's darkest {:.4f} (mean {:.4f}); the crease's LDR mean {:.2f} "
+      "with SSAO, {:.2f} without; the open wall's LDR {:.2f} / {:.2f}, HDR {:.5f} / "
+      "{:.5f}; {} pass 3 draws, {} ambient draws, {} dispatches; the constants: "
+      "clipToView ({:.5f} {:.5f}), radiusToScreen {:.3f}\n",
+      aoAll[1],
+      aoAll[2],
+      aoOpen[1],
+      aoOpen[0],
+      aoCrease[1],
+      aoCrease[0],
+      ldrCrease * 255.0,
+      controlLdrCrease * 255.0,
+      ldrOpen * 255.0,
+      controlLdrOpen * 255.0,
+      hdrOpen,
+      controlHdrOpen,
+      stats.gbufferDraws,
+      stats.ambientDraws,
+      stats.ssaoDispatches,
+      constants.clipToView[0],
+      constants.clipToView[1],
+      constants.radiusToScreen);
+
+    // (e) at 200 × 150: the arrays 50 × 38 × 16, _ao0 200 × 150, the picture's windows
+    // scaled (the aspect is the same)
+    for (const auto& desc : resizedArrays)
+    {
+      CHECK(desc.width == 50u);
+      CHECK(desc.height == 38u);
+      CHECK(desc.arraySize == 16u);
+    }
+    CHECK(resizedAo.width == 200u);
+    CHECK(resizedAo.height == 150u);
+    const auto& aoResized = resized->image(fr::Ao0);
+    REQUIRE(aoResized.width == 200u);
+    const auto scaled = [](const std::array<std::uint32_t, 4>& w) {
+      return std::array<std::uint32_t, 4>{
+        w[0] * 5 / 4, w[1] * 5 / 4, w[2] * 5 / 4, w[3] * 5 / 4};
+    };
+    const auto resizedOpen = window(aoResized, scaled(openWall), 0);
+    const auto resizedCrease = window(aoResized, scaled(crease), 0);
+    CHECK(resized->frame.lit.ssaoRan);
+    CHECK(
+      resized->frame.lit.ssaoConstants.viewportSize
+      == std::array<float, 2>{200.0f, 150.0f});
+    CHECK(resizedOpen[1] >= 254.0 / 255.0);
+    CHECK(resizedCrease[1] < 0.9);
+    std::cout << fmt::format(
+      "LP6.5a C70 (e) 200 x 150: the arrays {} x {} x {}, _ao0 {} x {}; the open wall's "
+      "min {:.4f}, the crease's darkest {:.4f}\n",
+      resizedArrays[0].width,
+      resizedArrays[0].height,
+      resizedArrays[0].arraySize,
+      resizedAo.width,
+      resizedAo.height,
+      resizedOpen[1],
+      resizedCrease[1]);
+
+    // the frame log: gpu_ssao_ms and gpu_gbuffer_ms on the frames that ran the passes
+    const auto rows = readCsv(logPath);
+    REQUIRE(rows.size() >= 2u);
+    REQUIRE(rows[0].size() == FrameLogFields);
+    const auto ssaoColumn = frameLogColumn(rows, "gpu_ssao_ms");
+    const auto gbufferColumn = frameLogColumn(rows, "gpu_gbuffer_ms");
+    REQUIRE(ssaoColumn < FrameLogFields);
+    auto timed = 0;
+    for (std::size_t i = 1; i < rows.size(); ++i)
+    {
+      timed += rows[i].size() == FrameLogFields && rows[i][1] == "frame"
+                   && !rows[i][ssaoColumn].empty() && std::stod(rows[i][ssaoColumn]) > 0.0
+                   && !rows[i][gbufferColumn].empty()
+                   && std::stod(rows[i][gbufferColumn]) > 0.0
+                 ? 1
+                 : 0;
+    }
+    CHECK(timed > 0);
+    std::filesystem::remove(logPath);
+  }
+
+  SECTION("C70: (b) the pending rule: _white at t4 and unconverged until the compile")
+  {
+    const auto logPath =
+      std::filesystem::temp_directory_path() / "TbLitLibTest-lp65a-pending-frame-log.csv";
+    std::filesystem::remove(logPath);
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    auto control = std::optional<TargetFrame>{};
+    auto reference = std::optional<TargetFrame>{};
+    auto held = std::optional<TargetFrame>{};
+    auto released = std::optional<TargetFrame>{};
+    auto heldSettled = true;
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      control = cornerFrame(instance, *service, false);
+      REQUIRE(control);
+      reference = cornerFrame(instance, *service, true);
+      REQUIRE(reference);
+      REQUIRE(reference->frame.lit.ssaoRan);
+
+      auto events = Events{};
+      auto session = lp65aSession(instance, events, *service, root, true, logPath, false);
+      auto* compiler = session->pipelineCompilerForTesting();
+      REQUIRE(compiler);
+      // every pipeline the frames draw with asked for first (DX.5's, with pass 3's), so
+      // that the held SSAO programs, asked for by the first frame, are the queue's last
+      const auto depth = session->deviceFacts().d24s8Supported ? nvrhi::Format::D24S8
+                                                               : nvrhi::Format::D32S8;
+      auto keys = litStartPipelineKeys(depth, true);
+      keys.push_back(tonemapPipelineKey(depth));
+      keys.push_back(blitPipelineKey(nvrhi::Format::RGBA8_UNORM));
+      compiler->request(
+        keys, {TonemapComputePrograms.begin(), TonemapComputePrograms.end()});
+      // the compile thread held at a named program's pipeline
+      auto gate = std::make_shared<ParseGate>();
+      gate->close();
+      const auto openGate = OpenAtExit{gate};
+      compiler->setBeforeCreateProgramForTesting([gate](const int program) {
+        if (engineNamedProgram(program))
+        {
+          gate->pass();
+        }
+      });
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp65aMapText(), root, 7, 1)));
+      // a frame that waits for nothing but the SSAO pipelines
+      held = frameTargets(
+        *session,
+        cornerView,
+        {fr::CurrentRenderHdr, fr::CurrentRenderLdr},
+        [](const RenderFrameAccess& access) {
+          const auto& stats = access.passes.lastStats();
+          auto rest = access.convergence;
+          rest.pipelinesPending = false;
+          return stats.ssaoPendingPipelines > 0 && stats.gbufferRan
+                 && stats.gbufferPendingPipelines == 0 && stats.ambientDraws > 0
+                 && access.convergence.pipelinesPending && rest.settled()
+                 && access.images.pending() == 0 && !access.images.hasLoading()
+                 && !access.arenas.pending();
+        });
+      REQUIRE(held);
+      heldSettled = held->frame.convergence.settled();
+      // a second frame while held, by a frame of its own
+      const auto again = frameTargets(
+        *session,
+        cornerView,
+        {fr::CurrentRenderHdr},
+        [](const RenderFrameAccess& access) {
+          return access.passes.lastStats().ssaoPendingPipelines > 0;
+        });
+      REQUIRE(again);
+      CHECK_FALSE(again->frame.convergence.settled());
+      CHECK(
+        again->image(fr::CurrentRenderHdr).values
+        == held->image(fr::CurrentRenderHdr).values);
+      gate->open();
+      released = settledTargets(
+        *session, cornerView, {fr::CurrentRenderHdr, fr::CurrentRenderLdr});
+      REQUIRE(released);
+      teardown(*session);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      CHECK(events.count(SessionEvent::Warning) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+    messages.print("LP6.5a C70 (b), validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+
+    // held: pass 4 skipped, t4 _white (the control's picture exactly), the frame
+    // unconverged with its three pipelines pending
+    const auto& heldStats = held->frame.lit;
+    CHECK_FALSE(heldSettled);
+    CHECK_FALSE(heldStats.ssaoRan);
+    CHECK(heldStats.ssaoPendingPipelines == 3u);
+    CHECK(heldStats.pendingPipelines >= 3u);
+    CHECK(heldStats.unconverged);
+    CHECK(
+      held->image(fr::CurrentRenderHdr).values
+      == control->image(fr::CurrentRenderHdr).values);
+    // released: the SSAO picture of (a)
+    CHECK(released->frame.lit.ssaoRan);
+    CHECK(released->frame.convergence.settled());
+    CHECK(
+      released->image(fr::CurrentRenderHdr).values
+      == reference->image(fr::CurrentRenderHdr).values);
+    CHECK(
+      held->image(fr::CurrentRenderHdr).values
+      != reference->image(fr::CurrentRenderHdr).values);
+    // the frame log: unsettled rows with pending_pipelines >= 1 before the settled ones
+    const auto rows = readCsv(logPath);
+    REQUIRE(rows.size() >= 2u);
+    const auto pendingColumn = frameLogColumn(rows, "pending_pipelines");
+    const auto settledColumn = frameLogColumn(rows, "settled");
+    REQUIRE(pendingColumn < FrameLogFields);
+    REQUIRE(settledColumn < FrameLogFields);
+    auto pendingRows = 0;
+    auto pendingSettled = 0;
+    auto maxPending = 0;
+    for (std::size_t i = 1; i < rows.size(); ++i)
+    {
+      if (
+        rows[i].size() == FrameLogFields && rows[i][1] == "frame"
+        && !rows[i][pendingColumn].empty() && std::stoi(rows[i][pendingColumn]) > 0)
+      {
+        ++pendingRows;
+        maxPending = std::max(maxPending, std::stoi(rows[i][pendingColumn]));
+        pendingSettled += rows[i][settledColumn] == "1" ? 1 : 0;
+      }
+    }
+    CHECK(pendingRows >= 2);
+    CHECK(pendingSettled == 0);
+    std::cout << fmt::format(
+      "LP6.5a C70 (b) held: {} frame-log rows with pending_pipelines >= 1 (at most {}), "
+      "none settled; the held frame's pending_pipelines {} (SSAO {}), its HDR the "
+      "control's; released: settled, the HDR (a)'s\n",
+      pendingRows,
+      maxPending,
+      heldStats.pendingPipelines,
+      heldStats.ssaoPendingPipelines);
+    std::filesystem::remove(logPath);
+  }
+
+  SECTION("C70: (c) a missing blob disables the pass with one warning")
+  {
+    // the root's copy of the blobs without ssao_blur.cs.bin (the game folder untouched)
+    const auto blur =
+      root / "base" / shaderBlobPath("builtin/SSAO/ssao_blur", ShaderStage::Compute);
+    REQUIRE(std::filesystem::exists(blur));
+    std::filesystem::remove(blur);
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    auto control = std::optional<TargetFrame>{};
+    auto missing = std::optional<TargetFrame>{};
+    auto warnings = std::vector<std::string>{};
+    auto reports = std::vector<ProgramReport>{};
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      control = cornerFrame(instance, *service, false);
+      REQUIRE(control);
+
+      auto events = Events{};
+      auto session = lp65aSession(instance, events, *service, root, true);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp65aMapText(), root, 7, 1)));
+      missing = frameTargets(
+        *session,
+        cornerView,
+        {fr::CurrentRenderHdr, fr::CurrentRenderLdr},
+        [](const RenderFrameAccess& access) {
+          return access.convergence.settled() && access.passes.lastStats().ssaoDisabled
+                 && access.images.pending() == 0 && !access.images.hasLoading()
+                 && !access.arenas.pending();
+        });
+      REQUIRE(missing);
+      reports = session->programReport();
+      teardown(*session);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      {
+        const auto lock = std::scoped_lock{events.mutex};
+        for (const auto& [event, message, generation] : events.events)
+        {
+          if (event == SessionEvent::Warning)
+          {
+            warnings.push_back(message);
+          }
+        }
+      }
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+    messages.print("LP6.5a C70 (c), validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+
+    // one warning naming the blob; the pass disabled, pass 3 not run (D176), t4 _white,
+    // the frame settled: the control's picture
+    REQUIRE(warnings.size() == 1u);
+    CHECK(warnings[0].find("ssao_blur.cs.bin") != std::string::npos);
+    const auto& stats = missing->frame.lit;
+    CHECK(stats.ssaoDisabled);
+    CHECK_FALSE(stats.ssaoRan);
+    CHECK_FALSE(stats.gbufferRan);
+    CHECK(missing->frame.convergence.settled());
+    CHECK(
+      missing->image(fr::CurrentRenderHdr).values
+      == control->image(fr::CurrentRenderHdr).values);
+    CHECK(
+      missing->image(fr::CurrentRenderLdr).values
+      == control->image(fr::CurrentRenderLdr).values);
+    auto disabled = std::vector<std::string>{};
+    for (const auto& report : reports)
+    {
+      if (!report.enabled)
+      {
+        disabled.push_back(report.name);
+      }
+    }
+    CHECK(disabled == std::vector<std::string>{"builtin/SSAO/ssao_blur"});
+    std::cout << fmt::format(
+      "LP6.5a C70 (c) the warning: \"{}\"; disabled {}\n",
+      warnings[0],
+      fmt::join(disabled, ", "));
   }
 
   std::cout << fmt::format(

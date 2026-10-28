@@ -165,7 +165,7 @@ Result<void> LitSession::start(
              {
                m_compiler->request(
                  m_renderThread->startPipelineKeys(),
-                 {TonemapComputePrograms.begin(), TonemapComputePrograms.end()});
+                 m_renderThread->startComputePrograms());
              }
            })
          | kdl::transform([&]() {

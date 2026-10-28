@@ -93,6 +93,14 @@ inline constexpr auto LdrFramebuffer = std::string_view{"ldrFBO"};
 // (Framebuffer_NVRHI.cpp:184-187)
 inline constexpr auto CurrentNormals = std::string_view{"_currentNormals"};
 inline constexpr auto GbufferFramebuffer = std::string_view{"geometryBufferFBO"};
+// LP6.5a (C70, SC808, SC811): the ambient occlusion pass 4 writes and the ambient pass
+// reads at t4 (Image_intrinsic.cpp:1127, 342-345), and SsaoPass' deinterleaved arrays
+// (SsaoPass.cpp:56-71)
+inline constexpr auto Ao0 = std::string_view{"_ao0"};
+inline constexpr auto SsaoDeinterleavedDepth =
+  std::string_view{"SSAO/DeinterleavedDepth"};
+inline constexpr auto SsaoDeinterleavedOcclusion =
+  std::string_view{"SSAO/DeinterleavedOcclusion"};
 inline constexpr auto HistogramBuffer = std::string_view{"HistogramBuffer"};
 inline constexpr auto ExposureBuffer = std::string_view{"ExposureBuffer"};
 // the frame's presentation target: the acquired swapchain image or the headless target
@@ -169,8 +177,13 @@ public:
  * _currentNormals (RGBA16_FLOAT, render target, keepInitialState: R_GeometryBufferImage_
  * ResNative at one sample) and the framebuffer geometryBufferFBO {_currentNormals,
  * _currentDepth}, whose formats are hdrFBO's (P8.21: no new format set on the compile
- * thread); made and remade with the others, in renderTargetBytes (C68 (e)). A session
- * without SSAO makes none of them, so its targets are LP6.4b's.
+ * thread); and SSAO's: _ao0 (R8_UNORM, render target and UAV, keepInitialState:
+ * R_AmbientOcclusionImage_ResNative; _ao1 is not made, the new pass never reads it) and
+ * the deinterleaved arrays SSAO/DeinterleavedDepth (R32_FLOAT) and
+ * SSAO/DeinterleavedOcclusion (R8_UNORM), Texture2DArray ceil(w / 4) × ceil(h / 4) × 16,
+ * UAVs kept in ShaderResource as SsaoPass makes them; made and remade with the others,
+ * in renderTargetBytes (C68 (e)). A session without SSAO makes none of them, so its
+ * targets are LP6.4b's.
  *
  * Threads: create on the GUI thread in phase B before the render thread starts (as the
  * headless target); releaseAll on the GUI thread in teardown step 2; everything else on
@@ -187,9 +200,12 @@ private:
     nvrhi::TextureHandle ldr;
     nvrhi::FramebufferHandle hdrFramebuffer;
     nvrhi::FramebufferHandle ldrFramebuffer;
-    // LP6.5a (C69): the G-buffer's, when the session's SSAO is on
+    // LP6.5a (C69, C70): the G-buffer's and SSAO's, when the session's SSAO is on
     nvrhi::TextureHandle normals;
     nvrhi::FramebufferHandle gbufferFramebuffer;
+    nvrhi::TextureHandle ao0;
+    nvrhi::TextureHandle deinterleavedDepth;
+    nvrhi::TextureHandle deinterleavedOcclusion;
   };
 
   nvrhi::IDevice* m_device = nullptr;

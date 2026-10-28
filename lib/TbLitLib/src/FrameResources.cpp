@@ -84,6 +84,28 @@ nvrhi::TextureDesc renderTargetDesc(
 }
 
 /**
+ * LP6.5a (C70, SC811): SsaoPass' deinterleaved textures (SsaoPass.cpp:56-71): a
+ * Texture2DArray of ( w + 3 ) / 4 × ( h + 3 ) / 4 × 16, a UAV, initial state
+ * ShaderResource, kept there; no render target
+ */
+nvrhi::TextureDesc deinterleavedDesc(
+  const char* name, const nvrhi::Format format, const vk::Extent2D extent)
+{
+  return nvrhi::TextureDesc{}
+    .setDebugName(name)
+    .setDimension(nvrhi::TextureDimension::Texture2DArray)
+    .setWidth((extent.width + 3) / 4)
+    .setHeight((extent.height + 3) / 4)
+    .setArraySize(16)
+    .setFormat(format)
+    .setIsUAV(true)
+    .setSampleCount(1)
+    .setMipLevels(1)
+    .setInitialState(nvrhi::ResourceStates::ShaderResource)
+    .setKeepInitialState(true);
+}
+
+/**
  * TonemapPass.cpp:77-96: the histogram and the exposure buffers, typed R32_UINT UAVs in
  * UnorderedAccess, kept there.
  */
@@ -194,7 +216,14 @@ Result<bool> FrameResources::ensureExtent(
            retire(old.hdrFramebuffer.Get(), 0, frame);
            retire(old.ldrFramebuffer.Get(), 0, frame);
            retire(old.gbufferFramebuffer.Get(), 0, frame);
-           for (const auto& texture : {old.hdr, old.depth, old.ldr, old.normals})
+           for (const auto& texture :
+                {old.hdr,
+                 old.depth,
+                 old.ldr,
+                 old.normals,
+                 old.ao0,
+                 old.deinterleavedDepth,
+                 old.deinterleavedOcclusion})
            {
              retire(texture.Get(), textureBytes(texture.Get()), frame);
            }
@@ -286,6 +315,18 @@ std::optional<FrameResource> FrameResources::find(const std::string_view name) c
   {
     return FrameResource{nullptr, nullptr, m_targets.gbufferFramebuffer.Get(), true};
   }
+  if (name == fr::Ao0 && m_targets.ao0)
+  {
+    return FrameResource{m_targets.ao0.Get(), nullptr, nullptr, true};
+  }
+  if (name == fr::SsaoDeinterleavedDepth && m_targets.deinterleavedDepth)
+  {
+    return FrameResource{m_targets.deinterleavedDepth.Get(), nullptr, nullptr, true};
+  }
+  if (name == fr::SsaoDeinterleavedOcclusion && m_targets.deinterleavedOcclusion)
+  {
+    return FrameResource{m_targets.deinterleavedOcclusion.Get(), nullptr, nullptr, true};
+  }
   if (name == fr::HistogramBuffer && m_histogram)
   {
     return FrameResource{nullptr, m_histogram.Get(), nullptr, false};
@@ -334,7 +375,10 @@ Result<PassResources> FrameResources::resolve(const PassDesc& pass) const
 std::uint64_t FrameResources::renderTargetBytes() const
 {
   return textureBytes(m_targets.hdr.Get()) + textureBytes(m_targets.depth.Get())
-         + textureBytes(m_targets.ldr.Get()) + textureBytes(m_targets.normals.Get());
+         + textureBytes(m_targets.ldr.Get()) + textureBytes(m_targets.normals.Get())
+         + textureBytes(m_targets.ao0.Get())
+         + textureBytes(m_targets.deinterleavedDepth.Get())
+         + textureBytes(m_targets.deinterleavedOcclusion.Get());
 }
 
 std::uint64_t FrameResources::bufferBytes() const
@@ -404,6 +448,19 @@ Result<FrameResources::Targets> FrameResources::makeTargets(
     if (!targets.gbufferFramebuffer)
     {
       return Error{"Cannot create the G-buffer's framebuffer"};
+    }
+    // LP6.5a (C70): R_AmbientOcclusionImage_ResNative (Image_intrinsic.cpp:342-345:
+    // TD_R8F, a render target and a UAV) and SsaoPass' arrays (SsaoPass.cpp:56-71)
+    targets.ao0 = device.createTexture(
+      renderTargetDesc("_ao0", nvrhi::Format::R8_UNORM, extent, false, true));
+    targets.deinterleavedDepth = device.createTexture(
+      deinterleavedDesc("SSAO/DeinterleavedDepth", nvrhi::Format::R32_FLOAT, extent));
+    targets.deinterleavedOcclusion = device.createTexture(
+      deinterleavedDesc("SSAO/DeinterleavedOcclusion", nvrhi::Format::R8_UNORM, extent));
+    if (!targets.ao0 || !targets.deinterleavedDepth || !targets.deinterleavedOcclusion)
+    {
+      return Error{fmt::format(
+        "Cannot create the SSAO targets at {}x{}", extent.width, extent.height)};
     }
   }
   return targets;

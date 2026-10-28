@@ -33,6 +33,7 @@
 
 #include "lit/AreaData.h"
 #include "lit/EngineBuiltins.h"
+#include "lit/EngineLight.h"
 #include "lit/EnginePipelineState.h"
 #include "lit/EntityState.h"
 #include "lit/FramePacer.h"
@@ -135,6 +136,26 @@ PassDesc gbufferPassDesc()
     std::string{frame_resource::CurrentNormals}};
   return pass;
 }
+
+// LP6.5a (C70): SsaoPass::Render's reads and writes (the three sets,
+// SsaoPass.cpp:174-212)
+PassDesc ssaoPassDesc()
+{
+  auto pass = PassDesc{};
+  pass.name = "ssao";
+  pass.reads = {
+    std::string{frame_resource::CurrentDepth},
+    std::string{frame_resource::CurrentNormals}};
+  pass.writes = {
+    std::string{frame_resource::Ao0},
+    std::string{frame_resource::SsaoDeinterleavedDepth},
+    std::string{frame_resource::SsaoDeinterleavedOcclusion}};
+  return pass;
+}
+
+// LP6.5a (C70): SsaoPass' constant buffer (SsaoPass.cpp:47-54,
+// c_MaxRenderPassConstantBufferVersions, CommonPasses.h:38)
+constexpr auto SsaoConstantBufferVersions = std::uint32_t{16};
 
 // RenderBackend_NVRHI.cpp:698-788: set 1 t0-t2, set 2 t3 t4 t7 t8 t9 t10 t12 t13 t14
 constexpr auto AmbientUnits = std::array<AmbientUnitBinding, 12>{{
@@ -400,17 +421,69 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
     m_stats.stoppedEarly = true;
     return;
   }
-  // LP6.5a (C69, D176): pass 3, AmbientPass( true ), after the prepass and before the
-  // ambient pass (RenderBackend.cpp:6030-6040), only when a consumer needs the normals:
-  // SSAO on (LP6.5b adds bumpyenvironment2's); the engine runs it every 3D frame (K55: no
-  // picture differs)
+  // LP6.5a (C69, C70, D176, P8.12): pass 3, AmbientPass( true ), and pass 4,
+  // DrawScreenSpaceAmbientOcclusion2, after the prepass and before the ambient pass
+  // (RenderBackend.cpp:6030-6055), when the session's SSAO is on; pass 3 only when a
+  // consumer needs the normals: pass 4 not disabled (LP6.5b adds bumpyenvironment2's;
+  // the engine runs it every 3D frame, K55: no picture differs). The ambient pass binds
+  // _ao0 at t4 only when pass 4 ran this frame, else _white (r_useSSAO 0's picture):
+  // while a pipeline of pass 3 or 4 is pending the pending pass is skipped and the frame
+  // stays unconverged (M-PASS-DIFF-05: the compile thread's onReady draws the next); a
+  // disabled program (a missing blob, a reflection mismatch: the compile thread's one
+  // notice) disables the pass, the frame converges without SSAO
+  m_ssaoImage = nullptr;
   if (inputs.ssao && !m_lists.drawSurfs.empty())
   {
-    const auto start = FrameClock::now();
-    beginTimer(frame, inputs.gbufferTimer);
-    recordGbuffer(frame);
-    m_stats.gbufferTimed = endTimer(frame, inputs.gbufferTimer);
-    m_stats.gbufferRecordMs = recordMsSince(start);
+    auto& pipelines = *inputs.pipelines;
+    // copies: a lookup is valid until the next call (RenderPipelines)
+    const auto ssaoPipelines = std::array<ComputePipelineLookup, 3>{
+      pipelines.compute(EngineNamedSsaoDeinterleave),
+      pipelines.compute(EngineNamedSsaoCompute),
+      pipelines.compute(EngineNamedSsaoBlur)};
+    auto ready = true;
+    for (const auto& lookup : ssaoPipelines)
+    {
+      if (lookup.state == ComputePipelineLookup::State::Pending)
+      {
+        ++m_stats.ssaoPendingPipelines;
+        ready = false;
+      }
+      else if (lookup.state == ComputePipelineLookup::State::Failed || !lookup.pipeline)
+      {
+        m_stats.ssaoDisabled = true;
+        if (m_stats.disabledReason.empty())
+        {
+          m_stats.disabledReason = lookup.error;
+        }
+        ready = false;
+      }
+    }
+    if (m_stats.ssaoPendingPipelines > 0 && !m_stats.ssaoDisabled)
+    {
+      m_stats.pendingPipelines += m_stats.ssaoPendingPipelines;
+      m_stats.unconverged = true;
+    }
+    if (!m_stats.ssaoDisabled)
+    {
+      const auto start = FrameClock::now();
+      beginTimer(frame, inputs.gbufferTimer);
+      recordGbuffer(frame);
+      m_stats.gbufferTimed = endTimer(frame, inputs.gbufferTimer);
+      m_stats.gbufferRecordMs = recordMsSince(start);
+      // pass 4 reads what pass 3 wrote: not over a disabled pass 3 nor a pending one
+      m_stats.ssaoDisabled = m_stats.gbufferDisabled;
+    }
+    if (
+      ready && m_stats.gbufferRan && !m_stats.gbufferDisabled
+      && m_stats.gbufferPendingPipelines == 0
+      && !(inputs.stopRequested && inputs.stopRequested()))
+    {
+      const auto start = FrameClock::now();
+      beginTimer(frame, inputs.ssaoTimer);
+      m_stats.ssaoRan = recordSsao(frame, ssaoPipelines);
+      m_stats.ssaoTimed = endTimer(frame, inputs.ssaoTimer);
+      m_stats.ssaoRecordMs = recordMsSince(start);
+    }
   }
 
   if (inputs.stopRequested && inputs.stopRequested())
@@ -1932,15 +2005,16 @@ nvrhi::IBindingSet* LitPasses::ambientViewSet(
     return view.set;
   }
   view.asked = true;
-  // the view's images (RenderBackend.cpp:1361-1393): t3 the BRDF LUT, t4 _white (K31:
-  // r_useSSAO 0 until LP6.5a), t7 the area's irradiance atlas on the grid path
-  // (:1270-1271) or _default on the probe path (D85), t8-t10 the radiance cubes, t12 the
-  // nearest's depth cube, t13 and t14 the next two's; a probe image that is not Ready is
-  // the default cube, never a slot's 2D stand-in (P4.28)
+  // the view's images (RenderBackend.cpp:1361-1393): t3 the BRDF LUT, t4 _ao0 when pass 4
+  // ran this frame (LP6.5a, C70: r_useSSAO 1, :1270-1278 and :1364-1372; bindingSets
+  // binds the frame resource in its place) and else _white (r_useSSAO 0's), t7 the area's
+  // irradiance atlas on the grid path (:1270-1271) or _default on the probe path (D85),
+  // t8-t10 the radiance cubes, t12 the nearest's depth cube, t13 and t14 the next two's;
+  // a probe image that is not Ready is the default cube, never a slot's 2D stand-in
+  // (P4.28)
   auto& images = *frame.inputs->images;
   const auto& probes = m_viewProbes;
   setUnit(images, UnitBrdfLut, Intrinsic::BrdfLut);
-  static_assert(!EngineFrame.useSsao, "K31: _ao0 is LP6's");
   setUnit(images, UnitSsao, Intrinsic::White);
   if (grid)
   {
@@ -2185,6 +2259,119 @@ void LitPasses::recordGbuffer(Frame& frame)
   m_stats.gbufferPendingPipelines = m_stats.pendingPipelines - pendingBefore;
 }
 
+bool LitPasses::recordSsao(
+  Frame& frame, const std::array<ComputePipelineLookup, 3>& pipelines)
+{
+  using Item = nvrhi::BindingSetItem;
+  const auto& inputs = *frame.inputs;
+  auto& device = *inputs.device;
+  auto& commandList = *inputs.commandList;
+  const auto resources =
+    inputs.frame->resolve(ssaoPassDesc()) | kdl::value_or(PassResources{});
+  const auto* common = inputs.samplers->common(device)
+                       | kdl::value_or(static_cast<const SamplerSet::Common*>(nullptr));
+  const auto failed = [&](const std::string_view why) {
+    m_stats.ssaoDisabled = true;
+    if (m_stats.disabledReason.empty())
+    {
+      m_stats.disabledReason = std::string{why};
+    }
+    return false;
+  };
+  if (resources.reads.size() != 2 || resources.writes.size() != 3 || !common)
+  {
+    return failed("the SSAO pass's targets are missing");
+  }
+  for (const auto& lookup : pipelines)
+  {
+    if (lookup.bindingLayouts.size() != 1 || !lookup.bindingLayouts.front())
+    {
+      return failed("an SSAO program's binding layouts are not one set");
+    }
+  }
+  auto* depth = resources.reads[0].texture;
+  auto* normals = resources.reads[1].texture;
+  auto* ao = resources.writes[0].texture;
+  auto* deinterleavedDepth = resources.writes[1].texture;
+  auto* deinterleavedOcclusion = resources.writes[2].texture;
+
+  // SsaoPass.cpp:47-54: the volatile constant buffer
+  if (!m_ssaoConstants)
+  {
+    m_ssaoConstants = device.createBuffer(nvrhi::utils::CreateVolatileConstantBufferDesc(
+      std::uint32_t(sizeof(EngineSsaoConstants)),
+      "SsaoConstants",
+      SsaoConstantBufferVersions));
+    if (!m_ssaoConstants)
+    {
+      return failed("NVRHI cannot create the SSAO constant buffer");
+    }
+  }
+
+  // CreateBindingSet (SsaoPass.cpp:174-212), the render thread's (C20): made at the first
+  // run and for each new render-target generation, whose targets they bind
+  const auto generation = inputs.frame->renderTargetGeneration();
+  if (m_ssaoSetsGeneration != generation || !m_ssaoSets[0])
+  {
+    m_ssaoSets = {};
+    m_ssaoSets[0] = device.createBindingSet(
+      nvrhi::BindingSetDesc{}
+        .addItem(Item::ConstantBuffer(1, m_ssaoConstants))
+        .addItem(Item::Texture_SRV(0, depth))
+        .addItem(Item::Texture_UAV(0, deinterleavedDepth)),
+      pipelines[0].bindingLayouts.front());
+    m_ssaoSets[1] = device.createBindingSet(
+      nvrhi::BindingSetDesc{}
+        .addItem(Item::ConstantBuffer(1, m_ssaoConstants))
+        .addItem(Item::Texture_SRV(0, deinterleavedDepth))
+        .addItem(Item::Texture_SRV(1, normals))
+        .addItem(Item::Texture_UAV(0, deinterleavedOcclusion)),
+      pipelines[1].bindingLayouts.front());
+    m_ssaoSets[2] = device.createBindingSet(
+      nvrhi::BindingSetDesc{}
+        .addItem(Item::ConstantBuffer(1, m_ssaoConstants))
+        .addItem(Item::Texture_SRV(0, deinterleavedDepth))
+        .addItem(Item::Texture_SRV(1, deinterleavedOcclusion))
+        .addItem(Item::Texture_UAV(0, ao))
+        .addItem(Item::Sampler(0, common->pointClamp)),
+      pipelines[2].bindingLayouts.front());
+    if (!m_ssaoSets[0] || !m_ssaoSets[1] || !m_ssaoSets[2])
+    {
+      m_ssaoSets = {};
+      return failed("NVRHI cannot create an SSAO binding set");
+    }
+    m_ssaoSetsGeneration = generation;
+  }
+
+  // DrawScreenSpaceAmbientOcclusion2 (RenderBackend.cpp:5672): _ao0 cleared to 1
+  commandList.clearTextureFloat(ao, nvrhi::AllSubresources, nvrhi::Color{1.0f});
+
+  // Render (SsaoPass.cpp:214-270): the constants, written before the state that binds
+  // them (nvrhi rule 5)
+  const auto extent = inputs.frame->extent();
+  m_stats.ssaoConstants = engineSsaoConstants(frame.view, extent.width, extent.height);
+  commandList.writeBuffer(
+    m_ssaoConstants, &m_stats.ssaoConstants, sizeof(m_stats.ssaoConstants));
+  ++m_stats.constantWrites;
+  m_stats.constantBytes += sizeof(m_stats.ssaoConstants);
+
+  // :273-293: the deinterleave, the compute over 16 slices, the blur
+  const auto dispatches = engineSsaoDispatches(extent.width, extent.height);
+  for (std::size_t i = 0; i < 3; ++i)
+  {
+    auto state = nvrhi::ComputeState{};
+    state.pipeline = pipelines[i].pipeline;
+    state.bindings = {m_ssaoSets[i]};
+    commandList.setComputeState(state);
+    commandList.dispatch(dispatches[i][0], dispatches[i][1], dispatches[i][2]);
+    ++m_stats.ssaoDispatches;
+  }
+  // a compute state ends the graphics state: the next draw sets its state again
+  m_state.valid = false;
+  m_ssaoImage = ao;
+  return true;
+}
+
 void LitPasses::recordAmbient(Frame& frame)
 {
   // AmbientPass( drawSurfs, numDrawSurfs, fillGbuffer false ) (RenderBackend.cpp:
@@ -2229,8 +2416,9 @@ void LitPasses::recordAmbient(Frame& frame)
     }
   }
 
-  // the view's images (:1361-1393): t3 the BRDF LUT, t4 _white (K31: r_useSSAO 0 until
-  // LP6), t7 _default for the irradiance image no probe-path shader reads (D85), t8-t10
+  // the view's images (:1361-1393): t3 the BRDF LUT, t4 _ao0 when pass 4 ran this frame,
+  // else _white (LP6.5a, C70), t7 _default for the irradiance image no probe-path shader
+  // reads (D85), t8-t10
   // the radiance cubes, t12 the nearest's depth cube, t13 and t14 the next two's; a probe
   // image that is not Ready is the default cube, never a slot's 2D stand-in (P4.28)
   auto& images = *frame.inputs->images;
@@ -4703,6 +4891,59 @@ std::vector<PipelineKey> litStartPipelineKeys(
   return keys;
 }
 
+EngineSsaoConstants engineSsaoConstants(
+  const LitView& view, const std::uint32_t width, const std::uint32_t height)
+{
+  // SsaoPass::Render (SsaoPass.cpp:228-270) over the viewport (0, 0, w - 1, h - 1): the
+  // quarter extent ( 0, 0 ) to ( ( w + 3 ) / 4, ( h + 3 ) / 4 ); the cvars at their
+  // defaults (:33-38, EngineFrame)
+  auto constants = EngineSsaoConstants{};
+  constants.viewportOrigin = {0.0f, 0.0f};
+  constants.viewportSize = {float(width), float(height)};
+  // GetCurrentPixelOffset with r_taaJitter 0 (D177, K54)
+  constants.pixelOffset = {0.0f, 0.0f};
+  // idRenderMatrix::Inverse( *( idRenderMatrix* )viewDef->projectionMatrix ); the
+  // engine's output is left as it was (zero) when the inverse fails
+  const auto& projection = view.projectionMatrix;
+  if (const auto inverse = engineMatrixInverse(projection))
+  {
+    constants.matClipToView = *inverse;
+  }
+  // Transpose( Transpose( worldSpace.modelViewMatrix ) ): the bytes as they are
+  constants.matWorldToView = view.worldModelViewMatrix;
+  constants.clipToView = {
+    projection[2 * 4 + 3] / projection[0 * 4 + 0],
+    projection[2 * 4 + 3] / projection[1 * 4 + 1]};
+  // m_QuantizedGbufferTextureSize (:65): the deinterleaved size × 4
+  constants.invQuantizedGbufferSize = {
+    1.0f / (float((width + 3) / 4) * 4.0f), 1.0f / (float((height + 3) / 4) * 4.0f)};
+  constants.quantizedViewportOrigin = {0, 0};
+  constants.amount = EngineFrame.ssaoAmount;
+  constants.invBackgroundViewDepth = EngineFrame.ssaoBackgroundViewDepth > 0.0f
+                                       ? 1.0f / EngineFrame.ssaoBackgroundViewDepth
+                                       : 0.0f;
+  constants.radiusWorld = EngineFrame.ssaoRadiusWorld;
+  constants.surfaceBias = EngineFrame.ssaoSurfaceBias;
+  constants.powerExponent = EngineFrame.ssaoPowerExponent;
+  constants.radiusToScreen = 0.5f * float(height) * std::abs(projection[1 * 4 + 1]);
+  return constants;
+}
+
+std::array<std::array<std::uint32_t, 3>, 3> engineSsaoDispatches(
+  const std::uint32_t width, const std::uint32_t height)
+{
+  // SsaoPass.cpp:217-224, 272-293
+  const auto quarterWidth = (width + 3) / 4;
+  const auto quarterHeight = (height + 3) / 4;
+  const auto groupsX = (quarterWidth + 7) / 8;
+  const auto groupsY = (quarterHeight + 7) / 8;
+  return {{
+    {groupsX, groupsY, 1},
+    {groupsX, groupsY, 16},
+    {(width + 15) / 16, (height + 15) / 16, 1},
+  }};
+}
+
 int LitPasses::imageUsage(ImageSlots& images, const MaterialImageKey& key) const
 {
   // the record's usage once loaded (the PBR rename), the key's until then
@@ -4950,6 +5191,20 @@ bool LitPasses::bindingSets(
     key.layout = layouts[set].Get();
     for (const auto& [unit, slot] : unitSlots)
     {
+      // LP6.5a (C70): the ambient pass's t4 is _ao0 when pass 4 ran this frame, a frame
+      // resource of its own (C28: the set carries the render-target generation)
+      if (
+        layout == EngineBindingLayout::AmbientLightingIbl && unit == UnitSsao
+        && m_ssaoImage)
+      {
+        auto binding = ImageSlots::Binding{};
+        binding.texture = m_ssaoImage;
+        binding.subresources = nvrhi::AllSubresources;
+        key.resources.push_back(m_ssaoImage);
+        key.renderTargetGeneration = inputs.frame->renderTargetGeneration();
+        bindings.push_back(binding);
+        continue;
+      }
       auto binding = unitBinding(unit);
       if (!binding)
       {
@@ -5810,6 +6065,11 @@ std::uint64_t LitPasses::volatileBufferBytes() const
       bytes += buffer->getDesc().byteSize * buffer->getDesc().maxVersions;
     }
   }
+  // LP6.5a (C70): SsaoPass' constant buffer
+  if (m_ssaoConstants)
+  {
+    bytes += m_ssaoConstants->getDesc().byteSize * m_ssaoConstants->getDesc().maxVersions;
+  }
   return bytes;
 }
 
@@ -5869,6 +6129,8 @@ void LitPasses::renderTargetsChanged(const std::uint64_t generation)
   {
     m_linksStale = true;
   }
+  // LP6.5a (C70): pass 4's sets bind the old targets; made again at its next run
+  m_ssaoSets = {};
 }
 
 const DrawRecordTable& LitPasses::recordsForTesting() const
@@ -5891,6 +6153,12 @@ void LitPasses::releaseAll()
   m_ambientViewSets.clear();
   m_ambientLayouts.clear();
   m_ambientPush = false;
+  // LP6.5a (C70, the director's reading (6)): pass 4's sets and constant buffer go in
+  // teardown step 2, before the targets they bind
+  m_ssaoSets = {};
+  m_ssaoSetsGeneration = 0;
+  m_ssaoConstants = nullptr;
+  m_ssaoImage = nullptr;
   // LP3.1 (C59): the shadow atlas goes with the session's device objects (teardown step
   // 2), so that the stop row's allocations are back to the start's
   m_atlasFramebuffer = nullptr;
