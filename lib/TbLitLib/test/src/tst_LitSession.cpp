@@ -8008,6 +8008,17 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
   }
   const auto blobRoot =
     std::filesystem::temp_directory_path() / "TbLitLibTest-parity-blobs";
+  // the copy goes when the case ends, a failed REQUIRE's end too
+  struct RemoveAtExit
+  {
+    std::filesystem::path path;
+    ~RemoveAtExit()
+    {
+      auto error = std::error_code{};
+      std::filesystem::remove_all(path, error);
+    }
+  };
+  const auto removeBlobs = RemoveAtExit{blobRoot};
   {
     std::filesystem::remove_all(blobRoot);
     const auto spirv = std::filesystem::path{"base"} / "renderprogs2";
