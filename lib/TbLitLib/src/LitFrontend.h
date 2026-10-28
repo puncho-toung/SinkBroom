@@ -246,6 +246,15 @@ struct FrontendLists
   std::size_t entitiesCulled = 0;
   // flowView's own time in this build (steady clock), in milliseconds
   double flowMs = 0.0;
+  // LP6.2 (C65's split of lists_ms, D165): this build's times (steady clock, as flowMs)
+  // of the surfaces, the prelude before the flow's inputs (the lambdas, the records in id
+  // order) and everything from flowView's return through the prepass list (the flow's
+  // results, the pre-sort ranks, the grid's world material bounds, the surfaces' walk and
+  // the prepass list), and of the lights (R_AddLights' loop with the pairing, then
+  // R_OptimizeViewLightsList's sort); the flow's inputs and flowView (flowMs) are in
+  // neither, the gathering is casterMs
+  double surfacesMs = 0.0;
+  double lightsMs = 0.0;
 
   // LP4.3 (C36): the drawn surfaces (drawSurfs) that have a grid area
   std::size_t gridSurfaces = 0;

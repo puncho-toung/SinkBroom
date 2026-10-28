@@ -376,8 +376,8 @@ using namespace std::chrono_literals;
 // inlined_surfaces (C54), LP3.1's pass 6 and caster columns (D157), LP3.2's per-list
 // shadow-atlas interaction draws, LP3.4's perforated_draws (D155), LP6.0's ten split
 // columns of the CPU record and three reserved GPU columns (C65), LP6.1's two draw-record
-// counts (C64)
-constexpr auto FrameLogFields = std::size_t{110};
+// counts (C64), LP6.2's three parts of lists_ms (C65)
+constexpr auto FrameLogFields = std::size_t{113};
 
 // LP2.0, T0.2: the validation layer's id of "Vertex attribute at location N not consumed
 // by vertex shader" (mirror.json M-PIPE-DEFECT-01), as this machine's layer names it
@@ -5381,11 +5381,17 @@ constexpr auto ShadowCpuMsColumn = std::size_t{82};
 constexpr auto CasterMsColumn = std::size_t{92};
 constexpr auto ListsMsColumn = std::size_t{95};
 constexpr auto RecordOtherMsColumn = std::size_t{104};
+// LP6.2 (C65): flow_ms, and lists_ms's three parts after LP6.1's draw-record columns
+constexpr auto FlowMsColumn = std::size_t{41};
+constexpr auto SurfacesMsColumn = std::size_t{110};
+constexpr auto LinksMsColumn = std::size_t{112};
 
 /**
  * LP6.0 (C65): a frame row's CPU record split: the ten columns are numbers, none below 0;
  * they and shadow_cpu_ms sum to cpu_record_ms within 0.05 ms (eleven fields, each rounded
- * to 0.001 ms); the caster gathering's time is inside the lists'.
+ * to 0.001 ms); the caster gathering's time is inside the lists'. LP6.2 (C65): and
+ * lists_ms's parts, flow_ms, surfaces_ms, lights_ms, caster_ms and links_ms, numbers none
+ * below 0, sum to no more than lists_ms within 0.05 ms.
  */
 void checkCpuSplit(const std::vector<std::string>& row)
 {
@@ -5401,6 +5407,15 @@ void checkCpuSplit(const std::vector<std::string>& row)
   CAPTURE(row[2]);
   CHECK(std::abs(sum - fieldValue(row, CpuRecordMsColumn)) <= 0.05);
   CHECK(fieldValue(row, ListsMsColumn) >= fieldValue(row, CasterMsColumn));
+  auto parts = fieldValue(row, FlowMsColumn) + fieldValue(row, CasterMsColumn);
+  for (auto c = SurfacesMsColumn; c <= LinksMsColumn; ++c)
+  {
+    CAPTURE(c);
+    REQUIRE_FALSE(row[c].empty());
+    CHECK(fieldValue(row, c) >= 0.0);
+    parts += fieldValue(row, c);
+  }
+  CHECK(parts <= fieldValue(row, ListsMsColumn) + 0.05);
 }
 
 } // namespace
@@ -5995,9 +6010,13 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     CHECK(rows[0][RecordOtherMsColumn + 1] == "gpu_gbuffer_ms");
     CHECK(rows[0][RecordOtherMsColumn + 2] == "gpu_ssao_ms");
     CHECK(rows[0][RecordOtherMsColumn + 3] == "gpu_taa_ms");
-    // LP6.1 (C64): and the draw records' two, the last
+    // LP6.1 (C64): and the draw records' two
     CHECK(rows[0][RecordOtherMsColumn + 4] == "records_held");
     CHECK(rows[0][RecordOtherMsColumn + 5] == "record_resolves");
+    // LP6.2 (C65): and lists_ms's three parts, the last
+    CHECK(rows[0][SurfacesMsColumn] == "surfaces_ms");
+    CHECK(rows[0][SurfacesMsColumn + 1] == "lights_ms");
+    CHECK(rows[0][LinksMsColumn] == "links_ms");
     auto lastLit = std::optional<std::vector<std::string>>{};
     auto settledRows = 0;
     for (std::size_t i = 1; i < rows.size(); ++i)

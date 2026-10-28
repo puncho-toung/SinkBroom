@@ -274,6 +274,10 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
   m_stats.portalsFogged = m_lists.portalsFogged;
   m_stats.portalFogPending = m_lists.portalFogPending;
   m_stats.flowMs = m_stats.listsRebuilt ? m_lists.flowMs : 0.0;
+  // LP6.2 (C65): the frontend's surfaces and lights, when built this frame (linksMs is
+  // rebuildLists' own)
+  m_stats.surfacesMs = m_stats.listsRebuilt ? m_lists.surfacesMs : 0.0;
+  m_stats.lightsMs = m_stats.listsRebuilt ? m_lists.lightsMs : 0.0;
   m_stats.unconverged = m_lists.pending;
   m_stats.waitsForTable = m_lists.pending;
   // DX.2: a surface drawn whole until its light triangles are known
@@ -609,10 +613,12 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   if (!table)
   {
     // no material service: nothing to draw, and nothing to wait for
+    const auto linksStart = FrameClock::now();
     m_lists = FrontendLists{};
     m_stageOrder.clear();
     linkRecords();
     m_records.endBuild();
+    m_stats.linksMs = recordMsSince(linksStart);
     return;
   }
 
@@ -683,7 +689,10 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   }
   m_registers.beginBuild();
   m_lightTriangles.beginBuild();
-  m_lists = buildFrontendLists(frontend);
+  auto lists = buildFrontendLists(frontend);
+  // LP6.2 (C65): what follows the frontend, the old lists' release first (linksMs)
+  const auto linksStart = FrameClock::now();
+  m_lists = std::move(lists);
   m_registers.endBuild();
   m_lightTriangles.endBuild(inputs.pool);
   // LP5.2a (D115): R_SortDrawSurfs' order of the new lists, kept with them
@@ -691,6 +700,7 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   // LP6.1 (C64): the new lists' links into the records, then the sweep
   linkRecords();
   m_records.endBuild();
+  m_stats.linksMs = recordMsSince(linksStart);
 }
 
 namespace

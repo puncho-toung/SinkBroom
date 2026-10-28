@@ -66,6 +66,12 @@ bool baseSurfaceDrawn(const MaterialEntry& material)
          || material.deform == em::DeformParticle2;
 }
 
+// LP6.2: a span of the steady clock in milliseconds
+double millisecondsOf(const std::chrono::steady_clock::duration span)
+{
+  return std::chrono::duration<double, std::milli>(span).count();
+}
+
 } // namespace
 
 bool engineLightUsesMathPath(const RenderLightParms& light)
@@ -365,6 +371,8 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
   {
     return lists;
   }
+  // LP6.2: surfacesMs's first part, the prelude
+  const auto surfacesStart = std::chrono::steady_clock::now();
   const auto& view = inputs.view;
   // viewDef->scissor
   const auto viewRect = inputs.scissorForTesting.value_or(viewScissor(view));
@@ -418,6 +426,7 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
     std::ranges::sort(
       records, [](const auto& lhs, const auto& rhs) { return lhs->id < rhs->id; });
   }
+  const auto prelude = std::chrono::steady_clock::now() - surfacesStart;
 
   // LP4.1 (C32, D79): FindViewLightsAndEntities first, over the lights and the brush
   // entities that reference an area; without a tree nothing is flowed and LP2's rules
@@ -507,9 +516,9 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
   flowInputs.scissorForTesting = inputs.scissorForTesting;
   const auto flowStart = std::chrono::steady_clock::now();
   const auto flow = flowView(flowInputs);
-  lists.flowMs = std::chrono::duration<double, std::milli>(
-                   std::chrono::steady_clock::now() - flowStart)
-                   .count();
+  // LP6.2: surfacesMs's second part runs from here
+  const auto flowEnd = std::chrono::steady_clock::now();
+  lists.flowMs = millisecondsOf(flowEnd - flowStart);
   lists.flowed = flow.flowed;
   lists.viewArea = flow.viewArea;
   lists.areasFlowed =
@@ -771,6 +780,9 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       }
     }
   }
+  // LP6.2: the surfaces' time ends, the lights' begins
+  const auto lightsStart = std::chrono::steady_clock::now();
+  lists.surfacesMs = millisecondsOf(prelude + (lightsStart - flowEnd));
 
   // R_AddLights, then the light half of R_AddSingleModel, per light in id order
   if (!records.empty())
@@ -1047,6 +1059,7 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
   // candidates (every chunk and instance of a cast class) and what does not depend on the
   // light (their areas, their space, their material) are gathered once per build
   const auto casterStart = std::chrono::steady_clock::now();
+  lists.lightsMs = millisecondsOf(casterStart - lightsStart);
   const auto anyCaster = std::ranges::any_of(lists.lights, [](const ViewLight& light) {
     return light.shadowLod >= 0 && light.shader;
   });

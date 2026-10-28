@@ -1186,6 +1186,10 @@ constexpr auto RecordOtherMs = std::size_t{104};
 // LP6.1 (C64): the draw records held and resolved, after LP6.0's reserved GPU columns
 constexpr auto RecordsHeld = std::size_t{108};
 constexpr auto RecordResolves = std::size_t{109};
+// LP6.2 (C65): lists_ms's parts after them (flow_ms and caster_ms are the others)
+constexpr auto SurfacesMs = std::size_t{110};
+constexpr auto LightsMs = std::size_t{111};
+constexpr auto LinksMs = std::size_t{112};
 // LPF.1 (C44, P5.21): and the live feed's three (feed_applied, feed_ms, override_bytes);
 // LP5.1 (C45): and the interaction phases' two (math_lights, ambient_lights); LP5.2a
 // (C46): and the stage pass's three (stage_draws, stage_skipped, gpu_stages_ms); LP5.3
@@ -1198,8 +1202,9 @@ constexpr auto RecordResolves = std::size_t{109};
 // (D155): and perforated_draws, the 95th; LP6.0 (C65): and the CPU record's ten split
 // columns after it, the 105th, and the three GPU columns reserved for LP6's passes, the
 // 108th; LP6.1 (C64): and the draw records' two (records_held, record_resolves), the
-// 110th the last
-constexpr auto Count = std::size_t{110};
+// 110th; LP6.2 (C65): and lists_ms's three parts (surfaces_ms, lights_ms, links_ms), the
+// 113th the last
+constexpr auto Count = std::size_t{113};
 } // namespace column
 
 /**
@@ -1226,6 +1231,31 @@ constexpr auto SplitColumns = std::array{
   SplitColumn{"submit_ms", column::SubmitMs},
   SplitColumn{"record_other_ms", column::RecordOtherMs},
 };
+
+// LP6.2 (C65): lists_ms's parts, each inside it and not among SplitColumns: the portal
+// flow, the frontend's surfaces and lights, the caster gathering and what follows the
+// frontend (the old lists' release, the caches' endBuild, the stage order, the links);
+// the rest of lists_ms is the flow's inputs and rebuildLists' own key and set-up
+constexpr auto ListsParts = std::array{
+  SplitColumn{"flow_ms", column::FlowMs},
+  SplitColumn{"surfaces_ms", column::SurfacesMs},
+  SplitColumn{"lights_ms", column::LightsMs},
+  SplitColumn{"caster_ms", column::CasterMs},
+  SplitColumn{"links_ms", column::LinksMs},
+};
+
+// LP6.2: lists_ms's parts as text, each value from value( column )
+template <typename Value>
+std::string listsPartsText(const Value& value)
+{
+  auto text = std::string{};
+  for (const auto& part : ListsParts)
+  {
+    text +=
+      fmt::format("{}{} {}", text.empty() ? "" : ", ", part.name, value(part.index));
+  }
+  return text;
+}
 
 std::vector<LogRow> readFrameLog(const std::filesystem::path& path)
 {
@@ -2313,7 +2343,7 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       "session at {}, its first frame at {}, first snapshot at {}, first batch at {}; "
       "the scene's geometry batches by the first lit frame {}; the {} frames before the "
       "first lit one recorded in {:.1f} ms (the longest {:.1f} "
-      "ms); the first lit frame's record {} ms (lists_ms {}, upload_ms {}, "
+      "ms); the first lit frame's record {} ms (lists_ms {} ({}), upload_ms {}, "
       "record_other_ms {}); the compile thread by the first lit frame: {} jobs, {:.0f} "
       "ms busy ({} pipelines {:.0f} ms, {} shaders {:.0f} ms), its last job so far "
       "ended at {}",
@@ -2332,6 +2362,7 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       longest,
       litField(column::CpuRecordMs),
       litField(column::ListsMs),
+      listsPartsText(litField),
       litField(column::UploadMs),
       litField(column::RecordOtherMs),
       measure.compileAtFirstLit.jobs,
@@ -2473,10 +2504,15 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       splitText(orbit(split.index)));
     if (split.index == column::ListsMs)
     {
-      summary += fmt::format(
-        "| Camera moving: CPU record, split: lists_ms's caster_ms (inside it) | {} "
-        "| — | — |\n",
-        splitText(orbit(column::CasterMs)));
+      // LP6.2 (C65): its five parts, each inside it
+      for (const auto& part : ListsParts)
+      {
+        summary += fmt::format(
+          "| Camera moving: CPU record, split: lists_ms's {} (inside it) | {} | — | — "
+          "|\n",
+          part.name,
+          splitText(orbit(part.index)));
+      }
     }
   }
   // the split of the moving p95, which adds up where the columns' own p95s do not: each
@@ -2505,7 +2541,17 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
         "{}{} {:.2f}", parts.empty() ? "" : ", ", split.name, mean(split.index));
       if (split.index == column::ListsMs)
       {
-        parts += fmt::format(" (caster_ms {:.2f})", mean(column::CasterMs));
+        // LP6.2 (C65): its five parts and what no part names
+        auto named = 0.0;
+        for (const auto& part : ListsParts)
+        {
+          named += mean(part.index);
+        }
+        parts += fmt::format(
+          " ({}; unnamed {:.2f})",
+          listsPartsText(
+            [&](const std::size_t c) { return fmt::format("{:.2f}", mean(c)); }),
+          mean(column::ListsMs) - named);
       }
     }
     summary += fmt::format(
@@ -2617,7 +2663,7 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
         fmt::format("{}{} {}", parts.empty() ? "" : ", ", split.name, field(split.index));
       if (split.index == column::ListsMs)
       {
-        parts += fmt::format(" (caster_ms {})", field(column::CasterMs));
+        parts += fmt::format(" ({})", listsPartsText(field));
       }
     }
     summary += fmt::format(
@@ -2849,7 +2895,7 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       const auto& row = rows[k - 1];
       const auto* record = measure->record(k);
       summary += fmt::format(
-        "  - frame {} at {} (geometry batches {}): CPU record {} ms (lists_ms {}, "
+        "  - frame {} at {} (geometry batches {}): CPU record {} ms (lists_ms {} ({}), "
         "upload_ms {}, record_other_ms {}; {} bytes uploaded), draws {} (interactions "
         "{}), {} skipped, {} pipelines pending\n",
         k,
@@ -2857,6 +2903,7 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
         record ? fmt::format("{}", record->geometryBatches) : std::string{"-"},
         row.at(column::CpuRecordMs),
         row.at(column::ListsMs),
+        listsPartsText([&](const std::size_t c) { return row.at(c); }),
         row.at(column::UploadMs),
         row.at(column::RecordOtherMs),
         row.at(column::BytesUploaded),

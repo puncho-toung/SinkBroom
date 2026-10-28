@@ -255,6 +255,12 @@ struct FrameLogRow
   // recordResolves); empty in a start or stop row, the last columns
   std::optional<std::uint64_t> recordsHeld;
   std::optional<std::uint64_t> recordResolves;
+  // LP6.2 (C65's split of lists_ms, D165), frame rows: lists_ms's parts beside flow_ms
+  // and caster_ms, each 0 when the lists were kept (LitFrameStats::surfacesMs, lightsMs,
+  // linksMs); empty in a start or stop row, the last columns
+  std::optional<double> surfacesMs;
+  std::optional<double> lightsMs;
+  std::optional<double> linksMs;
 };
 
 // the CSV header line, ending in a newline

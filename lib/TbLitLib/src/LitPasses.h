@@ -396,6 +396,15 @@ struct LitFrameStats
   // pipeline is pending, whose chunk is not placed or whose binding failed)
   std::size_t recordsHeld = 0;
   std::size_t recordResolves = 0;
+  // ----- LP6.2 (C65's split of listsMs, D165) -----
+  // the lists' parts when they were built this frame (0 when kept), each on the steady
+  // clock inside listsMs as flowMs and casterMs are: the frontend's surfaces and lights
+  // (FrontendLists::surfacesMs, lightsMs) and rebuildLists after the frontend returns
+  // (the old lists' release, the caches' endBuild, stagePassOrder, linkRecords and the
+  // records' endBuild)
+  double surfacesMs = 0.0;
+  double lightsMs = 0.0;
+  double linksMs = 0.0;
 };
 
 // a recorded draw (setDrawLogForTesting)
