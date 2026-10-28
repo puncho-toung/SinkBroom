@@ -95,6 +95,11 @@ void ImageSlots::setHeaps(TextureHeaps* heaps)
   m_heaps = heaps;
 }
 
+void ImageSlots::setInPlaceRule(InPlaceRule rule)
+{
+  m_inPlace = std::move(rule);
+}
+
 ImageSlotId ImageSlots::request(const MaterialImageKey& key)
 {
   if (const auto it = m_ids.find(key); it != m_ids.end())
@@ -142,7 +147,7 @@ void ImageSlots::refresh(const MaterialTable& table, const std::uint64_t frame)
       if (const auto* change = table.changedImages.find(slot.key);
           change && *change > slot.adoptedChange)
       {
-        reRequest(id, frame, true);
+        reRequest(id, frame, true, true);
       }
     }
   }
@@ -282,6 +287,7 @@ std::uint64_t ImageSlots::evict(const ImageSlotId id, const std::uint64_t frame)
   slot.firstWrittenMip = 0;
   slot.textureBytes = 0;
   slot.pixels.reset();
+  slot.writeInPlace = false;
   slot.waitsForRoom = false;
   slot.floored = false;
   slot.state = State::Evicted;
@@ -347,7 +353,7 @@ bool ImageSlots::floor(const ImageSlotId id, const std::uint64_t frame)
   m_frame = std::max(m_frame, frame);
   slot.floored = true;
   ++m_floors;
-  reRequest(id, frame, true);
+  reRequest(id, frame, true, false);
   return true;
 }
 
@@ -367,6 +373,45 @@ std::size_t ImageSlots::floored() const
     return slot.floored
            && (slot.state == State::Resident || slot.state == State::Replacing);
   }));
+}
+
+std::vector<ImageSlotId> ImageSlots::inPlace() const
+{
+  auto ids = std::vector<ImageSlotId>{};
+  for (ImageSlotId id = 0; id < ImageSlotId(m_slots.size()); ++id)
+  {
+    const auto& slot = m_slots[id];
+    if (slot.writeInPlace && slot.pixels && slot.state == State::Resident)
+    {
+      ids.push_back(id);
+    }
+  }
+  return ids;
+}
+
+void ImageSlots::inPlaceWritten(const ImageSlotId id)
+{
+  auto& slot = m_slots[id];
+  if (!slot.writeInPlace)
+  {
+    return;
+  }
+  slot.writeInPlace = false;
+  slot.pixels.reset();
+  slot.adoptedUsage = slot.replacingUsage;
+  slot.adoptedFormat = slot.replacingFormat;
+  slot.adoptedOverride = slot.replacingOverride;
+  slot.replacingUsage.reset();
+  slot.replacingFormat.reset();
+  slot.replacingOverride = false;
+  ++m_inPlaceWrites;
+  // what the slot binds changed at once, whole: its sets and records go (C28, C64)
+  bump(id);
+}
+
+std::uint64_t ImageSlots::inPlaceWrites() const
+{
+  return m_inPlaceWrites;
 }
 
 std::uint64_t ImageSlots::flooringBytes() const
@@ -467,7 +512,10 @@ std::vector<ImageSlotId> ImageSlots::loading() const
 
 bool ImageSlots::hasLoading() const
 {
-  return std::ranges::any_of(m_slots, writes);
+  // LP6.4b: an in-place write waiting is an upload left too
+  return std::ranges::any_of(m_slots, [](const Slot& slot) {
+    return writes(slot) || (slot.writeInPlace && slot.pixels);
+  });
 }
 
 std::size_t ImageSlots::replacing() const
@@ -616,6 +664,8 @@ void ImageSlots::adopt(
   const auto format = lookup.slot && lookup.slot->image
                         ? std::optional{lookup.slot->image->format}
                         : std::optional<int>{};
+  // LP6.4b (the director's reading (5)): an override's (a fed) image
+  const auto fed = lookup.slot && lookup.slot->override;
   slot.adoptedChange = change;
   if (lookup.image)
   {
@@ -627,11 +677,13 @@ void ImageSlots::adopt(
     {
       slot.replacingUsage = usage;
       slot.replacingFormat = format;
+      slot.replacingOverride = fed;
     }
     else
     {
       slot.adoptedUsage = usage;
       slot.adoptedFormat = format;
+      slot.adoptedOverride = fed;
       slot.state = State::Loading;
       reportUsage();
     }
@@ -640,6 +692,7 @@ void ImageSlots::adopt(
   }
   slot.adoptedUsage = usage;
   slot.adoptedFormat = format;
+  slot.adoptedOverride = fed;
   reportUsage();
   if (slot.state == State::Replacing)
   {
@@ -651,6 +704,7 @@ void ImageSlots::adopt(
     slot.replacedBytes = 0;
     slot.replacingUsage.reset();
     slot.replacingFormat.reset();
+    slot.replacingOverride = false;
     slot.waitsForRoom = false;
     bump(id);
   }
@@ -668,7 +722,10 @@ void ImageSlots::bump(const ImageSlotId id)
 }
 
 void ImageSlots::reRequest(
-  const ImageSlotId id, const std::uint64_t frame, const bool keepComplete)
+  const ImageSlotId id,
+  const std::uint64_t frame,
+  const bool keepComplete,
+  const bool inPlace)
 {
   auto& slot = m_slots[id];
   // LP6.4b: an Evicted slot asked again is a first request's
@@ -676,6 +733,32 @@ void ImageSlots::reRequest(
   m_wanted.erase(id);
   const auto complete = slot.state == State::Resident && slot.texture
                         && slot.firstWrittenMip == 0 && slot.mipLevels > 0;
+  // LP6.4b (C68 (c), D173, A36, the director's reading (5)): a fed slot's complete
+  // texture (made non-permanent) takes a new fed image whose desc equals it and whose
+  // levels fit one frame's uploads for an in-place write: Resident, no new texture, no
+  // bump until every level is written; else Replacing as before
+  if (
+    inPlace && keepComplete && complete && slot.adoptedOverride && !slot.floored
+    && m_request && m_inPlace)
+  {
+    if (const auto lookup = m_request(slot.key);
+        lookup.image && lookup.slot && lookup.slot->override
+        && m_inPlace(*lookup.image, *slot.texture))
+    {
+      slot.pixels = lookup.image;
+      slot.writeInPlace = true;
+      slot.replacingUsage = std::optional{lookup.slot->name.usage};
+      slot.replacingFormat = lookup.slot->image
+                               ? std::optional{lookup.slot->image->format}
+                               : std::optional<int>{};
+      slot.replacingOverride = true;
+      slot.adoptedChange = m_seenChanges;
+      slot.reason.clear();
+      m_pending.erase(id);
+      return;
+    }
+  }
+  slot.writeInPlace = false;
   if (keepComplete && (complete || slot.state == State::Replacing))
   {
     // LPF.1 (C40, D98): the complete texture stays bound, with the slot's version, until
@@ -686,6 +769,10 @@ void ImageSlots::reRequest(
       slot.replaced = std::move(slot.texture);
       slot.replacedMipLevels = slot.mipLevels;
       slot.replacedBytes = slot.textureBytes;
+      // an in-place image not written yet goes with the restart
+      slot.replacingUsage.reset();
+      slot.replacingFormat.reset();
+      slot.replacingOverride = false;
     }
     retire(slot.texture, slot.textureBytes, frame);
     slot.texture = nullptr;
@@ -723,10 +810,12 @@ void ImageSlots::reRequest(
   slot.replacedBytes = 0;
   slot.replacingUsage.reset();
   slot.replacingFormat.reset();
+  slot.replacingOverride = false;
   slot.waitsForRoom = false;
   slot.pixels.reset();
   slot.adoptedUsage.reset();
   slot.adoptedFormat.reset();
+  slot.adoptedOverride = false;
   slot.reason.clear();
   slot.state = State::Pending;
   ++m_stateVersion;
@@ -770,10 +859,12 @@ void ImageSlots::endReplacing(const ImageSlotId id, const bool restore)
     retire(slot.replaced, slot.replacedBytes, m_frame);
     slot.adoptedUsage = slot.replacingUsage;
     slot.adoptedFormat = slot.replacingFormat;
+    slot.adoptedOverride = slot.replacingOverride;
     bump(id);
   }
   slot.replacingUsage.reset();
   slot.replacingFormat.reset();
+  slot.replacingOverride = false;
   slot.replaced = nullptr;
   slot.replacedMipLevels = 0;
   slot.replacedBytes = 0;

@@ -258,6 +258,12 @@ Result<void> RenderThread::createFrameResources(
   m_textureHeaps.setAllocationRoom([this] { return allocationRoom(); });
   m_images.setHeaps(&m_textureHeaps);
   m_textureUploads.setD24s8Supported(m_device.gpu().d24s8Supported);
+  // LP6.4b (C68 (c), D173): a feed of an equal desc whose levels fit a frame's uploads is
+  // written in place
+  m_images.setInPlaceRule(
+    [this](const CachedImage& image, const nvrhi::ITexture& texture) {
+      return m_textureUploads.fitsInPlace(image, texture.getDesc(), m_uploadCap.load());
+    });
   for (auto& event : m_frameEvents)
   {
     event = device.createEventQuery();
@@ -1007,8 +1013,11 @@ bool RenderThread::syncChunks()
 bool RenderThread::recordUploads(nvrhi::ICommandList& commandList)
 {
   // §3.10, D78: before the frame's first pass, within the frame's cap: the chunks first,
-  // then the textures, low mips first (P2.14c)
+  // then the textures, low mips first (P2.14c); LP6.4b (C68 (c), D173): the fed images
+  // written in place before them all, whole
   const auto cap = m_uploadCap.load();
+  const auto inPlaceLeft =
+    m_textureUploads.recordInPlace(commandList, m_images, cap, m_frameUploadBytes);
   const auto recorded =
     m_arenas.recordUploads(
       commandList, arenaChunks(), cap - std::min(cap, m_frameUploadBytes))
@@ -1063,7 +1072,7 @@ bool RenderThread::recordUploads(nvrhi::ICommandList& commandList)
           : m_device.gpu().maxMemoryAllocationCount));
   }
   // D77: what is left for the next frame makes this one unconverged
-  m_uploadsLeft = m_arenas.pending() || texturesLeft;
+  m_uploadsLeft = m_arenas.pending() || texturesLeft || inPlaceLeft;
   // C28: the slots whose written range grew lose their sets before any pass binds them
   eraseChangedSets();
   return true;
@@ -2624,9 +2633,11 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.textureHeaps = m_textureHeaps.heaps();
       row.heapBytes = m_textureHeaps.usedBytes();
       row.texturesDedicated = m_images.dedicatedTextures(&m_textureHeaps);
-      // LP6.4b (C68 (b)): the evictions so far and the slots at the floor now
+      // LP6.4b (C68 (b), (c)): the evictions so far, the slots at the floor now, the fed
+      // images written in place so far
       row.texturesEvicted = m_images.evictions();
       row.texturesFloored = m_images.floored();
+      row.feedsInPlace = m_textureUploads.feedsInPlace();
       m_timers.frameShown(slot, row);
       ++m_framesPresented;
       // LP2.3 (D9): the panel's status line reads the frame's counts
@@ -2806,9 +2817,10 @@ std::optional<double> RenderThread::landFeeds(const FrameClock::time_point now)
   };
   auto largest = std::optional<double>{};
   std::erase_if(m_pendingFeeds, [&](const PendingFeed& feed) {
+    // LP6.4b: an in-place write waiting has not landed
     const auto slotsLanded = std::ranges::all_of(feed.slots, [&](const ImageSlotId id) {
       const auto* slot = m_images.slot(id);
-      return !slot || slot->state == ImageSlots::State::Resident
+      return !slot || (slot->state == ImageSlots::State::Resident && !slot->writeInPlace)
              || slot->state == ImageSlots::State::Default;
     });
     const auto revisionLanded =

@@ -421,8 +421,11 @@ bool TextureUploads::record(
     }
 
     // Image_load.cpp:890-891, as the engine ends its upload; LPF.1 (D98): a Replacing
-    // slot swaps its new texture in here, in the frame that wrote its last level
-    if (m_permanentState)
+    // slot swaps its new texture in here, in the frame that wrote its last level. LP6.4b
+    // (the director's reading (5)): a fed image's texture stays tracked (non-permanent)
+    const auto fed = slot->state == ImageSlots::State::Replacing ? slot->replacingOverride
+                                                                 : slot->adoptedOverride;
+    if (m_permanentState && !fed)
     {
       commandList.setPermanentTextureState(
         slot->texture, nvrhi::ResourceStates::ShaderResource);
@@ -431,6 +434,82 @@ bool TextureUploads::record(
     slots.dropPixels(id);
   }
   return left;
+}
+
+bool TextureUploads::fitsInPlace(
+  const CachedImage& image, const nvrhi::TextureDesc& desc, const std::uint64_t cap) const
+{
+  auto made = std::optional<nvrhi::TextureDesc>{};
+  engineTextureDesc(image, m_d24s8Supported, {})
+    | kdl::transform([&](nvrhi::TextureDesc d) { made = std::move(d); }) | kdl::ignore();
+  if (
+    !made || made->format != desc.format || made->dimension != desc.dimension
+    || made->width != desc.width || made->height != desc.height
+    || made->mipLevels != desc.mipLevels || made->arraySize != desc.arraySize)
+  {
+    return false;
+  }
+  auto bytes = std::uint64_t{0};
+  for (const auto& level : image.levels)
+  {
+    auto ok = false;
+    levelUploadBytes(image, level) | kdl::transform([&](const std::uint64_t b) {
+      bytes += b;
+      ok = true;
+    }) | kdl::ignore();
+    if (!ok)
+    {
+      return false;
+    }
+  }
+  return cap > 0 && bytes <= cap;
+}
+
+bool TextureUploads::recordInPlace(
+  nvrhi::ICommandList& commandList,
+  ImageSlots& slots,
+  const std::uint64_t cap,
+  std::uint64_t& frameBytes)
+{
+  auto left = false;
+  for (const auto id : slots.inPlace())
+  {
+    const auto* slot = slots.slot(id);
+    const auto image = slot->pixels;
+    auto bytes = std::uint64_t{0};
+    for (const auto& level : image->levels)
+    {
+      bytes += levelUploadBytes(*image, level) | kdl::value_or(std::uint64_t{0});
+    }
+    // the frame's first in-place write always goes (the rule kept it within the cap);
+    // another that would pass the cap waits whole for the next frame (A36)
+    if (cap == 0 || (frameBytes > 0 && frameBytes + bytes > cap))
+    {
+      left = true;
+      continue;
+    }
+    // Image_load.cpp:883-889: each side's level with GetRowPitch's pitch, every level
+    for (const auto& level : image->levels)
+    {
+      const auto pitch = engineRowPitch(image->format, level.width).value_or(0);
+      commandList.writeTexture(
+        slot->texture,
+        std::uint32_t(level.destZ),
+        std::uint32_t(level.level),
+        image->data.data() + level.offset,
+        std::size_t(pitch));
+    }
+    frameBytes += bytes;
+    m_uploadedBytes += bytes;
+    ++m_feedsInPlace;
+    slots.inPlaceWritten(id);
+  }
+  return left;
+}
+
+std::uint64_t TextureUploads::feedsInPlace() const
+{
+  return m_feedsInPlace;
 }
 
 void TextureUploads::setPermanentStateForTesting(const bool permanent)

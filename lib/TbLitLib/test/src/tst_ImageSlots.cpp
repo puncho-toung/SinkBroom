@@ -95,9 +95,14 @@ struct FakeService
   std::map<std::string, int> askedFor;
 
   void publish(
-    const MaterialImageKey& key, const bool withImage, const std::string& why = {})
+    const MaterialImageKey& key,
+    const bool withImage,
+    const std::string& why = {},
+    const bool fed = false)
   {
     auto slot = std::make_shared<ImageCacheSlot>();
+    // LP6.4b: an override's image (fed)
+    slot->override = fed;
     if (withImage)
     {
       auto image = std::make_shared<CachedImage>();
@@ -615,6 +620,69 @@ TEST_CASE("ImageSlots")
     CHECK(service.askedFor[key.name] == asked + 1);
     slots.collectRetired(6);
     CHECK(slots.retiredBytes() == 0u);
+  }
+
+  SECTION("LP6.4b (C68 (c), D173): a fed slot's equal image is written in place")
+  {
+    auto service = FakeService{};
+    const auto key = keyOf("textures/fed", UsageDiffuse);
+    service.publish(key, true, {}, true);
+    auto slots = ImageSlots{};
+    slots.setRequest(service.request());
+    auto fits = true;
+    slots.setInPlaceRule([&](const CachedImage&, const nvrhi::ITexture&) { return fits; });
+    const auto id = slots.request(key);
+    CHECK(slots.slot(id)->adoptedOverride);
+    const auto texture = fakeTexture();
+    slots.attachTexture(id, texture, 3, 84);
+    slots.levelsWritten(id, 0);
+    slots.dropPixels(id);
+    static_cast<void>(slots.takeChangedSlots());
+    const auto version = slots.slot(id)->version;
+
+    // fed again, the rule passes: Resident kept, its texture bound, the image held for
+    // the write, no bump until it is written
+    service.change(key);
+    service.publish(key, true, {}, true);
+    slots.refresh(service.table, 4);
+    CHECK(slots.slot(id)->state == ImageSlots::State::Resident);
+    CHECK(slots.slot(id)->writeInPlace);
+    CHECK(slots.slot(id)->pixels);
+    CHECK(slots.slot(id)->texture == texture);
+    CHECK(slots.slot(id)->version == version);
+    CHECK(slots.inPlace() == std::vector<ImageSlotId>{id});
+    CHECK(slots.loading().empty());
+    CHECK(slots.hasLoading());
+    CHECK(slots.takeChangedSlots().empty());
+    slots.inPlaceWritten(id);
+    CHECK_FALSE(slots.slot(id)->writeInPlace);
+    CHECK_FALSE(slots.slot(id)->pixels);
+    CHECK(slots.slot(id)->version == version + 1);
+    CHECK(slots.takeChangedSlots() == std::vector<ImageSlotId>{id});
+    CHECK(slots.inPlaceWrites() == 1u);
+    CHECK_FALSE(slots.hasLoading());
+
+    // the rule fails (another desc, or over the budget): Replacing as before
+    fits = false;
+    service.change(key);
+    service.publish(key, true, {}, true);
+    slots.refresh(service.table, 6);
+    CHECK(slots.slot(id)->state == ImageSlots::State::Replacing);
+    CHECK_FALSE(slots.slot(id)->writeInPlace);
+    CHECK(slots.slot(id)->replaced == texture);
+
+    // a file's image (no override) is never written in place
+    const auto fileKey = keyOf("textures/file", UsageDiffuse);
+    service.publish(fileKey, true);
+    const auto file = slots.request(fileKey);
+    slots.attachTexture(file, fakeTexture(), 3, 84);
+    slots.levelsWritten(file, 0);
+    slots.dropPixels(file);
+    fits = true;
+    service.change(fileKey);
+    service.publish(fileKey, true);
+    slots.refresh(service.table, 8);
+    CHECK(slots.slot(file)->state == ImageSlots::State::Replacing);
   }
 
   SECTION("LP6.4b (C68 (b)): the mip floor through Replacing, the complete one bound")

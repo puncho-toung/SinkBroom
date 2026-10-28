@@ -76,6 +76,10 @@ std::vector<MaterialImageKey> lp2IntrinsicKeys();
 // what the table answers for a key now (MaterialService::image; tests fake it)
 using ImageRequest = std::function<ImageLookup(const MaterialImageKey&)>;
 
+// LP6.4b (C68 (c), D173): whether image can be written into texture in place: an equal
+// desc and every level within one frame's upload budget (the uploader's rule)
+using InPlaceRule = std::function<bool(const CachedImage&, const nvrhi::ITexture&)>;
+
 /**
  * C28, D37, P2.14 (LP2.1): the render thread's image-slot table. A slot per
  * MaterialImageKey holds {texture, version, state, the written mip range}. A request
@@ -154,9 +158,12 @@ public:
     std::shared_ptr<const CachedImage> pixels;
     // U2.1: the two facts the draws read of the service's slot it was answered with
     // (the record's usage, which the PBR rename may change, and its image's format), held
-    // as values: a reference to that slot would keep the image's bytes past dropPixels
+    // as values: a reference to that slot would keep the image's bytes past dropPixels.
+    // LP6.4b (C68 (c), the director's reading (5)): and whether the image is an
+    // override's (ImageCacheSlot::override, a fed one): its texture is not made permanent
     std::optional<int> adoptedUsage;
     std::optional<int> adoptedFormat;
+    bool adoptedOverride = false;
     // the table's change count when it was answered
     std::uint64_t adoptedChange = 0;
     // LPF.1 (C40, D98): Replacing: the complete texture the slot binds while its new one
@@ -164,9 +171,15 @@ public:
     nvrhi::TextureHandle replaced;
     int replacedMipLevels = 0;
     std::uint64_t replacedBytes = 0;
-    // the new image's facts (adoptedUsage, adoptedFormat), the draws' from the swap on
+    // the new image's facts (adoptedUsage, adoptedFormat, adoptedOverride), the draws'
+    // from the swap on (LP6.4b: or from an in-place write's end)
     std::optional<int> replacingUsage;
     std::optional<int> replacingFormat;
+    bool replacingOverride = false;
+    // LP6.4b (C68 (c), D173): Resident, a fed image in pixels that the frame's uploads
+    // write into the complete texture whole (its levels all in one frame), the version
+    // bumped once at the end
+    bool writeInPlace = false;
     // D102: Replacing, the new texture waits for the allocation headroom (said once)
     bool waitsForRoom = false;
     // LP6.4b (C68 (b), the director's reading (4)): at the mip floor: its textures are
@@ -214,12 +227,17 @@ private:
   std::unordered_set<ImageSlotId> m_wanted;
   std::uint64_t m_evictions = 0;
   std::uint64_t m_floors = 0;
+  // LP6.4b (C68 (c)): the in-place rule, and the fed images written in place so far
+  InPlaceRule m_inPlace;
+  std::uint64_t m_inPlaceWrites = 0;
 
 public:
   ImageSlots() = default;
 
   // the service's answers (MaterialService::image); none: every slot stays Pending
   void setRequest(ImageRequest request);
+  // LP6.4b (C68 (c)): the uploader's in-place rule; none: every feed is Replacing
+  void setInPlaceRule(InPlaceRule rule);
   // LP6.4a: the heaps the slots' textures may be placed in, whose ranges are let go with
   // them (render thread, before the first texture)
   void setHeaps(TextureHeaps* heaps);
@@ -297,6 +315,17 @@ public:
   // their swaps let go
   std::uint64_t flooringBytes() const;
 
+  /**
+   * LP6.4b (C68 (c), D173, A36, the director's reading (5)): the Resident slots whose fed
+   * image waits to be written into their complete texture in place, in id order, and the
+   * uploader's end of one: every level written in this frame, the bytes let go, the new
+   * image's facts the draws', the version bumped once (what the frame binds is the whole
+   * new image from here, the whole old one before)
+   */
+  std::vector<ImageSlotId> inPlace() const;
+  void inPlaceWritten(ImageSlotId slot);
+  std::uint64_t inPlaceWrites() const;
+
   // what a slot binds now
   Binding binding(ImageSlotId slot) const;
 
@@ -359,8 +388,10 @@ private:
     bool reported = true);
   void bump(ImageSlotId id);
   // asks for a slot's image again; keepComplete (a change, LPF.1): a slot holding a
-  // complete texture keeps it bound and is Replacing
-  void reRequest(ImageSlotId id, std::uint64_t frame, bool keepComplete);
+  // complete texture keeps it bound and is Replacing; inPlace (LP6.4b, a changed file):
+  // a fed one whose new image the rule passes takes it for an in-place write instead
+  void reRequest(
+    ImageSlotId id, std::uint64_t frame, bool keepComplete, bool inPlace = false);
   // a Replacing slot's replaced texture is retired and its new one bound (the swap), or
   // (restore) the replaced one bound again and the new one retired
   void endReplacing(ImageSlotId id, bool restore);

@@ -12716,7 +12716,9 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu2]")
         const auto before = *rig.frames->last();
         REQUIRE(waitFor([&] { return session.snapshotSlotFree(); }, 10000ms, false));
         REQUIRE(session.offerSnapshot(lp22aSnapshot(feedBatchMapText(2000), root, 7, 2)));
-        const auto landing = rig.feed(constantOverride(64, 64, {30, 200, 90}), false);
+        // LP6.4b: a size of its own, so that it is Replacing (an equal desc would be
+        // written in place)
+        const auto landing = rig.feed(constantOverride(128, 128, {30, 200, 90}), false);
         // the batch's own end draws the frame that settles (geometryTick)
         REQUIRE(waitFor(
           [&] {
@@ -12934,6 +12936,198 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu2]")
     }
     CHECK(resetDispatcher());
     messages.print("LPF.1 Replacing, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  // LP6.4b (C68 (c), D173, A36, D102, the director's reading (5)): a fed image's texture
+  // is never made permanent; a later feed of an equal desc whose levels fit one frame's
+  // uploads is written into it in place, whole, in the frame's first uploads, the version
+  // bumped once; else Replacing as before
+  SECTION("LP6.4b step 2: an equal desc written in place; else Replacing (A36)")
+  {
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      const auto logPath =
+        std::filesystem::temp_directory_path() / "TbLitLibTest-lp64b-in-place.csv";
+      auto rig = FeedRig{instance, root, logPath};
+      auto& session = *rig.session;
+      struct Seen
+      {
+        std::uint64_t inPlace = 0;
+        std::size_t resident = 0;
+        std::uint64_t heapBytes = 0;
+        ImageSlotId floor = NoImageSlot;
+      };
+      const auto seen = [&] {
+        auto result = Seen{};
+        REQUIRE(inFrame(session, [&](RenderFrameAccess& access) {
+          result.inPlace = access.textures.feedsInPlace();
+          result.resident = access.images.resident();
+          result.heapBytes = access.heaps.usedBytes();
+          result.floor = access.images.find(rig.floorKey).value_or(NoImageSlot);
+        }));
+        return result;
+      };
+
+      // the fixture's 64 x 32 floor fed at 64 x 64: another desc, Replacing (a fed
+      // texture from here on)
+      const auto beforeFirst = *rig.frames->last();
+      const auto black = rig.feed({0, 0, 0});
+      const auto first = checkReplacement(black.frames, beforeFirst, "the first feed");
+      const auto blackProbe = rig.probe();
+      settle(session);
+      REQUIRE(waitQuiet(session));
+      const auto start = seen();
+      const auto allocations = session.deviceMemoryAllocations();
+
+      // (a) fed again at 64 x 64: in place in the first frame after its publication: the
+      // same texture, the version once more, nothing made, nothing more held
+      const auto beforeWhite = *rig.frames->last();
+      const auto white = rig.feed({255, 255, 255});
+      const auto whiteProbe = rig.probe();
+      settle(session);
+      REQUIRE(waitQuiet(session));
+      const auto afterWhite = seen();
+      for (const auto& frame : white.frames)
+      {
+        CAPTURE(frame.index);
+        CHECK(frame.texture == beforeWhite.texture);
+        CHECK_FALSE(frame.intrinsic);
+        CHECK(frame.version == beforeWhite.version + 1);
+        CHECK(frame.state == ImageSlots::State::Resident);
+      }
+      CHECK(afterWhite.inPlace == start.inPlace + 1);
+      CHECK(afterWhite.resident == start.resident);
+      CHECK(afterWhite.heapBytes == start.heapBytes);
+      CHECK(session.deviceMemoryAllocations() == allocations);
+      CHECK(white.settled);
+      // the picture is the new image's from the frame that wrote it: the model's
+      const auto colour = rig.feed({200, 120, 60});
+      const auto colourProbe = rig.probe();
+      checkProbe(blackProbe, whiteProbe, colourProbe);
+      CHECK(colourProbe.hdr != whiteProbe.hdr);
+      CHECK(colour.frames.front().texture == beforeWhite.texture);
+      settle(session);
+      const auto afterColour = seen();
+      CHECK(afterColour.inPlace == start.inPlace + 2);
+      CHECK(session.deviceMemoryAllocations() == allocations);
+
+      // (b) a size change: Replacing as before, nothing in place
+      const auto beforeLarger = *rig.frames->last();
+      const auto larger = rig.feed({30, 200, 90}, 128);
+      const auto replaced =
+        checkReplacement(larger.frames, beforeLarger, "(b) 128 x 128");
+      settle(session);
+      REQUIRE(waitQuiet(session));
+      const auto afterLarger = seen();
+      CHECK(afterLarger.inPlace == afterColour.inPlace);
+
+      // (c) an equal desc whose levels pass the frame's upload budget: Replacing, and no
+      // frame binds levels from two feeds (A36: the old texture whole until the new one
+      // is, one swap)
+      session.setUploadCapForTesting(8 * 1024);
+      const auto beforeCapped = *rig.frames->last();
+      const auto capped = rig.feed({220, 40, 40}, 128);
+      const auto twoFeeds =
+        checkReplacement(capped.frames, beforeCapped, "(c) 128 x 128 over an 8 KB cap");
+      CHECK(capped.frames.size() >= 3u);
+      CHECK(capped.settled);
+      session.setUploadCapForTesting(UploadBytesPerFrame);
+      settle(session);
+      REQUIRE(waitQuiet(session));
+      const auto afterCapped = seen();
+      CHECK(afterCapped.inPlace == afterColour.inPlace);
+
+      // (d) a feed to an Evicted slot: asked for nothing while no frame draws it, then a
+      // plain re-request when one does (the newest image arrives as a first one)
+      // the camera turned up at the ceiling: the floor out of the view
+      const auto awayView = litCamera({60, 0, 80}, {0, 0, 1}, {1, 0, 0});
+      REQUIRE(settledChain(session, awayView));
+      REQUIRE(waitQuiet(session));
+      auto evictedBytes = std::uint64_t{0};
+      REQUIRE(inFrame(session, [&](RenderFrameAccess& access) {
+        evictedBytes = access.images.evict(afterCapped.floor, access.frameIndex);
+      }));
+      REQUIRE(evictedBytes > 0u);
+      REQUIRE(waitQuiet(session));
+      const auto fed = rig.feed({90, 160, 230}, 128);
+      auto states = std::set<ImageSlots::State>{};
+      for (const auto& frame : fed.frames)
+      {
+        states.insert(frame.state);
+      }
+      CHECK(states == std::set<ImageSlots::State>{ImageSlots::State::Evicted});
+      const auto evictedSeen = seen();
+      CHECK(evictedSeen.inPlace == afterColour.inPlace);
+      const auto back = std::chrono::steady_clock::now();
+      REQUIRE(settledChain(session, feedCamera()));
+      REQUIRE(waitQuiet(session));
+      auto backStates = std::vector<ImageSlots::State>{};
+      for (const auto& frame : rig.frames->since(back))
+      {
+        if (backStates.empty() || backStates.back() != frame.state)
+        {
+          backStates.push_back(frame.state);
+        }
+      }
+      CHECK(rig.frames->last()->state == ImageSlots::State::Resident);
+      CHECK(
+        std::ranges::find(backStates, ImageSlots::State::Replacing) == backStates.end());
+      const auto backSeen = seen();
+      CHECK(backSeen.inPlace == afterColour.inPlace);
+      const auto stateName = [](const ImageSlots::State state) {
+        switch (state)
+        {
+        case ImageSlots::State::Pending:
+          return "Pending";
+        case ImageSlots::State::Default:
+          return "Default";
+        case ImageSlots::State::Loading:
+          return "Loading";
+        case ImageSlots::State::Resident:
+          return "Resident";
+        case ImageSlots::State::Replacing:
+          return "Replacing";
+        case ImageSlots::State::Evicted:
+          return "Evicted";
+        }
+        return "?";
+      };
+      auto backText = std::vector<std::string>{};
+      for (const auto state : backStates)
+      {
+        backText.push_back(stateName(state));
+      }
+      std::cout << fmt::format(
+        "LP6.4b step 2: {}; (a) in place: white {} frames, latency {:.2f} ms (the first "
+        "feed's, Replacing: {:.2f} ms), colour {:.2f} ms, feeds_in_place {} -> {}, "
+        "textures_resident {} -> {}, heap_bytes {} -> {}, allocations {} -> {}; {}; {}; "
+        "(d) Evicted ({} B) while fed: {} frames all Evicted, then drawn: {}\n",
+        first.text,
+        white.frames.size(),
+        white.latencyMs,
+        black.latencyMs,
+        colour.latencyMs,
+        start.inPlace,
+        afterColour.inPlace,
+        start.resident,
+        afterWhite.resident,
+        start.heapBytes,
+        afterWhite.heapBytes,
+        allocations,
+        session.deviceMemoryAllocations(),
+        replaced.text,
+        twoFeeds.text,
+        evictedBytes,
+        fed.frames.size(),
+        fmt::join(backText, " -> "));
+      rig.close("LP6.4b step 2");
+    }
+    CHECK(resetDispatcher());
+    messages.print("LP6.4b step 2, validation");
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }

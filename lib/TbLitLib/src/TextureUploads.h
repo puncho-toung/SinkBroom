@@ -100,7 +100,10 @@ int mipFloorLevel(std::uint32_t width, std::uint32_t height, int levels);
  * heap made gets as before (its virtual texture let go and made again non-virtual).
  * LP6.4b (C68 (b), the director's reading (4)): a floored slot's texture is made from the
  * image's levels from its mip floor on (mipFloorLevel): their size, their count, their
- * bytes, each written as its level less the floor's. Render thread only.
+ * bytes, each written as its level less the floor's. LP6.4b (C68 (c), the director's
+ * reading (5)): a fed (override) image's texture is never made permanent (its state
+ * stays tracked from the desc's keepInitialState), so that a later feed of an equal desc
+ * is written into it in place (recordInPlace). Render thread only.
  */
 class TextureUploads
 {
@@ -132,6 +135,7 @@ private:
   std::uint64_t m_largestPlacedBytes = 0;
   std::uint64_t m_largestDedicatedBytes = 0;
   DedicatedCounts m_dedicated;
+  std::uint64_t m_feedsInPlace = 0;
 
 public:
   explicit TextureUploads(bool d24s8Supported = false);
@@ -153,6 +157,27 @@ public:
     std::uint64_t& frameBytes,
     const std::function<bool()>& allocationRoom = {},
     TextureHeaps* heaps = nullptr);
+
+  /**
+   * LP6.4b (C68 (c), D173, A36, the director's reading (5)): before every other upload of
+   * the frame (so the frame's first uploads), each Resident slot's fed image waiting for
+   * an in-place write is written into its complete texture, every level in this frame
+   * (writeTexture, the texture's state tracked: a fed texture is never made permanent, so
+   * NVRHI takes it from its keepInitialState ShaderResource, moves it to CopyDest for the
+   * copy and back by the frame's end), then ImageSlots::inPlaceWritten; one that would
+   * pass cap after another in the frame waits for the next (whether one is left).
+   */
+  bool recordInPlace(
+    nvrhi::ICommandList& commandList,
+    ImageSlots& slots,
+    std::uint64_t cap,
+    std::uint64_t& frameBytes);
+  // LP6.4b (C68 (c), D173): whether image's texture would equal desc (format, dimension,
+  // width, height, levels, array size) and its every level fit cap together
+  bool fitsInPlace(
+    const CachedImage& image, const nvrhi::TextureDesc& desc, std::uint64_t cap) const;
+  // the fed images written in place so far
+  std::uint64_t feedsInPlace() const;
 
   /**
    * Tests: whether a finished texture's state is made permanent (as the engine's, the
