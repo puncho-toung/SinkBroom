@@ -64,7 +64,7 @@ double secondsSince(const Clock::time_point start)
 void sortEnginePaths(std::vector<std::string>& names)
 {
   // idSort_PathStr
-  std::sort(names.begin(), names.end(), [](const auto& lhs, const auto& rhs) {
+  std::ranges::sort(names, [](const auto& lhs, const auto& rhs) {
     return compareEnginePaths(lhs, rhs) < 0;
   });
 }
