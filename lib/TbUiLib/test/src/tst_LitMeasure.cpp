@@ -46,6 +46,7 @@
 #include "lit/GameDeclSource.h"
 #include "lit/LitSession.h"
 #include "lit/MaterialService.h"
+#include "lit/SceneGeometry.h"
 #include "mdl/BrushNode.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GameInfo.h"
@@ -940,6 +941,8 @@ struct FrameRecord
   std::uint64_t snapshotsTaken = 0;
   std::uint64_t tableVersion = 0;
   lit::CompileTimings compile;
+  // LP6.3 (C67 (b)): the scene's first batch as the render thread last synced it
+  lit::FirstBatchCounts firstBatch;
 };
 
 /**
@@ -1033,7 +1036,8 @@ public:
         session->geometryBatchesForTesting(),
         session->snapshotsTakenForTesting(),
         panel.materialsVersionForTesting(),
-        session->compileTimingsForTesting()});
+        session->compileTimingsForTesting(),
+        session->firstBatchForTesting()});
     }
     if (now - m_lastVram > 250ms)
     {
@@ -1455,6 +1459,11 @@ LineFit lineFitOf(
 struct StartMeasure
 {
   std::string label;
+  // LP6.3 (P8.18): cold (the index folder empty: the scan), memory (the panel's index),
+  // file (the memory copy dropped: the persisted index, §10's warm Start)
+  std::string kind;
+  // LP6.3 (C67 (c)): the programs the compile thread was asked for, settled
+  std::vector<lit::ProgramReport> programs;
   std::uint64_t generation = 0;
   Clock::time_point pressed;
   // the frames the GUI thread saw until the Start had settled for good
@@ -2043,10 +2052,11 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
   };
 
   // one Start: the press, a lit frame that skipped no draw, then settled for good
-  const auto startPreview = [&](const std::string& label) {
+  const auto startPreview = [&](const std::string& label, const std::string& kind) {
     sampler.reset();
     auto measure = StartMeasure{};
     measure.label = label;
+    measure.kind = kind;
     measure.pressed = Clock::now();
     panel.start();
     measure.phaseAMs = millisecondsBetween(measure.pressed, Clock::now());
@@ -2071,6 +2081,7 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     measure.findSettled();
     REQUIRE(measure.settledFrame > 0);
     measure.compileAtSettled = session->compileTimingsForTesting();
+    measure.programs = session->programReport();
     // LP7.2 (P7.14): the scene's models and the parse thread's model work, settled
     measure.models = session->modelTotalsForTesting();
     if (const auto* service = session->materialServiceForTesting())
@@ -2105,7 +2116,9 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
   };
 
   // ----- the first Start: the driver's shader cache as it is -----
-  auto first = startPreview("first");
+  // LP6.3 (P8.18): cold, the index folder empty (removed above): the containers scanned
+  auto first = startPreview("first", "cold");
+  CHECK(first.service.sourceTables == lit::ContainerTablesOrigin::Kind::Scan);
   {
     auto* container = panel.findChild<QWidget*>("LitPreviewPanel_Container");
     REQUIRE(container != nullptr);
@@ -2196,7 +2209,9 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
   const auto firstReport = reports.back();
 
   // ----- the second Start: warm; then a material reload in the running session -----
-  auto second = startPreview("second");
+  // LP6.3: the panel's index in memory
+  auto second = startPreview("second", "memory");
+  CHECK(second.service.sourceTables == lit::ContainerTablesOrigin::Kind::Memory);
   auto* secondSession = panel.sessionForTesting();
   REQUIRE(secondSession != nullptr);
   const auto reloadAt = Clock::now();
@@ -2264,8 +2279,12 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
   keepRecords(second);
   const auto allocationsAfterSecondStop = stopPreview();
 
-  // ----- the third Start -----
-  auto third = startPreview("third");
+  // ----- the third Start: the index's memory copy dropped, as at a new launch -----
+  // LP6.3 (P8.18): the first Start of a launch with the persisted index, §10's warm
+  // figure
+  panel.dropContainerIndexMemoryForTesting();
+  auto third = startPreview("third", "file");
+  CHECK(third.service.sourceTables == lit::ContainerTablesOrigin::Kind::File);
   keepRecords(third);
   const auto allocationsAfterThirdStop = stopPreview();
   const auto runSeconds = std::chrono::duration<double>(Clock::now() - runStart).count();
@@ -2385,6 +2404,68 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       }
     }
     const auto& service = measure.service;
+    // LP6.3 (C67 (b)): the session's first batch, as the frames saw it
+    const auto msAt = [&](const FrameRecord& record) {
+      return msText(millisecondsBetween(measure.pressed, record.at));
+    };
+    auto firstBatch = std::string{"the first batch: not seen"};
+    if (!measure.records.empty())
+    {
+      const auto& counts = measure.records.back().firstBatch;
+      const auto early = std::ranges::find_if(
+        measure.records, [](const auto& r) { return r.firstBatch.earlyCells > 0; });
+      const auto camera = std::ranges::find_if(measure.records, [](const auto& r) {
+        return r.firstBatch.whole
+               || (r.firstBatch.viewJobs > 0
+                   && r.firstBatch.earlyViewCells >= r.firstBatch.viewJobs);
+      });
+      const auto whole = std::ranges::find_if(
+        measure.records, [](const auto& r) { return r.firstBatch.whole; });
+      firstBatch = fmt::format(
+        "the first batch: {} world cells ({} in the view's frustum) and {} brush-entity "
+        "jobs; ",
+        counts.worldJobs,
+        counts.viewJobs,
+        counts.entityJobs);
+      firstBatch +=
+        camera != measure.records.end()
+          ? fmt::format(
+              "the camera's {} cells at {} (frame {}; {} cells applied early by then)",
+              counts.viewJobs,
+              msAt(*camera),
+              camera->status.frames,
+              camera->firstBatch.earlyCells)
+          : std::string{"the camera's cells not seen"};
+      firstBatch += early != measure.records.end()
+                      ? fmt::format(
+                          ", the first early cells at {} (frame {})",
+                          msAt(*early),
+                          early->status.frames)
+                      : std::string{", no cell applied early"};
+      firstBatch += whole != measure.records.end()
+                      ? fmt::format(
+                          ", the batch whole at {} (frame {}; {} cells applied early)",
+                          msAt(*whole),
+                          whole->status.frames,
+                          whole->firstBatch.earlyCells)
+                      : std::string{", the batch never seen whole"};
+    }
+    // LP6.3 (C67 (c)): the frames after the first lit one that waited for a pipeline, to
+    // the settled frame (the frame log's rows: every frame)
+    auto pendingFrames = std::string{};
+    if (measure.firstLitFrame > 0)
+    {
+      const auto last = std::max(measure.settledFrame, measure.firstLitFrame);
+      for (auto k = measure.firstLitFrame + 1; k <= last && k <= rows.size(); ++k)
+      {
+        const auto pending = rows[k - 1].number(column::PendingPipelines).value_or(0);
+        if (pending > 0)
+        {
+          pendingFrames +=
+            fmt::format("{}frame {} ({})", pendingFrames.empty() ? "" : ", ", k, pending);
+        }
+      }
+    }
     return fmt::format(
       "the material service's build {}: the containers' {} {:.0f} ms ({}), the decl read "
       "{:.0f} ms, its first table published at {} (seen by the GUI thread at {}); the "
@@ -2394,7 +2475,8 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       "ms); the first lit frame's record {} ms (lists_ms {} ({}), upload_ms {}, "
       "record_other_ms {}); the compile thread by the first lit frame: {} jobs, {:.0f} "
       "ms busy ({} pipelines {:.0f} ms, {} shaders {:.0f} ms), its last job so far "
-      "ended at {}",
+      "ended at {}; the frames after the first lit one to the settled one with "
+      "pending_pipelines > 0: {}; {}",
       service.builds,
       containerSourceName(service.sourceTables),
       service.sourceSeconds * 1000.0,
@@ -2421,20 +2503,60 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       measure.compileAtFirstLit.pipelineMs,
       measure.compileAtFirstLit.shaders,
       measure.compileAtFirstLit.shaderMs,
-      msText(measure.compileEndAtFirstLitMs));
+      msText(measure.compileEndAtFirstLitMs),
+      pendingFrames.empty() ? std::string{"none"} : pendingFrames,
+      firstBatch);
+  };
+  // LP6.3 (P8.18): the cold Start against ≤ 5 s, the file Start is §10's warm figure
+  const auto startKindText = [](const StartMeasure& measure) {
+    if (measure.kind == "cold")
+    {
+      return std::string{"cold: the index folder empty, the containers scanned"};
+    }
+    if (measure.kind == "memory")
+    {
+      return std::string{"the panel's container index in memory"};
+    }
+    return std::string{"the index file: its memory copy dropped, as at a new launch"};
   };
   for (const auto* measure : {&first, &second, &third})
   {
+    const auto cold = measure->kind == "cold";
+    const auto file = measure->kind == "file";
     summary += fmt::format(
-      "| Start → first lit frame, {} Start | {} (frame {}; no draw skipped from {}, "
-      "frame {}); {} | ≤ 1 s warm, ≤ 5 s cold | {} |\n",
+      "| Start → first lit frame, {} Start ({}) | {} (frame {}; no draw skipped from {}, "
+      "frame {}); {} | {} | {} |\n",
       measure->label,
+      startKindText(*measure),
       msText(measure->firstLitMs),
       measure->firstLitFrame,
       msText(measure->completeLitMs),
       measure->completeLitFrame,
       startBreakdown(*measure),
-      pass(measure->firstLitMs <= 1000.0));
+      cold   ? "≤ 5 s cold"
+      : file ? "≤ 1 s warm = the first Start of a launch with the persisted index"
+             : "≤ 1 s (a repeat Start)",
+      pass(measure->firstLitMs <= (cold ? 5000.0 : 1000.0)));
+  }
+  // LP6.3 (C67 (c)): the programs the compile thread was asked for by the settled start
+  // view (each with its state keys among the start list's or a draw's)
+  for (const auto* measure : {&first, &second, &third})
+  {
+    auto names = std::string{};
+    for (const auto& program : measure->programs)
+    {
+      names += fmt::format(
+        "{}{} {}{}",
+        names.empty() ? "" : ", ",
+        program.program,
+        program.name,
+        program.enabled ? "" : " (disabled)");
+    }
+    summary += fmt::format(
+      "| Programs asked for by the settled start view, {} Start | {}: {} | — | — |\n",
+      measure->label,
+      measure->programs.size(),
+      names);
   }
   // LP7.2 (C52, C56, P7.14): the models, against LP5.3's first lit frames (1.33-1.41 s)
   for (const auto* measure : {&first, &second, &third})
