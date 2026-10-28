@@ -919,6 +919,13 @@ void RenderThread::setTestChunks(std::shared_ptr<const std::map<ChunkKey, Chunk>
   m_wake.notify_all();
 }
 
+void RenderThread::setBeforeChunkJob(
+  std::function<void(const std::vector<CellRef>&)> hook)
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  m_beforeChunkJob = std::move(hook);
+}
+
 void RenderThread::setUploadCap(const std::uint64_t bytes)
 {
   m_uploadCap = bytes;
@@ -1388,6 +1395,11 @@ bool RenderThread::recordLitPasses(
     inputs.lights = m_geometry->lightTable();
     // LP4.2a (C37): the probes, which the view chooses from every frame
     inputs.probes = m_geometry->probeTable();
+    // LP6.4a step 0b (C67 (b), D152): the first batch's early cells are no scene pass 6
+    // holds its shadows across
+    const auto& batch = m_geometry->firstBatch();
+    inputs.sceneWhole =
+      m_arenaTestChunks || batch.whole || batch.worldJobs + batch.entityJobs == 0;
   }
   if (m_materials)
   {
@@ -1680,12 +1692,15 @@ void RenderThread::runLoop()
       // applied; ReadyForSnapshot then says the inbox is free again
       auto snapshot = std::shared_ptr<const Snapshot>{};
       auto previous = std::shared_ptr<const Snapshot>{};
+      auto beforeChunkJob =
+        std::optional<std::function<void(const std::vector<CellRef>&)>>{};
       if (m_snapshotInbox && (!m_geometry || m_geometry->readyForSnapshot()))
       {
         snapshot = std::move(m_snapshotInbox);
         previous = std::exchange(m_snapshot, snapshot);
         m_snapshotInboxFull = false;
         ++m_snapshotsTaken;
+        beforeChunkJob = std::exchange(m_beforeChunkJob, std::nullopt);
       }
       lock.unlock();
       // B0.9: the snapshot taken before is freed here, outside m_mutex, which the GUI
@@ -1703,6 +1718,10 @@ void RenderThread::runLoop()
           {
             const auto extent = m_swapchain ? m_swapchain->extent : m_headlessExtent;
             m_geometry->setView(frameCamera, extent.width, extent.height);
+          }
+          if (beforeChunkJob)
+          {
+            m_geometry->setBeforeJobForTesting(std::move(*beforeChunkJob));
           }
           m_geometry->takeSnapshot(*snapshot);
         }

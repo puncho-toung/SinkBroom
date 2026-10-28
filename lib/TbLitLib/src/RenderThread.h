@@ -528,6 +528,9 @@ private:
   std::atomic<std::uint64_t> m_ldrStagingCreations = 0;
   // LP2.1 test hook: the chunks the arenas hold instead of the scene's
   std::shared_ptr<const std::map<ChunkKey, Chunk>> m_testChunks;
+  // LP6.4a step 0b test hook: the scene's before-job hook, handed over with the next
+  // snapshot taken (under m_mutex)
+  std::optional<std::function<void(const std::vector<CellRef>&)>> m_beforeChunkJob;
   // the render thread's copy of m_testChunks, and the chunks of a thread without a scene
   std::shared_ptr<const std::map<ChunkKey, Chunk>> m_arenaTestChunks;
   std::map<ChunkKey, Chunk> m_noChunks;
@@ -665,6 +668,10 @@ public:
   // any thread: the arenas hold these chunks instead of the scene's until null replaces
   // them; a frame is triggered
   void setTestChunks(std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks);
+  // LP6.4a step 0b, any thread: the scene's chunk jobs of the batches started from the
+  // next snapshot taken on run hook first (SceneGeometry::setBeforeJobForTesting), set on
+  // the render thread before that snapshot's batch starts
+  void setBeforeChunkJob(std::function<void(const std::vector<CellRef>&)> hook);
   // any thread: what a frame uploads at most (§3.10's cap, UploadBytesPerFrame)
   void setUploadCap(std::uint64_t bytes);
   // any thread: while held, no frame counts as finished (freed arena ranges and retired

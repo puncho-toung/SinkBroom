@@ -730,6 +730,12 @@ void LitSession::setChunksForTesting(
   m_renderThread->setTestChunks(std::move(chunks));
 }
 
+void LitSession::setBeforeChunkJobForTesting(
+  std::function<void(const std::vector<CellRef>&)> hook)
+{
+  m_renderThread->setBeforeChunkJob(std::move(hook));
+}
+
 void LitSession::setUploadCapForTesting(const std::uint64_t bytes)
 {
   m_renderThread->setUploadCap(bytes);

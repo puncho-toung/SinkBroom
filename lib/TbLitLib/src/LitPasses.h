@@ -132,6 +132,11 @@ struct LitFrameInputs
   // LP3.3 (C62, D152): the camera moves (FramePacer::cameraMoving at the frame's start):
   // pass 6 holds the layout and the LODs; else the frame settles them
   bool shadowsMoving = false;
+  // LP6.4a step 0b (C67 (b), D152): the scene's first batch is whole, or none has
+  // started; false while the frame draws that batch's world cells applied early. Such a
+  // frame, and the first frame after it, hold nothing: pass 6 settles them as a still
+  // camera's (the layout the engine's packing, every LOD exact)
+  bool sceneWhole = true;
   // LP5.2a (C47, D9): the game folder whose renderprogs2/spirv holds a newStage
   // program's blobs (SessionOptions::gamePath)
   std::filesystem::path gamePath;
@@ -909,6 +914,9 @@ private:
   // tiles take), made at the first frame that packs; a test's moving or settling frames
   std::optional<ShadowTileAllocator> m_heldLayout;
   std::optional<bool> m_shadowsMovingForTesting;
+  // LP6.4a step 0b: the last frame that made shadow records drew a whole scene
+  // (LitFrameInputs::sceneWhole): its records may be held
+  bool m_shadowRecordsWhole = true;
   // LP6.2 (D169): the slots' state version and count when pass 6 last checked its kept
   // tiles' images (a complete slot's version moves only with its state, a slot made moves
   // the count: unchanged, no image term can have moved), and the tiles drawn again for an

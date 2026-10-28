@@ -373,6 +373,7 @@ enum class DebugHook
 // flight, about 250 ms in a settled frame
 constexpr auto ParkTimeout = std::chrono::milliseconds{500};
 
+struct CellRef;
 class CpuPool;
 struct FirstBatchCounts;
 class GpuDevice;
@@ -716,6 +717,13 @@ public:
   // LP2.1, any thread: the render thread's arenas hold these chunks instead of the
   // scene's until null replaces them (D36); a frame is triggered
   void setChunksForTesting(std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks);
+  /**
+   * LP6.4a step 0b, any thread: the scene's chunk jobs of the batches started from the
+   * next snapshot the render thread takes on run hook first, on the pool, with the job's
+   * cells (lit/SceneGeometry.h, setBeforeJobForTesting): a test holds the first batch's
+   * entity job there. The hook must let every job go before the session stops.
+   */
+  void setBeforeChunkJobForTesting(std::function<void(const std::vector<CellRef>&)> hook);
   // LP2.1, any thread: what a frame uploads at most (§3.10's 32 MB cap)
   void setUploadCapForTesting(std::uint64_t bytes);
   // LP2.1, any thread: while held, no frame counts as finished on the GPU, so the ranges

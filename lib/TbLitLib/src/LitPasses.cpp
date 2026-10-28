@@ -2441,8 +2441,14 @@ void LitPasses::recordShadowAtlas(Frame& frame)
     return;
   }
   static_assert(EngineFrame.useShadowAtlas == 1, "K50: the non-atlas path");
-  // LP3.3 (C62, D152): the camera moves: the layout and the LODs are held
-  const auto moving = m_shadowsMovingForTesting.value_or(frame.inputs->shadowsMoving);
+  // LP3.3 (C62, D152): the camera moves: the layout and the LODs are held. LP6.4a step
+  // 0b: never across a frame drawn before the scene's first batch was whole (C67 (b)'s
+  // early cells): such a frame and the first one after it settle as a still camera's
+  // (the engine's packing, every LOD exact), so the whole batch's lights hold nothing of
+  // the early frame's (its lights' order, and so the packing, may differ)
+  const auto recordsWhole = std::exchange(m_shadowRecordsWhole, frame.inputs->sceneWhole);
+  const auto moving = m_shadowsMovingForTesting.value_or(
+    frame.inputs->shadowsMoving && frame.inputs->sceneWhole && recordsWhole);
   m_stats.shadowsMoving = moving;
   if (!m_heldLayout)
   {

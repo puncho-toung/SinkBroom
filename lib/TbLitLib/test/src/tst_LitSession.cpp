@@ -7236,6 +7236,229 @@ void checkProbesAgainstShProbes(
   }
 }
 
+// LP6.4a step 0b (LP6.3's still-timer race at the 2026-10-28 gate, reproduced by
+// LP6.4a): the session's first batch draws its world cells before it is whole (C67 (b)),
+// so the lights can take their shadow records in such an early frame; inside the
+// camera's moving window the whole batch's frame then held the early frame's layout
+// (D152), which the engine's packing of the whole batch's lights no longer matched (their
+// order changed: shadowLayoutDrift), so it wanted a settle, and when no other frame came
+// inside the window the still timer drew it. A frame drawn before the first batch is
+// whole, and the first frame after it, hold nothing: they settle as a still camera's
+// (CpuPool::ThreadCount is 2: one entity job is held, the other worker builds the lights)
+TEST_CASE("LitSession the early frame and the shadow hold (LP6.4a)", "[.][litgpu]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto service = rootService(root);
+    auto events = Events{};
+    auto session = rootSession(instance, events, *service, root, true, false, true);
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+
+    const auto snapshot = lp22aSnapshot(lp22aMapText(), root, 7, 1);
+    auto world = NoPreviewId;
+    for (const auto& entity : snapshot->entities)
+    {
+      if (snapshot->string(entity.classname) == "worldspawn")
+      {
+        world = entity.id;
+      }
+    }
+    REQUIRE(world != NoPreviewId);
+    // one of the first batch's entity jobs held on the pool (CpuPool::ThreadCount 2: the
+    // other worker builds the rest and the lights), its world cells applied early
+    auto held = std::make_shared<ParseGate>();
+    held->close();
+    const auto releaseAtExit = OpenAtExit{held};
+    auto jobs = std::make_shared<std::vector<std::string>>();
+    auto jobsMutex = std::make_shared<std::mutex>();
+    auto holding = std::make_shared<std::atomic<bool>>(false);
+    session->setBeforeChunkJobForTesting(
+      [held, world, jobs, jobsMutex, holding](const std::vector<CellRef>& cells) {
+        const auto entity = cells.empty() ? NoPreviewId : cells.front().entity;
+        {
+          const auto lock = std::scoped_lock{*jobsMutex};
+          jobs->push_back(fmt::format("{} ({} cells)", entity, cells.size()));
+        }
+        if (entity != world && !holding->exchange(true))
+        {
+          held->pass();
+        }
+      });
+
+    // at each frame's start: the first batch's state for the frame about to draw, and
+    // the last frame's pass 6
+    struct FrameStart
+    {
+      std::uint64_t frame = 0;
+      double ms = 0.0;
+      bool whole = false;
+      bool moving = false;
+      bool settleWanted = false;
+      bool drift = false;
+      std::vector<std::tuple<PreviewId, int, int>> records;
+    };
+    const auto start = std::chrono::steady_clock::now();
+    auto starts = std::make_shared<std::vector<FrameStart>>();
+    auto startsMutex = std::make_shared<std::mutex>();
+    auto* const raw = session.get();
+    session->setEveryFrameHookForTesting(
+      [starts, startsMutex, start, raw](RenderFrameAccess& access) {
+        const auto& stats = access.passes.lastStats();
+        auto entry = FrameStart{};
+        entry.frame = access.frameIndex;
+        entry.ms = std::chrono::duration<double, std::milli>(
+                     std::chrono::steady_clock::now() - start)
+                     .count();
+        entry.whole = raw->firstBatchForTesting().whole;
+        entry.moving = stats.shadowsMoving;
+        entry.settleWanted = stats.shadowSettleWanted;
+        entry.drift = stats.shadowLayoutDrift;
+        for (const auto& record : access.passes.shadowLights())
+        {
+          entry.records.emplace_back(record.light, record.lod, record.exactLod);
+        }
+        const auto lock = std::scoped_lock{*startsMutex};
+        starts->push_back(std::move(entry));
+      });
+    // each frame drawn: the batch's state it was drawn with, its pass 6 (read at the
+    // start of the one after it)
+    struct FrameDrawn
+    {
+      std::uint64_t frame = 0;
+      double ms = 0.0;
+      bool whole = false;
+      bool moving = false;
+      bool settleWanted = false;
+      bool drift = false;
+      std::vector<std::tuple<PreviewId, int, int>> records;
+    };
+    const auto framesDrawn = [&] {
+      const auto lock = std::scoped_lock{*startsMutex};
+      auto drawn = std::vector<FrameDrawn>{};
+      for (std::size_t i = 1; i < starts->size(); ++i)
+      {
+        const auto& before = (*starts)[i - 1];
+        const auto& after = (*starts)[i];
+        drawn.push_back(FrameDrawn{
+          before.frame,
+          before.ms,
+          before.whole,
+          after.moving,
+          after.settleWanted,
+          after.drift,
+          after.records});
+      }
+      return drawn;
+    };
+    const auto print = [&] {
+      for (const auto& frame : framesDrawn())
+      {
+        auto records = std::string{};
+        for (const auto& [light, lod, exact] : frame.records)
+        {
+          records += fmt::format(" {}:{}/{}", light, lod, exact);
+        }
+        std::cout << fmt::format(
+          "  frame {} at {:.1f} ms: batch whole {}; pass 6 moving {} settle {} drift {}, "
+          "records lod/exact{}\n",
+          frame.frame,
+          frame.ms,
+          frame.whole,
+          frame.moving,
+          frame.settleWanted,
+          frame.drift,
+          records);
+      }
+    };
+
+    REQUIRE(session->offerSnapshot(snapshot));
+    const auto lit = litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0});
+    session->setCamera(lit);
+    // a frame with shadow records drawn from the early cells (the tables passed on, as
+    // an owner does)
+    const auto earlyRecords = waitFor(
+      [&] {
+        session->tableChanged();
+        return std::ranges::any_of(framesDrawn(), [](const FrameDrawn& frame) {
+          return !frame.whole && !frame.records.empty();
+        });
+      },
+      10000ms,
+      false);
+    {
+      const auto lock = std::scoped_lock{*jobsMutex};
+      std::cout << fmt::format(
+        "LP6.4a step 0b: the chunk jobs {}; early records {}\n",
+        fmt::join(*jobs, ", "),
+        earlyRecords);
+    }
+    if (!earlyRecords)
+    {
+      print();
+    }
+    REQUIRE(earlyRecords);
+    // the camera moves a hair's breadth (no LOD changes for it) and the batch is let go
+    // inside its moving window
+    const auto nudged = litCamera({60, 0, 80.01f}, {0, 0, -1}, {1, 0, 0});
+    session->setCamera(nudged);
+    const auto released =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+        .count();
+    held->open();
+    const auto settled = settledChain(*session, nudged);
+    REQUIRE(settled);
+    REQUIRE(
+      waitFor([&] { return session->firstBatchForTesting().whole; }, 5000ms, false));
+    // past the still timer's delay
+    std::this_thread::sleep_for(StillTimerDelay * 2);
+    session->setEveryFrameHookForTesting({});
+    std::cout << fmt::format(
+      "LP6.4a step 0b: released at {:.1f} ms; the still timer fired {} times\n",
+      released,
+      session->stillTimerFiringsForTesting());
+    print();
+    // the first frame drawn with the batch whole settled pass 6: every LOD exact
+    const auto drawn = framesDrawn();
+    const auto first = std::ranges::find_if(drawn, [](const FrameDrawn& frame) {
+      return frame.whole && !frame.records.empty();
+    });
+    REQUIRE(first != drawn.end());
+    CHECK_FALSE(first->moving);
+    CHECK_FALSE(first->settleWanted);
+    for (const auto& [light, lod, exact] : first->records)
+    {
+      CAPTURE(light);
+      CHECK(lod == exact);
+    }
+    teardown(*session);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  CHECK(resetDispatcher());
+  messages.print("the early frame, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+}
+
 } // namespace
 
 // LP4.2b (C38, P4.24): the parity test's per-row switch over a synthetic rows.json: an
