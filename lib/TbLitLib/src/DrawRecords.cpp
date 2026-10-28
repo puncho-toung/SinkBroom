@@ -34,10 +34,30 @@ void combine(std::size_t& seed, const std::size_t value)
   seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
 }
 
-// a surface's prepass record, and its ambient records once made
+// a surface's prepass record (an opaque one's), and its ambient records once made
 std::size_t recordCount(const SurfaceRecords& group)
 {
-  return 1 + (group.ambientFilled ? group.ambient.size() : 0);
+  return (group.depth == DepthClass::Opaque ? 1 : 0)
+         + (group.ambientFilled ? group.ambient.size() : 0);
+}
+
+namespace em = engine_material;
+
+// LP6.1 (D167): FillDepthBufferFast's and AmbientPass' per-surface decisions
+void decide(SurfaceRecords& group)
+{
+  const auto* material = group.material.get();
+  group.subview = material && material->sort == em::SortSubview;
+  group.depth = !material                                       ? DepthClass::Opaque
+                : material->coverage == em::CoverageTranslucent ? DepthClass::Translucent
+                : material->coverage == em::CoveragePerforated  ? DepthClass::Perforated
+                                                                : DepthClass::Opaque;
+  group.ambientDrawn =
+    material && group.registers && group.depth != DepthClass::Translucent
+    && std::ranges::any_of(material->stages, [&](const MaterialStage& stage) {
+         return engineRegister(group.registers->registers, stage.conditionRegister)
+                != 0.0f;
+       });
 }
 
 std::size_t recordCount(const InteractionRecords& group)
@@ -179,8 +199,8 @@ SurfaceRecords& DrawRecordTable::surface(const LitSurface& surface, bool& made)
     it->second = std::make_unique<SurfaceRecords>();
     it->second->material = surface.material;
     it->second->registers = surface.registers;
-    // its prepass record
-    ++m_records;
+    decide(*it->second);
+    m_records += recordCount(*it->second);
   }
   made = inserted;
   it->second->lastLinked = m_build;

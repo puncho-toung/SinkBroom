@@ -724,10 +724,23 @@ void LitPasses::linkRecords()
   // follows m_lists.lights
   m_linksStale = false;
   m_surfaceLinks.clear();
+  m_prepassSubviews = 0;
+  m_prepassPerforated.clear();
   for (const auto& surface : m_lists.drawSurfs)
   {
     auto made = false;
-    m_surfaceLinks.push_back(&m_records.surface(surface, made));
+    auto& records = m_records.surface(surface, made);
+    // D167: FillDepthBufferFast's walk from its records' decisions: the subview surfaces
+    // at the start of the sorted list, then the perforated ones apart
+    if (m_prepassSubviews == m_surfaceLinks.size() && records.subview)
+    {
+      ++m_prepassSubviews;
+    }
+    else if (records.depth == DepthClass::Perforated)
+    {
+      m_prepassPerforated.push_back(&surface);
+    }
+    m_surfaceLinks.push_back(&records);
   }
   m_lightLinks.clear();
   m_stageLinks.clear();
@@ -840,38 +853,27 @@ void LitPasses::recordPrepass(Frame& frame)
   m_currentSpace.reset();
   const auto& surfaces = m_lists.drawSurfs;
 
-  // the subview surfaces, at the start of the sorted list, through the generic path
+  // the subview surfaces, at the start of the sorted list, through the generic path.
+  // LP6.1 (D167): the walk of the surfaces' records, whose decisions were made with them
+  // (the leading subview run and the perforated surfaces linked with the lists)
   auto i = std::size_t{0};
-  for (; i < surfaces.size(); ++i)
+  for (; i < m_prepassSubviews; ++i)
   {
-    const auto& surface = surfaces[i];
-    if (!surface.material || surface.material->sort != em::SortSubview)
-    {
-      break;
-    }
-    if (!genericDepth(frame, {&surface}))
+    if (!genericDepth(frame, {&surfaces[i]}))
     {
       return;
     }
   }
 
   // the opaque surfaces now, the perforated ones after them
-  auto perforated = std::vector<const LitSurface*>{};
   for (; i < surfaces.size(); ++i)
   {
     const auto& surface = surfaces[i];
-    if (surface.material)
+    // translucent surfaces don't put anything in the depth buffer; the perforated ones
+    // are drawn after
+    if (m_surfaceLinks[i]->depth != DepthClass::Opaque)
     {
-      // translucent surfaces don't put anything in the depth buffer
-      if (surface.material->coverage == em::CoverageTranslucent)
-      {
-        continue;
-      }
-      if (surface.material->coverage == em::CoveragePerforated)
-      {
-        perforated.push_back(&surface);
-        continue;
-      }
+      continue;
     }
     setSpace(frame, surface.space);
     // LP6.1 (C64): the surface's prepass record
@@ -898,9 +900,9 @@ void LitPasses::recordPrepass(Frame& frame)
     }
   }
 
-  if (!perforated.empty())
+  if (!m_prepassPerforated.empty())
   {
-    genericDepth(frame, perforated);
+    genericDepth(frame, m_prepassPerforated);
   }
 }
 
@@ -2031,29 +2033,16 @@ void LitPasses::recordAmbient(Frame& frame)
   for (std::size_t i = 0; i < surfaces.size(); ++i)
   {
     const auto& surface = surfaces[i];
-    // a pass boundary is not taken between surfaces: the pass is one GL state's draws
-    // M-AMB-DIFF-02: a surface whose material or registers are pending gets no ambient
-    // draw (the interactions draw it with _default until they arrive); the frame is
-    // unconverged already (FrontendLists::pending)
-    if (!surface.material || !surface.registers)
-    {
-      continue;
-    }
-    const auto& material = *surface.material;
-
-    // translucent surfaces don't put anything in the depth buffer and don't test
-    // against it (:2430-2435)
-    if (material.coverage == em::CoverageTranslucent)
-    {
-      continue;
-    }
-
-    // if all stages of a material have been conditioned off, don't do anything
-    // (:2440-2454: surfaceRegs[ pStage->conditionRegister ] != 0 for some stage)
-    const auto& registers = surface.registers->registers;
-    if (std::ranges::none_of(material.stages, [&](const MaterialStage& stage) {
-          return engineRegister(registers, stage.conditionRegister) != 0.0f;
-        }))
+    auto& records = *m_surfaceLinks[i];
+    // a pass boundary is not taken between surfaces: the pass is one GL state's draws.
+    // LP6.1 (D167): decided with the surface's records: M-AMB-DIFF-02, a surface whose
+    // material or registers are pending gets no ambient draw (the interactions draw it
+    // with _default until they arrive; the frame is unconverged already,
+    // FrontendLists::pending); translucent surfaces don't put anything in the depth
+    // buffer and don't test against it (:2430-2435); if all stages of a material have
+    // been conditioned off, don't do anything (:2440-2454: surfaceRegs[
+    // pStage->conditionRegister ] != 0 for some stage)
+    if (!records.ambientDrawn)
     {
       continue;
     }
@@ -2078,7 +2067,6 @@ void LitPasses::recordAmbient(Frame& frame)
     // :2538-2703: inter = {} (diffuse 1, specular 0), the fast path dead
     // (r_skipInteractionFastPath 1, :2545), the stage loop and the final draw. LP6.1
     // (C64): its draws are the surface's ambient records, made at its first draw
-    auto& records = *m_surfaceLinks[i];
     if (!records.ambientFilled)
     {
       fillAmbientRecords(records, surface, usage);
@@ -5526,6 +5514,8 @@ void LitPasses::releaseAll()
   // step 2's order), and the links go with the lists
   m_records.clear();
   m_surfaceLinks.clear();
+  m_prepassSubviews = 0;
+  m_prepassPerforated.clear();
   m_lightLinks.clear();
   m_stageLinks.clear();
   m_interactionLinks.clear();

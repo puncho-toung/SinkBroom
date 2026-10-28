@@ -807,6 +807,11 @@ private:
   // before the next frame's passes
   DrawRecordTable m_records;
   std::vector<SurfaceRecords*> m_surfaceLinks;
+  // LP6.1 (D167): the prepass's walk of the links: the leading subview surfaces' count
+  // (the generic path, in their order) and the perforated surfaces after them (the
+  // generic path after the opaque draws, in the lists' order)
+  std::size_t m_prepassSubviews = 0;
+  std::vector<const LitSurface*> m_prepassPerforated;
   std::vector<LightLink> m_lightLinks;
   std::vector<StageLink> m_stageLinks;
   std::vector<InteractionLink> m_interactionLinks;

@@ -156,16 +156,35 @@ struct SurfaceRecordKeyHash
   std::size_t operator()(const SurfaceRecordKey& key) const;
 };
 
+// LP6.1 (D167): what FillDepthBufferFast does with a surface after the leading subview
+// ones (RenderBackend.cpp:934-1041): a translucent material's puts nothing in the depth
+// buffer, a perforated one's goes to the generic path after the opaque ones, any other
+// (and one whose material is pending) is drawn by builtin/depth
+enum class DepthClass : std::uint8_t
+{
+  Opaque,
+  Perforated,
+  Translucent,
+};
+
 /**
- * LP6.1 (C64): a surface's records: its depth prepass draw's and its ambient draws', in
- * engineAmbientSurfaceInteractions' order (made at the ambient pass's first draw of the
- * surface, never resized after: the records' addresses hold), with the material and
- * registers it was made of.
+ * LP6.1 (C64, D167): a surface's records, the one walk of passes 1 and 5 (and LP6.5a's
+ * pass 3): decided once when the group is made, from its material and registers: its
+ * depth class and whether it is a subview surface (SS_SUBVIEW: the prepass's leading run,
+ * through the generic path), whether the ambient pass draws it (material and registers
+ * known, not translucent, some stage's condition on: AmbientPass :2430-2454,
+ * M-AMB-DIFF-02); its depth prepass record (an opaque surface's), and its ambient records
+ * in engineAmbientSurfaceInteractions' order (made at the ambient pass's first draw of
+ * the surface, which asks for its images then; never resized after: the records'
+ * addresses hold), with the material and registers it was made of.
  */
 struct SurfaceRecords
 {
   std::shared_ptr<const MaterialEntry> material;
   std::shared_ptr<const EvaluatedRegisters> registers;
+  DepthClass depth = DepthClass::Opaque;
+  bool subview = false;
+  bool ambientDrawn = false;
   DrawRecord prepass;
   std::vector<AmbientRecord> ambient;
   bool ambientFilled = false;
