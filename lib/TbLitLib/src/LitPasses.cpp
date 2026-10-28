@@ -48,6 +48,8 @@
 #include <cassert>
 #include <chrono>
 #include <cmath>
+#include <initializer_list>
+#include <string_view>
 
 namespace tb::lit
 {
@@ -216,6 +218,7 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
   m_parms.zero();
   m_state = DrawState{};
   m_units = {};
+  m_unitKeys = {};
   m_currentSpace.reset();
   m_currentScissor = viewScissor(frame.view);
   m_scissor = engineScissorRect(frame.view, m_currentScissor);
@@ -853,13 +856,12 @@ LitPasses::DepthStageBinding LitPasses::bindDepthStageDraw(
         binding.drawable = false;
         return binding;
       }
-      m_units[0] = *stage.image;
       // LP3.4 (D156): what the slot binds while it is not complete (its intrinsic, or the
       // levels written so far): drawn with it, a shadow tile provisional
-      if (const auto* images = frame.inputs->images)
+      if (auto* images = frame.inputs->images)
       {
-        const auto id = images->find(*stage.image);
-        const auto* slot = id ? images->slot(*id) : nullptr;
+        setUnit(*images, 0, *stage.image);
+        const auto* slot = m_units[0] ? images->slot(*m_units[0]) : nullptr;
         binding.pending = !slot || !slotComplete(*slot);
       }
     }
@@ -875,7 +877,7 @@ LitPasses::DepthStageBinding LitPasses::bindDepthStageDraw(
       // the frame unconverged until it is
       auto& images = *frame.inputs->images;
       const auto [cube, pendingCube] = cubeImage(images, stage.image);
-      m_units[0] = cube;
+      setUnit(images, 0, cube);
       if (pendingCube)
       {
         m_stats.unconverged = true;
@@ -887,8 +889,8 @@ LitPasses::DepthStageBinding LitPasses::bindDepthStageDraw(
         // :366-368: the bump stage's image raw at unit 1 (_flat for a Default one,
         // M-STAGE-DIFF-06)
         const auto& bump = surface.material->stages[std::size_t(prepassDraw.bumpStage)];
-        m_units[1] = bumpImage(images, bump.image);
-        if (!m_units[1])
+        setUnit(images, 1, bumpImage(images, bump.image));
+        if (!hasUnit(1))
         {
           ++m_stats.skippedDraws;
           m_stats.unconverged = true;
@@ -1207,12 +1209,12 @@ bool LitPasses::renderInteractions(
       // a texture light's cinematic stage: no image to bind (mirror.json M-PASS-GUARD-01)
       continue;
     }
-    m_units[3] = (*lightUnits)[0];
-    m_units[4] = (*lightUnits)[1];
+    setUnit(images, 3, (*lightUnits)[0]);
+    setUnit(images, 4, (*lightUnits)[1]);
     // LP3.1 (C60, SC728): texture 5 the shadow atlas (bound by DRAW_INTERACTION_SM's set
     // itself: the atlas has no slot, bindingSets), texture 6 the jitter texture for soft
     // shadowing (:1968-1981)
-    m_units[UnitJitter] = intrinsicImageKey("_blueNoise256");
+    setUnit(images, UnitJitter, Intrinsic::BlueNoise);
 
     // USER0-2 (:1934-1965)
     const auto user = engineMathLightParms(record.light.parms.mathLight, mathPath);
@@ -1265,9 +1267,9 @@ bool LitPasses::renderInteractions(
         m_parms.set(RenderParm::SpecularModifier, interaction.specularColor);
 
         // texture 0 the bump map, 1 the specular map, 2 the diffuse map
-        m_units[0] = interaction.bumpImage;
-        m_units[1] = interaction.specularImage;
-        m_units[2] = interaction.diffuseImage;
+        setUnit(images, 0, interaction.bumpImage);
+        setUnit(images, 1, interaction.specularImage);
+        setUnit(images, 2, interaction.diffuseImage);
 
         // LP3.1 (C60, SC726): a light placed in the atlas draws the shadow-atlas
         // interaction of its type (DrawSingleInteraction, RenderBackend.cpp:1417-1470,
@@ -1694,12 +1696,18 @@ void LitPasses::recordAmbient(Frame& frame)
   // LP6), t7 _default for the irradiance image no probe-path shader reads (D85), t8-t10
   // the radiance cubes, t12 the nearest's depth cube, t13 and t14 the next two's; a probe
   // image that is not Ready is the default cube, never a slot's 2D stand-in (P4.28)
-  const auto defaultCube = intrinsicImageKey("_defaultUACRadiance");
-  const auto cubeOr = [&](const std::optional<MaterialImageKey>& key) {
-    return key ? *key : defaultCube;
-  };
-
   auto& images = *frame.inputs->images;
+  const auto cubeUnit =
+    [&](const std::size_t unit, const std::optional<MaterialImageKey>& key) {
+      if (key)
+      {
+        setUnit(images, unit, *key);
+      }
+      else
+      {
+        setUnit(images, unit, Intrinsic::DefaultCube);
+      }
+    };
   const auto usage =
     ImageUsage{[&](const MaterialImageKey& key) { return imageUsage(images, key); }};
 
@@ -1818,22 +1826,29 @@ void LitPasses::recordAmbient(Frame& frame)
       }
 
       // the units: the interaction's three, then the view's (:1361-1393)
-      m_units[UnitBump] = interaction.bumpImage;
-      m_units[UnitSpecular] = interaction.specularImage;
-      m_units[UnitBaseColor] = interaction.diffuseImage;
-      m_units[UnitBrdfLut] = intrinsicImageKey("_brdfLut");
+      setUnit(images, UnitBump, interaction.bumpImage);
+      setUnit(images, UnitSpecular, interaction.specularImage);
+      setUnit(images, UnitBaseColor, interaction.diffuseImage);
+      setUnit(images, UnitBrdfLut, Intrinsic::BrdfLut);
       static_assert(!EngineFrame.useSsao, "K31: _ao0 is LP6's");
-      m_units[UnitSsao] = engineWhiteImageKey();
+      setUnit(images, UnitSsao, Intrinsic::White);
       // t7: the area's irradiance atlas on the grid path (:1270-1271), _default on the
       // probe path (D85)
-      m_units[UnitAmbientCube] = grid ? grid->atlas : engineDefaultImageKey();
+      if (grid)
+      {
+        setUnit(images, UnitAmbientCube, grid->atlas);
+      }
+      else
+      {
+        setUnit(images, UnitAmbientCube, Intrinsic::Default);
+      }
       for (std::size_t i = 0; i < 3; ++i)
       {
-        m_units[UnitSpecularCube1 + i] = cubeOr(probes.radiance[i]);
+        cubeUnit(UnitSpecularCube1 + i, probes.radiance[i]);
       }
-      m_units[UnitDepthCube] = cubeOr(probes.depth);
-      m_units[UnitDepthCube + 1] = cubeOr(probes.probeDepth[0]);
-      m_units[UnitDepthCube + 2] = cubeOr(probes.probeDepth[1]);
+      cubeUnit(UnitDepthCube, probes.depth);
+      cubeUnit(UnitDepthCube + 1, probes.probeDepth[0]);
+      cubeUnit(UnitDepthCube + 2, probes.probeDepth[1]);
 
       // no polygon offset: :2504-2536 are commented out (P4.19)
       switch (draw(frame, program, *surface.chunk, stateBits, 0.0f, 0.0f))
@@ -3377,11 +3392,11 @@ void LitPasses::recordStages(Frame& frame)
                                    : std::optional<MaterialImageKey>{};
           if (!fragment)
           {
-            m_units[unit] = engineDefaultImageKey();
+            setUnit(images, unit, Intrinsic::Default);
             continue;
           }
-          m_units[unit] = stageImage(images, *fragment);
-          drawable = drawable && m_units[unit].has_value();
+          setUnit(images, unit, stageImage(images, *fragment));
+          drawable = drawable && hasUnit(unit);
         }
       }
       else
@@ -3429,7 +3444,7 @@ void LitPasses::recordStages(Frame& frame)
           // slot); the preview's zero cube stands in for an unwritten, defaulted or 2D
           // one, a cube not written yet keeping the frame unconverged (M-STAGE-DIFF-04)
           const auto [cube, pendingCube] = cubeImage(images, stage.image);
-          m_units[0] = cube;
+          setUnit(images, 0, cube);
           if (pendingCube)
           {
             ++m_stats.stagePending;
@@ -3440,8 +3455,8 @@ void LitPasses::recordStages(Frame& frame)
           {
             // :366-368: GL_SelectTexture( 1 ); bumpStage->texture.image->Bind()
             const auto& bump = material.stages[std::size_t(stageDraw.bumpStage)];
-            m_units[1] = bumpImage(images, bump.image);
-            drawable = m_units[1].has_value();
+            setUnit(images, 1, bumpImage(images, bump.image));
+            drawable = hasUnit(1);
           }
           if (stageDraw.program == StageProgram::WobbleSky)
           {
@@ -3469,8 +3484,8 @@ void LitPasses::recordStages(Frame& frame)
             }
             continue;
           }
-          m_units[0] = stageImage(images, *stage.image);
-          drawable = m_units[0].has_value();
+          setUnit(images, 0, stageImage(images, *stage.image));
+          drawable = hasUnit(0);
         }
 
         // PrepareStageTexturing (:352-638): the texture matrix always, TG_SCREEN's planes
@@ -3641,8 +3656,8 @@ bool LitPasses::blendLight(Frame& frame, const ViewLight& light)
       m_stats.retrigger = true;
       continue;
     }
-    m_units[0] = *stageUnit;
-    m_units[1] = *falloffUnit;
+    setUnit(images, 0, *stageUnit);
+    setUnit(images, 1, *falloffUnit);
 
     // RB_LoadShaderTextureMatrix: set 7 has no TEXTUREMATRIX, so it is never read
     if (stage.hasTextureMatrix)
@@ -3746,8 +3761,8 @@ bool LitPasses::fogPass(Frame& frame, const ViewLight& light)
   m_parms.set(RenderParm::Color, parms->color);
 
   // texture 0 is the falloff image, texture 1 the entering plane fade correction
-  m_units[0] = intrinsicImageKey("_fog");
-  m_units[1] = intrinsicImageKey("_fogEnter");
+  setUnit(*frame.inputs->images, 0, Intrinsic::Fog);
+  setUnit(*frame.inputs->images, 1, Intrinsic::FogEnter);
 
   // draw it
   const auto blend =
@@ -3997,6 +4012,148 @@ int LitPasses::imageUsage(ImageSlots& images, const MaterialImageKey& key) const
   return slot && slot->adoptedUsage ? *slot->adoptedUsage : key.usage;
 }
 
+namespace
+{
+
+// LP6.1 (C64): the intrinsic images the passes bind by name, in LitPasses::Intrinsic's
+// order
+constexpr auto IntrinsicNames = std::array<std::string_view, 10>{
+  "_brdfLut",
+  "_white",
+  "_default",
+  "_defaultUACRadiance",
+  "_blueNoise256",
+  "_fog",
+  "_fogEnter",
+  "_black",
+  "_blackDiffuse",
+  "_flat",
+};
+
+} // namespace
+
+// LP6.1 (C64): which kept intrinsic a key is: one of intrinsicImageKey's shape
+// (TD_DEFAULT, TF_DEFAULT, TR_REPEAT, CF_2D) is intrinsicImageKey( its name )
+std::optional<LitPasses::Intrinsic> LitPasses::keptIntrinsic(const MaterialImageKey& key)
+{
+  if (
+    !key.intrinsic || key.usage != engine_image::UsageDefault
+    || key.filter != engine_image::FilterDefault
+    || key.repeat != engine_image::RepeatRepeat || key.cube != engine_image::Cube2D
+    || key.cubeMapSize != 0 || key.isDefault != (key.name == "_default"))
+  {
+    return std::nullopt;
+  }
+  for (std::size_t i = 0; i < IntrinsicNames.size(); ++i)
+  {
+    if (key.name == IntrinsicNames[i])
+    {
+      return Intrinsic(i);
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<ImageSlotId> LitPasses::intrinsicSlot(
+  ImageSlots& images, const Intrinsic intrinsic)
+{
+  static_assert(IntrinsicNames.size() == std::size_t(Intrinsic::Count));
+  // a session's slot table (its ids are its own); the kept ids go with releaseAll
+  if (m_intrinsicsOf != &images)
+  {
+    m_intrinsics.fill(NoImageSlot);
+    m_intrinsicsOf = &images;
+  }
+  auto& id = m_intrinsics[std::size_t(intrinsic)];
+  if (id == NoImageSlot)
+  {
+    // kept once a draw's binding has made its slot (or the render thread asked for it)
+    if (
+      const auto found =
+        images.find(intrinsicImageKey(IntrinsicNames[std::size_t(intrinsic)])))
+    {
+      id = *found;
+    }
+  }
+  return id != NoImageSlot ? std::optional{id} : std::nullopt;
+}
+
+ImageSlotId LitPasses::askSlot(ImageSlots& images, const MaterialImageKey& key)
+{
+  if (const auto intrinsic = keptIntrinsic(key))
+  {
+    if (const auto id = intrinsicSlot(images, *intrinsic))
+    {
+      return *id;
+    }
+    const auto id = images.request(key);
+    m_intrinsics[std::size_t(*intrinsic)] = id;
+    return id;
+  }
+  return images.request(key);
+}
+
+void LitPasses::setUnit(
+  ImageSlots& images, const std::size_t unit, const Intrinsic intrinsic)
+{
+  m_units[unit] = intrinsicSlot(images, intrinsic);
+  if (m_units[unit])
+  {
+    m_unitKeys[unit].reset();
+  }
+  else
+  {
+    m_unitKeys[unit] = intrinsicImageKey(IntrinsicNames[std::size_t(intrinsic)]);
+  }
+}
+
+void LitPasses::setUnit(
+  ImageSlots& images, const std::size_t unit, const MaterialImageKey& key)
+{
+  if (const auto intrinsic = keptIntrinsic(key))
+  {
+    setUnit(images, unit, *intrinsic);
+    return;
+  }
+  m_units[unit] = images.find(key);
+  if (m_units[unit])
+  {
+    m_unitKeys[unit].reset();
+  }
+  else
+  {
+    m_unitKeys[unit] = key;
+  }
+}
+
+void LitPasses::setUnit(
+  ImageSlots& images, const std::size_t unit, const std::optional<MaterialImageKey>& key)
+{
+  if (key)
+  {
+    setUnit(images, unit, *key);
+    return;
+  }
+  m_units[unit].reset();
+  m_unitKeys[unit].reset();
+}
+
+bool LitPasses::hasUnit(const std::size_t unit) const
+{
+  return m_units[unit] || m_unitKeys[unit];
+}
+
+std::optional<ImageSlotId> LitPasses::unitSlot(ImageSlots& images, const std::size_t unit)
+{
+  // a key whose slot was not made when the unit was set is asked for by its binding
+  if (!m_units[unit] && m_unitKeys[unit])
+  {
+    m_units[unit] = askSlot(images, *m_unitKeys[unit]);
+    m_unitKeys[unit].reset();
+  }
+  return m_units[unit];
+}
+
 nvrhi::IBuffer* LitPasses::constantBuffer(Frame& frame, const EngineBindingLayout layout)
 {
   // RenderProgs.cpp:752-774: CreateVolatileConstantBufferDesc( rpBufSize,
@@ -4049,11 +4206,12 @@ bool LitPasses::bindingSets(
   auto& images = *inputs.images;
   const auto unitBinding =
     [&](const std::size_t unit) -> std::optional<ImageSlots::Binding> {
-    if (!m_units[unit])
+    const auto id = unitSlot(images, unit);
+    if (!id)
     {
       return std::nullopt;
     }
-    auto binding = images.binding(images.request(*m_units[unit]));
+    auto binding = images.binding(*id);
     if (!binding.texture)
     {
       return std::nullopt;
@@ -4061,11 +4219,10 @@ bool LitPasses::bindingSets(
     return binding;
   };
   // a set of textures, each unit at its slot, in the layout's item order (nvrhi rule 4)
-  const auto slottedSet =
-    [&](
-      const std::size_t set,
-      const std::vector<std::pair<std::size_t, std::uint32_t>>& unitSlots) -> bool {
-    auto bindings = std::vector<ImageSlots::Binding>{};
+  // LP6.1 (C64): inline, at most the ambient pass's nine units of a set
+  using UnitSlots = InlineVector<std::pair<std::size_t, std::uint32_t>, 9>;
+  const auto slottedSet = [&](const std::size_t set, const UnitSlots& unitSlots) -> bool {
+    auto bindings = InlineVector<ImageSlots::Binding, 9>{};
     auto key = BindingSetKey{};
     key.layout = layouts[set].Get();
     for (const auto& [unit, slot] : unitSlots)
@@ -4075,9 +4232,8 @@ bool LitPasses::bindingSets(
       {
         return false;
       }
-      key.slots.insert(
-        key.slots.end(), binding->versions.begin(), binding->versions.end());
-      bindings.push_back(std::move(*binding));
+      key.slots.append(binding->versions.begin(), binding->versions.end());
+      bindings.push_back(*binding);
     }
     sets[set] = cache
                   .get(
@@ -4101,12 +4257,13 @@ bool LitPasses::bindingSets(
   // consecutive units from firstSlot on
   const auto textureSet = [&](
                             const std::size_t set,
-                            const std::vector<std::size_t>& units,
+                            const std::initializer_list<std::size_t> units,
                             const std::uint32_t firstSlot) -> bool {
-    auto unitSlots = std::vector<std::pair<std::size_t, std::uint32_t>>{};
-    for (std::size_t i = 0; i < units.size(); ++i)
+    auto unitSlots = UnitSlots{};
+    auto slot = firstSlot;
+    for (const auto unit : units)
     {
-      unitSlots.emplace_back(units[i], firstSlot + std::uint32_t(i));
+      unitSlots.push_back({unit, slot++});
     }
     return slottedSet(set, unitSlots);
   };
@@ -4127,7 +4284,7 @@ bool LitPasses::bindingSets(
       }
       key.resources = {buffer};
     }
-    auto units = std::vector<ImageSlots::Binding>{};
+    auto units = InlineVector<ImageSlots::Binding, 3>{};
     if (layout == EngineBindingLayout::PostProcessIngame)
     {
       for (std::size_t unit = 0; unit < 3; ++unit)
@@ -4137,9 +4294,8 @@ bool LitPasses::bindingSets(
         {
           return false;
         }
-        key.slots.insert(
-          key.slots.end(), binding->versions.begin(), binding->versions.end());
-        units.push_back(std::move(*binding));
+        key.slots.append(binding->versions.begin(), binding->versions.end());
+        units.push_back(*binding);
       }
     }
     const auto bytes = parmSetBytes(layout);
@@ -4229,8 +4385,12 @@ bool LitPasses::bindingSets(
     {
       return false;
     }
-    const auto& key = *m_units[0];
-    const auto* slot = images.slot(images.request(key));
+    const auto* slot = images.slot(*m_units[0]);
+    if (!slot)
+    {
+      return false;
+    }
+    const auto& key = slot->key;
     const auto format =
       slot && slot->adoptedFormat ? *slot->adoptedFormat : engine_image::FormatRgba8;
     const auto repeat =
@@ -4298,7 +4458,7 @@ bool LitPasses::bindingSets(
       return false;
     }
     {
-      auto bindings = std::vector<ImageSlots::Binding>{};
+      auto bindings = InlineVector<ImageSlots::Binding, 3>{};
       auto key = BindingSetKey{};
       key.layout = layouts[2].Get();
       for (const auto unit : {std::size_t{3}, std::size_t{4}, UnitJitter})
@@ -4308,9 +4468,8 @@ bool LitPasses::bindingSets(
         {
           return false;
         }
-        key.slots.insert(
-          key.slots.end(), binding->versions.begin(), binding->versions.end());
-        bindings.push_back(std::move(*binding));
+        key.slots.append(binding->versions.begin(), binding->versions.end());
+        bindings.push_back(*binding);
       }
       auto* atlas = m_atlas.Get();
       key.resources = {atlas};
@@ -4382,12 +4541,12 @@ bool LitPasses::bindingSets(
     // s1 LinearClamp
     for (const auto set : {std::size_t{1}, std::size_t{2}})
     {
-      auto unitSlots = std::vector<std::pair<std::size_t, std::uint32_t>>{};
+      auto unitSlots = UnitSlots{};
       for (const auto& binding : AmbientUnits)
       {
         if (binding.set == set)
         {
-          unitSlots.emplace_back(binding.unit, binding.slot);
+          unitSlots.push_back({binding.unit, binding.slot});
         }
       }
       if (!slottedSet(set, unitSlots))
@@ -4872,6 +5031,10 @@ void LitPasses::releaseAll()
   m_lightTriangles.clear();
   m_state = DrawState{};
   m_units = {};
+  m_unitKeys = {};
+  // LP6.1 (C64): the kept intrinsic slots are the session's slot table's
+  m_intrinsics = {};
+  m_intrinsicsOf = nullptr;
   m_fogCubeVertices = nullptr;
   m_fogCubeIndexes = nullptr;
   m_drawLog.clear();

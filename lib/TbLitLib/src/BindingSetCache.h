@@ -20,6 +20,7 @@
 #pragma once
 
 #include "ImageSlots.h"
+#include "InlineVector.h"
 #include "base/Macros.h"
 
 #include <nvrhi/nvrhi.h>
@@ -34,20 +35,28 @@
 namespace tb::lit
 {
 
+// LP6.1 (C64): the most slot versions a binding set's key holds, the ambient pass's set 2
+// (AMBIENT_LIGHTING_IBL's nine units, each with the intrinsic standing in), and the most
+// other resources, DRAW_INTERACTION_SM's sampler set (four samplers)
+inline constexpr std::size_t BindingSetKeySlots = 18;
+inline constexpr std::size_t BindingSetKeyResources = 4;
+
 /**
  * C28, D37: what a binding set is made of, beyond its layout's order: the binding layout,
  * the image slots it binds with their versions (a slot bound through its intrinsic lists
  * both, ImageSlots::Binding), the sampler set, the render-target generation only when it
  * binds a render target (0 otherwise), and the other resources it binds, which must live
- * as long as the session (constant buffers, the tonemap buffers).
+ * as long as the session (constant buffers, the tonemap buffers). LP6.1 (C64): the slots
+ * and the resources are held inline (no heap vector per key); the hash and the equality
+ * read the used prefix.
  */
 struct BindingSetKey
 {
   nvrhi::IBindingLayout* layout = nullptr;
-  std::vector<SlotVersion> slots;
+  InlineVector<SlotVersion, BindingSetKeySlots> slots;
   std::uint64_t samplers = 0;
   std::uint64_t renderTargetGeneration = 0;
-  std::vector<const void*> resources;
+  InlineVector<const void*, BindingSetKeyResources> resources;
 
   bool operator==(const BindingSetKey&) const = default;
 };

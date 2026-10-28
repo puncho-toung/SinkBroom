@@ -20,6 +20,7 @@
 #pragma once
 
 #include "FrameResources.h"
+#include "InlineVector.h"
 #include "base/Macros.h"
 #include "lit/MaterialService.h"
 
@@ -167,8 +168,9 @@ public:
     // null when neither the slot nor its intrinsic has a written level yet
     nvrhi::ITexture* texture = nullptr;
     nvrhi::TextureSubresourceSet subresources;
-    // the slot asked for, and the intrinsic standing in for it when one does
-    std::vector<SlotVersion> versions;
+    // the slot asked for, and the intrinsic standing in for it when one does; LP6.1
+    // (C64): held inline, at most these two
+    InlineVector<SlotVersion, 2> versions;
     bool intrinsic = false;
   };
 

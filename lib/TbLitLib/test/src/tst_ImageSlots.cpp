@@ -182,7 +182,7 @@ TEST_CASE("ImageSlots")
     CHECK(binding.intrinsic);
     CHECK(
       binding.versions
-      == std::vector<SlotVersion>{SlotVersion{bump, 1}, SlotVersion{flat, 1}});
+      == InlineVector<SlotVersion, 2>{SlotVersion{bump, 1}, SlotVersion{flat, 1}});
 
     // the intrinsic arrives and is written: the pending slot binds it
     service.publish(intrinsicImageKey("_flat"), true);
@@ -202,7 +202,7 @@ TEST_CASE("ImageSlots")
     CHECK(binding.subresources.numMipLevels == 3u);
     CHECK(
       binding.versions
-      == std::vector<SlotVersion>{SlotVersion{bump, 1}, SlotVersion{flat, 2}});
+      == InlineVector<SlotVersion, 2>{SlotVersion{bump, 1}, SlotVersion{flat, 2}});
 
     // the slot's own image: low mips first, each extension of the written range bumps it
     // and the binding never reaches an unwritten level (P2.14c)
@@ -220,7 +220,7 @@ TEST_CASE("ImageSlots")
     CHECK(binding.texture == texture.Get());
     CHECK(binding.subresources.baseMipLevel == 2u);
     CHECK(binding.subresources.numMipLevels == 1u);
-    CHECK(binding.versions == std::vector<SlotVersion>{SlotVersion{bump, 2}});
+    CHECK(binding.versions == InlineVector<SlotVersion, 2>{SlotVersion{bump, 2}});
     slots.levelsWritten(bump, 1);
     slots.levelsWritten(bump, 1);
     binding = slots.binding(bump);
@@ -344,7 +344,7 @@ TEST_CASE("ImageSlots")
     const auto bound = [&](const nvrhi::ITexture* texture) {
       const auto binding = slots.binding(id);
       return binding.texture == texture && !binding.intrinsic
-             && binding.versions == std::vector<SlotVersion>{SlotVersion{id, version}}
+             && binding.versions == InlineVector<SlotVersion, 2>{SlotVersion{id, version}}
              && binding.subresources.baseMipLevel == 0u
              && binding.subresources.numMipLevels == 3u;
     };
@@ -592,7 +592,7 @@ TEST_CASE("BindingSetCache")
     [&](std::vector<SlotVersion> slots, const std::uint64_t generation = 0) {
       auto key = BindingSetKey{};
       key.layout = reinterpret_cast<nvrhi::IBindingLayout*>(&layout);
-      key.slots = std::move(slots);
+      key.slots.append(slots.begin(), slots.end());
       key.samplers = 1;
       key.renderTargetGeneration = generation;
       return key;

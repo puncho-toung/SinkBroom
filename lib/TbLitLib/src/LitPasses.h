@@ -679,8 +679,38 @@ private:
   std::uint64_t m_listsTableVersion = 0;
   DrawState m_state;
   // GL_SelectTexture's units: 0-4 of the interactions, 0 of texture_color, 0-14 of the
-  // ambient pass (LP4.2a)
-  std::array<std::optional<MaterialImageKey>, LitTextureUnits> m_units;
+  // ambient pass (LP4.2a). LP6.1 (C64): each unit's image slot, taken where the pass
+  // decides the unit (setUnit: its key's one hash), so that the binding reads the slot
+  // directly; a key whose slot the session has not made yet is kept beside it and asked
+  // for by the binding (unitSlot), as the binding asked for every key before: a slot is
+  // made by the first draw that binds its image
+  std::array<std::optional<ImageSlotId>, LitTextureUnits> m_units;
+  std::array<std::optional<MaterialImageKey>, LitTextureUnits> m_unitKeys;
+  /**
+   * LP6.1 (C64): the intrinsic images the passes bind by name: _brdfLut, _white,
+   * _default, _defaultUACRadiance, _blueNoise256, _fog, _fogEnter, and
+   * DrawSingleInteraction's and a pending surface's fallbacks _black, _blackDiffuse and
+   * _flat. Each one's slot is asked for at its first use in a session (so that a session
+   * asks for no image it did not ask for before) and kept: an ImageSlotId is an index
+   * into the slot table, which only grows until its releaseAll (teardown step 2, after
+   * this one's), so the kept ids hold for the session's ImageSlots (m_intrinsicsOf).
+   */
+  enum class Intrinsic
+  {
+    BrdfLut,
+    White,
+    Default,
+    DefaultCube,
+    BlueNoise,
+    Fog,
+    FogEnter,
+    Black,
+    BlackDiffuse,
+    Flat,
+    Count,
+  };
+  std::array<ImageSlotId, std::size_t(Intrinsic::Count)> m_intrinsics = {};
+  const ImageSlots* m_intrinsicsOf = nullptr;
   // the backend's currentSpace, and currentScissor (RenderBackend.cpp:672-690)
   std::optional<std::size_t> m_currentSpace;
   ScreenRect m_currentScissor;
@@ -1160,6 +1190,21 @@ private:
   nvrhi::IBuffer* constantBuffer(Frame& frame, EngineBindingLayout layout);
   // the textureUsage_t a slot's image has once loaded (the PBR rename)
   int imageUsage(ImageSlots& images, const MaterialImageKey& key) const;
+  // LP6.1 (C64): the kept intrinsic a key names (intrinsicImageKey's shape), if any
+  static std::optional<Intrinsic> keptIntrinsic(const MaterialImageKey& key);
+  // LP6.1 (C64): an intrinsic's slot once the session has made it, kept from then on
+  std::optional<ImageSlotId> intrinsicSlot(ImageSlots& images, Intrinsic intrinsic);
+  // LP6.1 (C64): a key's slot, made on its first ask (a kept intrinsic's without a hash)
+  ImageSlotId askSlot(ImageSlots& images, const MaterialImageKey& key);
+  // LP6.1 (C64): a unit decided: an intrinsic's kept slot, a key's slot found (one hash)
+  // or, when its slot is not made yet, the key kept for the binding to ask for; none
+  void setUnit(ImageSlots& images, std::size_t unit, Intrinsic intrinsic);
+  void setUnit(ImageSlots& images, std::size_t unit, const MaterialImageKey& key);
+  void setUnit(
+    ImageSlots& images, std::size_t unit, const std::optional<MaterialImageKey>& key);
+  bool hasUnit(std::size_t unit) const;
+  // LP6.1 (C64): the binding's slot of a unit, a kept key asked for now
+  std::optional<ImageSlotId> unitSlot(ImageSlots& images, std::size_t unit);
   void log(
     const Frame& frame,
     LitDrawRecord::Pass pass,
