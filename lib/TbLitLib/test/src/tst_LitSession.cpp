@@ -376,8 +376,9 @@ using namespace std::chrono_literals;
 // inlined_surfaces (C54), LP3.1's pass 6 and caster columns (D157), LP3.2's per-list
 // shadow-atlas interaction draws, LP3.4's perforated_draws (D155), LP6.0's ten split
 // columns of the CPU record and three reserved GPU columns (C65), LP6.1's two draw-record
-// counts (C64), LP6.2's three parts of lists_ms (C65)
-constexpr auto FrameLogFields = std::size_t{113};
+// counts (C64), LP6.2's three parts of lists_ms (C65), caster sets made and tiles drawn
+// again for an image (C66, D169)
+constexpr auto FrameLogFields = std::size_t{115};
 
 // LP2.0, T0.2: the validation layer's id of "Vertex attribute at location N not consumed
 // by vertex shader" (mirror.json M-PIPE-DEFECT-01), as this machine's layer names it
@@ -6013,10 +6014,13 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     // LP6.1 (C64): and the draw records' two
     CHECK(rows[0][RecordOtherMsColumn + 4] == "records_held");
     CHECK(rows[0][RecordOtherMsColumn + 5] == "record_resolves");
-    // LP6.2 (C65): and lists_ms's three parts, the last
+    // LP6.2 (C65): and lists_ms's three parts, (C66, D169) the caster sets made and the
+    // tiles drawn again for an image, the last
     CHECK(rows[0][SurfacesMsColumn] == "surfaces_ms");
     CHECK(rows[0][SurfacesMsColumn + 1] == "lights_ms");
     CHECK(rows[0][LinksMsColumn] == "links_ms");
+    CHECK(rows[0][LinksMsColumn + 1] == "caster_sets_built");
+    CHECK(rows[0][LinksMsColumn + 2] == "tiles_image_redrawn");
     auto lastLit = std::optional<std::vector<std::string>>{};
     auto settledRows = 0;
     for (std::size_t i = 1; i < rows.size(); ++i)
@@ -7080,7 +7084,7 @@ bool parityCountHolds(const JsonValue& expected, const std::size_t actual)
 std::optional<std::size_t> parityShadowCount(
   const LitFrameStats& lit, const std::string_view key)
 {
-  const auto counts = std::array<std::pair<std::string_view, std::size_t>, 11>{{
+  const auto counts = std::array<std::pair<std::string_view, std::size_t>, 13>{{
     {"lights_casting", lit.lightsCasting},
     {"lights_placed", lit.lightsPlaced},
     {"lights_unplaced", lit.lightsUnplaced},
@@ -7093,6 +7097,10 @@ std::optional<std::size_t> parityShadowCount(
     {"sm_draws_local", lit.smDrawsLocal},
     {"sm_draws_global", lit.smDrawsGlobal},
     {"sm_draws_translucent", lit.smDrawsTranslucent},
+    // LP6.2 (C66, D169): the caster sets the settled frame's lists made and its tiles
+    // drawn again for an image (0 each in a settled frame)
+    {"caster_sets_built", lit.casterSetsBuilt},
+    {"tiles_image_redrawn", lit.tilesImageRedrawn},
   }};
   const auto found =
     std::ranges::find_if(counts, [&](const auto& count) { return count.first == key; });
@@ -18240,6 +18248,16 @@ TEST_CASE("LitSession perforated shadows on a GPU (LP3.4)", "[.][litgpu2]")
       access.passes.setDrawLogForTesting(true);
     }));
     REQUIRE(dropped);
+    // LP6.2 (D169): the drop's own frame (its hook ran before the passes) drew the
+    // grate's tile again for its image, that tile alone (the light's key unmoved); the
+    // next frame's hook reads that frame's stats
+    auto dropFrame = LitFrameStats{};
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      dropFrame = access.passes.lastStats();
+    }));
+    CHECK(dropFrame.tilesDrawn == 1u);
+    CHECK(dropFrame.tilesImageRedrawn == 1u);
+    CHECK(dropFrame.tilesProvisional == 1u);
     auto provisionalFrames = 0;
     auto provisional = std::optional<ShadowFrame>{};
     for (auto i = 0; i < 3; ++i)
@@ -18250,8 +18268,10 @@ TEST_CASE("LitSession perforated shadows on a GPU (LP3.4)", "[.][litgpu2]")
       if (frame->stats.tilesProvisional > 0)
       {
         ++provisionalFrames;
-        // the grate's tile alone, the light's record flagged, the frame not settled
+        // the grate's tile alone, the light's record flagged, the frame not settled;
+        // LP6.2 (D169, K53 as the director reads it): held, not drawn again
         CHECK(frame->stats.tilesProvisional == 1u);
+        CHECK(frame->stats.tilesDrawn == 0u);
         CHECK(frame->stats.shadowsPending);
         CHECK_FALSE(frame->converged);
         REQUIRE(frame->records.size() == 1u);
@@ -18261,6 +18281,11 @@ TEST_CASE("LitSession perforated shadows on a GPU (LP3.4)", "[.][litgpu2]")
     }
     CHECK(provisionalFrames == 3);
     REQUIRE(provisional);
+    // the drop and the frames after it drew the grate's tile once, no other side's
+    const auto heldGrateClears = sideClearsOf(provisional->drawLog, light, before.side);
+    const auto heldClears = tileClearsOf(provisional->drawLog, light);
+    CHECK(heldGrateClears == 1u);
+    CHECK(heldClears == 1u);
     const auto stand = grateTileOf(*provisional, provisional->records[0]);
     std::cout << fmt::format(
       "LP3.4 (n) provisional: {} frames with the tile provisional, the grate drawn with "
@@ -18272,11 +18297,22 @@ TEST_CASE("LitSession perforated shadows on a GPU (LP3.4)", "[.][litgpu2]")
       before.holes);
     saveAtlasPng(provisional->atlas, "lp34_n_provisional");
 
-    // uploads again: the slot complete, the tile drawn once more and settled
+    // uploads again: the slot complete, the tile drawn once more and settled (LP6.2: for
+    // its image, its side alone)
+    auto redrawnBefore = std::uint64_t{0};
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      redrawnBefore = access.passes.tilesImageRedrawnForTesting();
+    }));
     session->setUploadCapForTesting(UploadBytesPerFrame);
     clearLog();
     const auto settled = settledShadowFrame(*session, camera, 1, true);
     REQUIRE(settled);
+    auto redrawnAfter = std::uint64_t{0};
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      redrawnAfter = access.passes.tilesImageRedrawnForTesting();
+    }));
+    CHECK(redrawnAfter - redrawnBefore == 1u);
+    CHECK(tileClearsOf(settled->drawLog, light) == 1u);
     CHECK(settled->converged);
     CHECK(settled->stats.tilesProvisional == 0u);
     REQUIRE(settled->records.size() == 1u);
@@ -18288,7 +18324,7 @@ TEST_CASE("LitSession perforated shadows on a GPU (LP3.4)", "[.][litgpu2]")
     for (auto side = 0; side < 6; ++side)
     {
       sideClears.push_back(sideClearsOf(settled->drawLog, light, side));
-      CHECK(sideClears.back() <= 1u);
+      CHECK(sideClears.back() == (side == before.side ? 1u : 0u));
     }
     CHECK(grateClears == 1u);
     // then nothing: every tile cached
@@ -18306,6 +18342,20 @@ TEST_CASE("LitSession perforated shadows on a GPU (LP3.4)", "[.][litgpu2]")
       fmt::join(sideClears, " "),
       after.texels == before.texels,
       still->stats.tilesDrawn);
+    std::cout << fmt::format(
+      "LP6.2 (n) D169: the drop's frame drew {} tile(s) ({} for an image, {} "
+      "provisional), the three provisional frames {} each (held), the light's clears "
+      "over "
+      "them {} (the grate's side {}); the completion: {} tile(s) drawn again for an "
+      "image, the light's clears {}\n",
+      dropFrame.tilesDrawn,
+      dropFrame.tilesImageRedrawn,
+      dropFrame.tilesProvisional,
+      provisional->stats.tilesDrawn,
+      heldClears,
+      heldGrateClears,
+      redrawnAfter - redrawnBefore,
+      tileClearsOf(settled->drawLog, light));
     saveAtlasPng(settled->atlas, "lp34_n_complete");
   }
 

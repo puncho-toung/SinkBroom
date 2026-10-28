@@ -293,6 +293,8 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
   m_stats.casterPairsPending = m_lists.casterPairsPending;
   m_stats.casters = m_lists.casters;
   m_stats.casterMs = m_stats.listsRebuilt ? m_lists.casterMs : 0.0;
+  // LP6.2 (C66): the caster sets made by this frame's build
+  m_stats.casterSetsBuilt = m_stats.listsRebuilt ? m_lists.casterSetsBuilt : 0;
   m_stats.lightTriangleEntries = m_lightTriangles.size();
 
   // LP4.2a (C37, D79, D88): R_FindClosestEnvironmentProbes, every frame, from the probe

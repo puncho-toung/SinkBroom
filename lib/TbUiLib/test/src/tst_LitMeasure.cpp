@@ -1190,6 +1190,9 @@ constexpr auto RecordResolves = std::size_t{109};
 constexpr auto SurfacesMs = std::size_t{110};
 constexpr auto LightsMs = std::size_t{111};
 constexpr auto LinksMs = std::size_t{112};
+// LP6.2 (C66, D169): the caster sets made and the tiles drawn again for an image
+constexpr auto CasterSetsBuilt = std::size_t{113};
+constexpr auto TilesImageRedrawn = std::size_t{114};
 // LPF.1 (C44, P5.21): and the live feed's three (feed_applied, feed_ms, override_bytes);
 // LP5.1 (C45): and the interaction phases' two (math_lights, ambient_lights); LP5.2a
 // (C46): and the stage pass's three (stage_draws, stage_skipped, gpu_stages_ms); LP5.3
@@ -1203,8 +1206,8 @@ constexpr auto LinksMs = std::size_t{112};
 // columns after it, the 105th, and the three GPU columns reserved for LP6's passes, the
 // 108th; LP6.1 (C64): and the draw records' two (records_held, record_resolves), the
 // 110th; LP6.2 (C65): and lists_ms's three parts (surfaces_ms, lights_ms, links_ms), the
-// 113th the last
-constexpr auto Count = std::size_t{113};
+// 113th, and (C66, D169) caster_sets_built and tiles_image_redrawn, the 115th the last
+constexpr auto Count = std::size_t{115};
 } // namespace column
 
 /**

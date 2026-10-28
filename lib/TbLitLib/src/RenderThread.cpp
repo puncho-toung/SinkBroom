@@ -2283,6 +2283,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.surfacesMs = litStats.surfacesMs;
       row.lightsMs = litStats.lightsMs;
       row.linksMs = litStats.linksMs;
+      // LP6.2 (C66, D169): the caster sets made, the tiles drawn again for an image
+      row.casterSetsBuilt = litStats.casterSetsBuilt;
+      row.tilesImageRedrawn = litStats.tilesImageRedrawn;
       m_timers.frameShown(slot, row);
       ++m_framesPresented;
       // LP2.3 (D9): the panel's status line reads the frame's counts

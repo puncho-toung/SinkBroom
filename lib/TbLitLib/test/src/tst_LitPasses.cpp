@@ -17,6 +17,8 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "CasterSets.h"
+#include "LightTriangles.h"
 #include "LitFrontend.h"
 #include "LitMapFixture.h"
 #include "LitStages.h"
@@ -50,12 +52,14 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <memory>
 #include <set>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include <catch2/catch_approx.hpp>
@@ -2041,6 +2045,658 @@ TEST_CASE("LitPasses: the casters of a casting light, on screen or off (LP3.0, C
   REQUIRE(viewLightOf(quietLists, 20));
   CHECK(viewLightOf(quietLists, 20)->casters.size() == 1u);
   CHECK(quietLists.casterPairs == 1u);
+}
+
+namespace
+{
+
+/**
+ * LP6.2 (C66, D168, P8.2): a lists build of a scene with the kept caster sets' inputs
+ * (the sets, or none: a fresh set per light; the key's versions, the instance map and
+ * r_skipShadows' stand-in), a light-triangle cache when one is given (its beginBuild and,
+ * when asked, its endBuild without a pool, its bound keeping the kept sets' entries
+ * unless held is off), and the registers: the given ones, or each consumer's evaluated
+ * once (the same object for a kept set and a fresh build); a RegisterCache, when given,
+ * bracketing the build with the kept sets' keep.
+ */
+struct KeptBuild
+{
+  CasterSets* sets = nullptr;
+  std::uint64_t chunksVersion = 1;
+  ListsTableKey table = {1, 1};
+  std::uint64_t tableVersion = 1;
+  const std::map<ChunkKey, ModelInstance>* instances = nullptr;
+  bool skipShadows = false;
+  LightTriangleCache* triangles = nullptr;
+  bool endTriangles = true;
+  bool held = true;
+  std::function<RegisterAnswer(PreviewId, const MaterialEntry&, const ShaderParms&)>
+    registers;
+  RegisterCache* registerCache = nullptr;
+  bool keep = true;
+  std::map<std::pair<PreviewId, std::string>, std::pair<ShaderParms, RegisterAnswer>>
+    evaluated;
+};
+
+FrontendLists keptListsOf(
+  const FrontendFixture& f,
+  const FlowScene& scene,
+  const CameraState& camera,
+  KeptBuild& build)
+{
+  auto inputs = FrontendInputs{};
+  inputs.view = litViewOf(camera, 128, 96);
+  inputs.chunks = &scene.chunks;
+  inputs.instances = build.instances;
+  inputs.entities = &scene.entities;
+  inputs.lights = &scene.lights;
+  inputs.tree = scene.tree;
+  inputs.areas = scene.areas;
+  inputs.skipShadows = build.skipShadows;
+  inputs.material = [&](const std::string& name) {
+    const auto slot = f.table->find(name);
+    return MaterialAnswer{slot ? slot->entry : nullptr, !slot};
+  };
+  inputs.registers = build.registers
+                       ? build.registers
+                       : [&](
+                           const PreviewId consumer,
+                           const MaterialEntry& material,
+                           const ShaderParms& parms) {
+                           auto& entry = build.evaluated[{consumer, material.name}];
+                           if (!entry.second.registers || entry.first != parms)
+                           {
+                             entry = {parms, evaluatedRegisters(f, material, parms)};
+                           }
+                           return entry.second;
+                         };
+  inputs.casterSets = build.sets;
+  inputs.chunksVersion = build.chunksVersion;
+  inputs.table = build.table;
+  inputs.tableVersion = build.tableVersion;
+  if (build.triangles)
+  {
+    auto& cache = *build.triangles;
+    inputs.lightTrianglesVersion = cache.version();
+    inputs.lightTriangles =
+      [&](const LightRecord& record, const LitSurface& surface, const LitSpace& space) {
+        return surface.instance ? cache.triangles(
+                                    record.id,
+                                    record.version,
+                                    record.derived.projection.baseLightProject,
+                                    *surface.instance,
+                                    space.modelMatrix)
+                                : cache.triangles(
+                                    record.id,
+                                    record.version,
+                                    record.derived.projection.baseLightProject,
+                                    *surface.chunk,
+                                    space.modelMatrix);
+      };
+    cache.beginBuild();
+  }
+  if (build.registerCache && build.keep)
+  {
+    inputs.keepRegisters = [&](const PreviewId consumer, const MaterialEntry& material) {
+      build.registerCache->keep(consumer, material.name);
+    };
+  }
+  if (build.registerCache)
+  {
+    build.registerCache->beginBuild();
+  }
+  auto lists = buildFrontendLists(inputs);
+  if (build.registerCache)
+  {
+    build.registerCache->endBuild();
+  }
+  if (build.triangles && build.endTriangles)
+  {
+    auto* sets = build.held ? build.sets : nullptr;
+    build.triangles->endBuild(nullptr, [&](const PreviewId light, const ChunkKey& chunk) {
+      return sets && sets->holds(light, chunk);
+    });
+  }
+  return lists;
+}
+
+/**
+ * LP6.2 (C66, D168): what differs between two lists of one scene, field by field: the
+ * drawn surfaces; per light its record, LOD, hashes and counts and its casters by
+ * identity (ChunkKey, instance) with their material, registers and light triangles (the
+ * objects), provisional flags and spaces (by entity and mvp); the pair counts, pending;
+ * and the spaces. The spaces need no exception: a kept set's casters and a fresh build's
+ * take their spaces in the same fill (the difference step 2 allows, the spaces of
+ * candidates no light kept, is the one from e2e041527's gathering, which made them before
+ * the light volume's cull); casterMs and casterSetsBuilt are not compared.
+ */
+std::vector<std::string> listsDiffer(const FrontendLists& a, const FrontendLists& b)
+{
+  auto problems = std::vector<std::string>{};
+  const auto check = [&](const bool same, const std::string& what) {
+    if (!same)
+    {
+      problems.push_back(what);
+    }
+  };
+  const auto sameSpace = [&](const std::size_t x, const std::size_t y) {
+    return x < a.spaces.size() && y < b.spaces.size()
+           && a.spaces[x].entity == b.spaces[y].entity
+           && a.spaces[x].mvp == b.spaces[y].mvp
+           && a.spaces[x].modelMatrix == b.spaces[y].modelMatrix;
+  };
+  const auto sameSurface = [&](const LitSurface& x, const LitSurface& y) {
+    return x.chunk == y.chunk && x.instance == y.instance && x.material == y.material
+           && x.registers == y.registers && x.provisional == y.provisional
+           && x.lightTriangles == y.lightTriangles && x.gridArea == y.gridArea
+           && x.scissor == y.scissor && sameSpace(x.space, y.space);
+  };
+  const auto sameSurfaces = [&](
+                              const std::vector<LitSurface>& x,
+                              const std::vector<LitSurface>& y,
+                              const std::string& what) {
+    check(x.size() == y.size(), what + " count");
+    for (std::size_t i = 0; i < x.size() && i < y.size(); ++i)
+    {
+      check(sameSurface(x[i], y[i]), fmt::format("{} {}", what, i));
+    }
+  };
+  sameSurfaces(a.drawSurfs, b.drawSurfs, "drawSurfs");
+  check(a.lights.size() == b.lights.size(), "lights count");
+  for (std::size_t l = 0; l < a.lights.size() && l < b.lights.size(); ++l)
+  {
+    const auto& x = a.lights[l];
+    const auto& y = b.lights[l];
+    const auto at = fmt::format("light {}", x.record ? x.record->id : NoPreviewId);
+    check(x.record == y.record, at + " record");
+    check(x.shadowLod == y.shadowLod, at + " shadowLod");
+    check(x.casterHash == y.casterHash, at + " casterHash");
+    check(x.casterCount == y.casterCount, at + " casterCount");
+    check(x.perforatedHash == y.perforatedHash, at + " perforatedHash");
+    check(x.casters.size() == y.casters.size(), at + " casters count");
+    for (std::size_t c = 0; c < x.casters.size() && c < y.casters.size(); ++c)
+    {
+      check(
+        x.casters[c].chunk->key == y.casters[c].chunk->key
+          && (x.casters[c].instance != nullptr) == (y.casters[c].instance != nullptr),
+        fmt::format("{} caster {} identity", at, c));
+      check(sameSurface(x.casters[c], y.casters[c]), fmt::format("{} caster {}", at, c));
+    }
+    sameSurfaces(x.localInteractions, y.localInteractions, at + " local");
+    sameSurfaces(x.globalInteractions, y.globalInteractions, at + " global");
+    sameSurfaces(
+      x.translucentInteractions, y.translucentInteractions, at + " translucent");
+  }
+  check(a.casterLights == b.casterLights, "casterLights");
+  check(a.casterPairs == b.casterPairs, "casterPairs");
+  check(a.casterPairsResident == b.casterPairsResident, "casterPairsResident");
+  check(a.casterPairsPending == b.casterPairsPending, "casterPairsPending");
+  check(a.casters == b.casters, "casters");
+  check(a.pending == b.pending, "pending");
+  check(a.lightTrianglesPending == b.lightTrianglesPending, "lightTrianglesPending");
+  check(a.spaces.size() == b.spaces.size(), "spaces count");
+  for (std::size_t s = 0; s < a.spaces.size() && s < b.spaces.size(); ++s)
+  {
+    check(sameSpace(s, s), fmt::format("space {}", s));
+  }
+  return problems;
+}
+
+// the casters' (area, entity, material) of a light of the lists, none when it is absent
+std::set<std::tuple<int, PreviewId, std::string>> castersOf(
+  const FrontendLists& lists, const PreviewId light)
+{
+  auto keys = std::set<std::tuple<int, PreviewId, std::string>>{};
+  if (const auto* viewLight = viewLightOf(lists, light))
+  {
+    for (const auto& caster : viewLight->casters)
+    {
+      keys.emplace(
+        caster.chunk->key.area, caster.chunk->key.entity, caster.chunk->key.material);
+    }
+  }
+  return keys;
+}
+
+} // namespace
+
+TEST_CASE("LitPasses: the kept caster sets (LP6.2, C66, D168, P8.2)")
+{
+  auto f = frontendFixture();
+  const auto tree =
+    readProcFile(readTextFile(
+      litFixtureFolder() / "goldens" / "lp1b_geometry" / "lp1b_geometry.proc"))
+    | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+  const auto areas = buildAreaData(tree);
+  REQUIRE(areas.areas.size() == 2u);
+  constexpr auto World = PreviewId{1};
+  constexpr auto Box = PreviewId{5};
+  constexpr auto Near = PreviewId{20};
+  constexpr auto Far = PreviewId{22};
+
+  // two casting point lights in area 1 (the LP3.3 record case's around the eye, and one
+  // west of it), a world chunk ahead of the eye, one behind it, and a brush entity's box
+  // with a perforated grate beside the eye (references {1}): inside both lights' volumes
+  auto scene = FlowScene{};
+  scene.tree = &tree;
+  scene.areas = &areas;
+  addChunk(scene, 1, World, {-185, -10, 40}, {-175, 10, 56});
+  addChunk(scene, 1, World, {-240, -10, 40}, {-230, 10, 56}, "textures/lp1b/floor");
+  addEntity(
+    scene,
+    Box,
+    {-200, 20, 48},
+    EngineBounds{EngineVec3{-4, -4, -4}, EngineVec3{4, 4, 4}},
+    {1});
+  addChunk(scene, 1, Box, {-4, -4, -4}, {4, 4, 4}, "textures/lp1b/floor");
+  addChunk(scene, 1, Box, {-3, -3, -3}, {3, 3, 3}, "textures/lp1b/grate");
+  const auto grateKey = ChunkKey{1, Box, "textures/lp1b/grate", {0, 0, 0}, 0};
+  scene.chunks.at(grateKey).castClass = CastClass::Perforated;
+  addLight(
+    scene, *f, Near, EntityKeys{{"origin", "-200 0 48"}, {"light_radius", "50 50 50"}});
+  addLight(
+    scene, *f, Far, EntityKeys{{"origin", "-215 0 48"}, {"light_radius", "45 45 45"}});
+  const auto camera = cameraAt({-200, 0, 48}, {1, 0, 0});
+  const auto moved = cameraAt({-205, 4, 50}, {1, 0.1f, 0});
+
+  auto triangles = LightTriangleCache{};
+  auto sets = CasterSets{};
+  auto build = KeptBuild{};
+  build.sets = &sets;
+  build.triangles = &triangles;
+  // the first build makes both sets and asks for the pairs (answered at its end, no
+  // pool); the second makes them again (a Pending pair and the cache's version moved)
+  const auto first = keptListsOf(*f, scene, camera, build);
+  REQUIRE(first.flowed);
+  CHECK(first.casterSetsBuilt == 2u);
+  CHECK(first.casterPairsPending > 0u);
+  const auto second = keptListsOf(*f, scene, camera, build);
+  CHECK(second.casterSetsBuilt == 2u);
+  CHECK(second.casterPairsPending == 0u);
+  REQUIRE(viewLightOf(second, Near));
+  REQUIRE(viewLightOf(second, Far));
+  CHECK(castersOf(second, Near).contains({1, Box, "textures/lp1b/grate"}));
+  CHECK(castersOf(second, Far).contains({1, Box, "textures/lp1b/grate"}));
+  CHECK(sets.size() == 2u);
+
+  // what a fresh build of the scene gives at a camera (no kept set, the same cache and
+  // registers)
+  const auto freshAt = [&](const FlowScene& s, const CameraState& c) {
+    auto fresh = build;
+    fresh.sets = nullptr;
+    fresh.endTriangles = false;
+    const auto lists = keptListsOf(*f, s, c, fresh);
+    build.evaluated = fresh.evaluated;
+    return lists;
+  };
+
+  SECTION("(a) built twice: no set made, the lists equal a fresh build's")
+  {
+    const auto kept = keptListsOf(*f, scene, camera, build);
+    CHECK(kept.casterSetsBuilt == 0u);
+    CHECK(listsDiffer(kept, freshAt(scene, camera)).empty());
+    CHECK(listsDiffer(kept, second).empty());
+    // the grate's registers, its provisional flag and its light triangles ride with it
+    const auto* light = viewLightOf(kept, Near);
+    REQUIRE(light);
+    const auto grate = std::ranges::find_if(light->casters, [](const LitSurface& c) {
+      return c.chunk->castClass == CastClass::Perforated;
+    });
+    REQUIRE(grate != light->casters.end());
+    CHECK(grate->registers != nullptr);
+    CHECK_FALSE(grate->provisional);
+    CHECK_FALSE(kept.pending);
+  }
+
+  SECTION("(b) per key field: a camera move keeps every set, the rest make theirs")
+  {
+    // the camera: none made, the lists a fresh build's at the new camera
+    const auto atMoved = keptListsOf(*f, scene, moved, build);
+    CHECK(atMoved.casterSetsBuilt == 0u);
+    CHECK(listsDiffer(atMoved, freshAt(scene, moved)).empty());
+    // the light table's version alone (its records unchanged): none
+    // (the scene changed in place: a copy's maps are other maps, a new key)
+    scene.lights.version += 1;
+    CHECK(keptListsOf(*f, scene, camera, build).casterSetsBuilt == 0u);
+    // a light's new version: that light's set alone
+    {
+      auto record = *scene.lights.find(Far);
+      record.version = 2;
+      scene.lights.records = scene.lights.records.set(
+        Far, std::make_shared<const LightRecord>(std::move(record)));
+      scene.lights.version += 1;
+    }
+    // (the fresh build first: its pairs asked, not answered yet, as the kept build's are)
+    const auto freshLight = freshAt(scene, camera);
+    const auto oneLight = keptListsOf(*f, scene, camera, build);
+    CHECK(oneLight.casterSetsBuilt == 1u);
+    CHECK(oneLight.casterPairsPending > 0u);
+    CHECK(listsDiffer(oneLight, freshLight).empty());
+    // the chunks' version (a batch applied): both
+    build.chunksVersion += 1;
+    CHECK(keptListsOf(*f, scene, camera, build).casterSetsBuilt == 2u);
+    // an entity hidden (its batch raises the chunks' version, step 0): both, and its
+    // chunks cast no more
+    scene.entities.at(Box).visible = false;
+    build.chunksVersion += 1;
+    const auto withoutBox = keptListsOf(*f, scene, camera, build);
+    CHECK(withoutBox.casterSetsBuilt == 2u);
+    CHECK_FALSE(castersOf(withoutBox, Near).contains({1, Box, "textures/lp1b/grate"}));
+    CHECK(listsDiffer(withoutBox, freshAt(scene, camera)).empty());
+    scene.entities.at(Box).visible = true;
+    build.chunksVersion += 1;
+    CHECK(keptListsOf(*f, scene, camera, build).casterSetsBuilt == 2u);
+    // a new instance map: both
+    const auto noInstances = std::map<ChunkKey, ModelInstance>{};
+    build.instances = &noInstances;
+    CHECK(keptListsOf(*f, scene, camera, build).casterSetsBuilt == 2u);
+    // a new tree and AreaData (a bake of the same .proc): both
+    const auto treeCopy =
+      readProcFile(readTextFile(
+        litFixtureFolder() / "goldens" / "lp1b_geometry" / "lp1b_geometry.proc"))
+      | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+    static_cast<void>(drainEngineMessagesForThread(std::this_thread::get_id()));
+    const auto areasCopy = buildAreaData(treeCopy);
+    scene.tree = &treeCopy;
+    scene.areas = &areasCopy;
+    CHECK(keptListsOf(*f, scene, camera, build).casterSetsBuilt == 2u);
+    CHECK(keptListsOf(*f, scene, camera, build).casterSetsBuilt == 0u);
+    // a re-parse (the table's key): both
+    build.table.materialsRevision += 1;
+    CHECK(keptListsOf(*f, scene, camera, build).casterSetsBuilt == 2u);
+    // the table's version alone, no set waiting for it: none
+    build.tableVersion += 1;
+    CHECK(keptListsOf(*f, scene, camera, build).casterSetsBuilt == 0u);
+    // r_skipShadows' stand-in: no casting light, no set; off again: both
+    build.skipShadows = true;
+    const auto skipped = keptListsOf(*f, scene, camera, build);
+    CHECK(skipped.casterSetsBuilt == 0u);
+    CHECK(skipped.casters == 0u);
+    CHECK(sets.size() == 0u);
+    build.skipShadows = false;
+    CHECK(keptListsOf(*f, scene, camera, build).casterSetsBuilt == 2u);
+    // the light-triangle cull off (no cache), then on: both, each time
+    build.triangles = nullptr;
+    const auto unculled = keptListsOf(*f, scene, camera, build);
+    CHECK(unculled.casterSetsBuilt == 2u);
+    CHECK(listsDiffer(unculled, freshAt(scene, camera)).empty());
+    build.triangles = &triangles;
+    CHECK(keptListsOf(*f, scene, camera, build).casterSetsBuilt == 2u);
+    // a light gone from the table: its set goes at the build's end
+    scene.lights.records = scene.lights.records.erase(Far);
+    scene.lights.version += 1;
+    CHECK(keptListsOf(*f, scene, camera, build).casterSetsBuilt == 0u);
+    CHECK(sets.size() == 1u);
+    CHECK(sets.find(Far) == nullptr);
+  }
+
+  SECTION(
+    "(c) a Pending pair waits for the cache's version; pending registers for the table's")
+  {
+    // Far's new version: its pairs asked again (Pending until the cache's end of build)
+    {
+      auto record = *scene.lights.find(Far);
+      record.version = 3;
+      scene.lights.records = scene.lights.records.set(
+        Far, std::make_shared<const LightRecord>(std::move(record)));
+    }
+    build.endTriangles = false;
+    const auto asked = keptListsOf(*f, scene, camera, build);
+    CHECK(asked.casterSetsBuilt == 1u);
+    CHECK(asked.casterPairsPending > 0u);
+    REQUIRE(sets.find(Far));
+    CHECK(sets.find(Far)->pairPending);
+    CHECK_FALSE(sets.find(Near)->pairPending);
+    // the cache's version unmoved: kept, still pending
+    const auto waiting = keptListsOf(*f, scene, camera, build);
+    CHECK(waiting.casterSetsBuilt == 0u);
+    CHECK(waiting.casterPairsPending == asked.casterPairsPending);
+    // the answers taken (the version moves): Far's set alone is made again
+    build.endTriangles = true;
+    const auto taking = keptListsOf(*f, scene, camera, build);
+    CHECK(taking.casterSetsBuilt == 0u);
+    const auto answered = keptListsOf(*f, scene, camera, build);
+    CHECK(answered.casterSetsBuilt == 1u);
+    CHECK(answered.casterPairsPending == 0u);
+    CHECK(keptListsOf(*f, scene, camera, build).casterSetsBuilt == 0u);
+
+    // the grate's registers not current (D52's last ones): both sets wait for the table
+    auto current = false;
+    auto lastAnswer = std::optional<RegisterAnswer>{};
+    build.registers = [&](
+                        const PreviewId consumer,
+                        const MaterialEntry& material,
+                        const ShaderParms& parms) {
+      auto answer = evaluatedRegisters(*f, material, parms);
+      if (consumer == Box && material.name == "textures/lp1b/grate")
+      {
+        if (!lastAnswer)
+        {
+          lastAnswer = answer;
+        }
+        return RegisterAnswer{lastAnswer->registers, current};
+      }
+      return answer;
+    };
+    build.table.materialsRevision += 1;
+    const auto notCurrent = keptListsOf(*f, scene, camera, build);
+    CHECK(notCurrent.casterSetsBuilt == 2u);
+    CHECK(notCurrent.pending);
+    CHECK(sets.find(Near)->tablePending);
+    // the table's version unmoved: kept, still pending
+    const auto stillWaiting = keptListsOf(*f, scene, camera, build);
+    CHECK(stillWaiting.casterSetsBuilt == 0u);
+    CHECK(stillWaiting.pending);
+    // the table's version moves with the current registers: both made again, settled;
+    // the light's key.perforated moves with the provisional flag (D169's held tiles)
+    current = true;
+    build.tableVersion += 1;
+    const auto settled = keptListsOf(*f, scene, camera, build);
+    CHECK(settled.casterSetsBuilt == 2u);
+    CHECK_FALSE(settled.pending);
+    REQUIRE(viewLightOf(notCurrent, Near));
+    REQUIRE(viewLightOf(settled, Near));
+    CHECK(
+      viewLightOf(settled, Near)->perforatedHash
+      != viewLightOf(notCurrent, Near)->perforatedHash);
+    CHECK(
+      viewLightOf(settled, Near)->casterHash
+      == viewLightOf(notCurrent, Near)->casterHash);
+  }
+
+  SECTION("(d) the light-triangle entries a kept set holds survive the cache's bound")
+  {
+    // the bound below the entries: a camera move asks for no caster pair; the bound
+    // keeps the kept sets' entries, so that a set made again finds them answered
+    triangles.setCapacityForTesting(1);
+    const auto entries = triangles.size();
+    REQUIRE(entries > 1u);
+    const auto atMoved = keptListsOf(*f, scene, moved, build);
+    CHECK(atMoved.casterSetsBuilt == 0u);
+    for (const auto light : {Near, Far})
+    {
+      REQUIRE(sets.find(light));
+      for (const auto& key : sets.find(light)->pairKeys)
+      {
+        CHECK(sets.holds(light, key));
+      }
+    }
+    const auto held = triangles.size();
+    CHECK(held >= sets.find(Near)->pairKeys.size() + sets.find(Far)->pairKeys.size());
+    // a batch (the chunks' version; no chunk changed): both made again, every pair
+    // answered from the cache, nothing asked again
+    const auto answeredBefore = triangles.answered();
+    build.chunksVersion += 1;
+    const auto remade = keptListsOf(*f, scene, moved, build);
+    CHECK(remade.casterSetsBuilt == 2u);
+    CHECK(remade.casterPairsPending == 0u);
+    CHECK(triangles.answered() == answeredBefore);
+    // without the rule (the bound erases what no build asked for): a set made again asks
+    // again
+    build.held = false;
+    CHECK(keptListsOf(*f, scene, camera, build).casterSetsBuilt == 0u);
+    build.chunksVersion += 1;
+    const auto unheld = keptListsOf(*f, scene, camera, build);
+    CHECK(unheld.casterSetsBuilt == 2u);
+    CHECK(unheld.casterPairsPending > 0u);
+  }
+
+  SECTION(
+    "(f) a kept set's perforated caster keeps its registers' standing (D52, LPF.0b)")
+  {
+    // the grate shadow-only (the camera looks west: the box is beside the eye, out of the
+    // view), its registers through a RegisterCache over a table that holds them
+    const auto west = cameraAt({-200, 0, 48}, {-1, 0, 0});
+    const auto& grate = *f->table->find("textures/lp1b/grate")->entry;
+    const auto boxParms = scene.entities.at(Box).parms.shaderParms;
+    auto published = MaterialTable{};
+    published.registers = published.registers.set(
+      RegisterKey{MaterialId::of(grate), boxParms, 0.0f},
+      evaluatedRegisters(*f, grate, boxParms).registers);
+    auto registerCache = RegisterCache{};
+    const auto* table = &published;
+    build.registers = [&](
+                        const PreviewId consumer,
+                        const MaterialEntry& material,
+                        const ShaderParms& parms) {
+      return consumer == Box
+               ? registerCache.registers(consumer, material, parms, *table, nullptr)
+               : evaluatedRegisters(*f, material, parms);
+    };
+    build.registerCache = &registerCache;
+    build.table.materialsRevision += 1;
+    const auto made = keptListsOf(*f, scene, west, build);
+    CHECK(made.casterSetsBuilt == 2u);
+    CHECK(castersOf(made, Near).contains({1, Box, "textures/lp1b/grate"}));
+    CHECK(std::ranges::none_of(made.drawSurfs, [&](const LitSurface& surface) {
+      return surface.chunk->key == grateKey;
+    }));
+    const auto entries = registerCache.size();
+    REQUIRE(entries == 1u);
+    // a camera move: kept, the grate's entry kept with it
+    const auto kept = keptListsOf(*f, scene, cameraAt({-201, 0, 48}, {-1, 0, 0}), build);
+    CHECK(kept.casterSetsBuilt == 0u);
+    CHECK(registerCache.size() == entries);
+    // a re-parse whose evaluation has not landed (the service erased the deltas): the
+    // grate drawn with its last registers, provisional, as a drawn surface would be
+    const auto erased = MaterialTable{};
+    table = &erased;
+    build.table.materialsRevision += 1;
+    const auto reparsed = keptListsOf(*f, scene, west, build);
+    CHECK(reparsed.casterSetsBuilt == 2u);
+    const auto grateOf = [&](const FrontendLists& lists) {
+      const auto* light = viewLightOf(lists, Near);
+      REQUIRE(light);
+      const auto it = std::ranges::find_if(
+        light->casters, [&](const LitSurface& c) { return c.chunk->key == grateKey; });
+      REQUIRE(it != light->casters.end());
+      return *it;
+    };
+    CHECK(grateOf(reparsed).registers != nullptr);
+    CHECK(grateOf(reparsed).provisional);
+    CHECK(reparsed.pending);
+    // without the rule its entry goes with the camera move, and the re-parse finds none:
+    // drawn solid (registers null), provisional
+    table = &published;
+    build.keep = false;
+    build.table.materialsRevision += 1;
+    static_cast<void>(keptListsOf(*f, scene, west, build));
+    CHECK(registerCache.size() == 1u);
+    static_cast<void>(keptListsOf(*f, scene, cameraAt({-201, 0, 48}, {-1, 0, 0}), build));
+    CHECK(registerCache.size() == 0u);
+    table = &erased;
+    build.table.materialsRevision += 1;
+    const auto lost = keptListsOf(*f, scene, west, build);
+    CHECK(grateOf(lost).registers == nullptr);
+    CHECK(grateOf(lost).provisional);
+  }
+}
+
+TEST_CASE("LitPasses: a kept caster set at LOD -1 (LP6.2, C66)")
+{
+  // (e) without a tree (D94): a small casting light far from the eye has shadow LOD -1
+  // (its projected radius), near it a LOD: far, the light keeps its set and fills no
+  // casters; near again, the kept set's casters, no set made
+  auto f = frontendFixture();
+  constexpr auto World = PreviewId{1};
+  constexpr auto Small = PreviewId{30};
+  auto scene = FlowScene{};
+  addChunk(scene, 0, World, {-6, -6, 40}, {6, 6, 42});
+  addChunk(scene, 0, World, {-2, -2, 44}, {2, 2, 46}, "textures/lp1b/floor");
+  addLight(scene, *f, Small, EntityKeys{{"origin", "0 0 48"}, {"light_radius", "8 8 8"}});
+  auto sets = CasterSets{};
+  auto build = KeptBuild{};
+  build.sets = &sets;
+  const auto nearCamera = cameraAt({-20, 0, 48}, {1, 0, 0});
+  const auto farCamera = cameraAt({-120, 0, 48}, {1, 0, 0});
+  const auto nearLists = keptListsOf(*f, scene, nearCamera, build);
+  REQUIRE_FALSE(nearLists.flowed);
+  const auto* nearLight = viewLightOf(nearLists, Small);
+  REQUIRE(nearLight);
+  REQUIRE(nearLight->shadowLod >= 0);
+  CHECK(nearLists.casterSetsBuilt == 1u);
+  CHECK_FALSE(nearLight->casters.empty());
+  const auto farLists = keptListsOf(*f, scene, farCamera, build);
+  const auto* farLight = viewLightOf(farLists, Small);
+  REQUIRE(farLight);
+  CHECK(farLight->shadowLod == -1);
+  CHECK(farLight->casters.empty());
+  CHECK(farLists.casterLights == 0u);
+  CHECK(farLists.casterSetsBuilt == 0u);
+  CHECK(sets.find(Small) != nullptr);
+  const auto again = keptListsOf(*f, scene, nearCamera, build);
+  CHECK(again.casterSetsBuilt == 0u);
+  CHECK(listsDiffer(again, nearLists).empty());
+}
+
+TEST_CASE("LitPasses: a shadow tile's image term (LP6.2, D169)")
+{
+  // (g) shadowTileImageSum over a tile's slots: it moves when a slot of the tile
+  // completes or its version moves while complete, not when another slot does; a slot
+  // loading moves nothing (LP3.4's term); a tile with no image is 0 whatever moves; a key
+  // whose slot is not made yet counts as no slot until it is
+  auto states = std::map<std::uint32_t, TileImageState>{
+    {3, {false, 5}}, {4, {true, 2}}, {9, {true, 7}}};
+  const auto sumOf =
+    [&](const std::vector<std::uint32_t>& slots, const std::size_t unmade) {
+      return shadowTileImageSum(
+        slots, unmade, [&](const std::uint32_t slot) { return states.at(slot); });
+    };
+  const auto tile = std::vector<std::uint32_t>{3, 4};
+  const auto drawn = sumOf(tile, 0);
+  CHECK(drawn == sumOf(tile, 0));
+  CHECK(sumOf({}, 0) == 0u);
+  // another slot moves: not this tile
+  states.at(9) = {false, 8};
+  CHECK(sumOf(tile, 0) == drawn);
+  CHECK(sumOf({}, 0) == 0u);
+  // 3 writes a level while loading: nothing
+  states.at(3) = {false, 6};
+  CHECK(sumOf(tile, 0) == drawn);
+  // 3 completes
+  states.at(3) = {true, 6};
+  const auto completed = sumOf(tile, 0);
+  CHECK(completed != drawn);
+  // 3 swapped while complete (a reload's Replacing): its version moves
+  states.at(3) = {true, 7};
+  CHECK(sumOf(tile, 0) != completed);
+  // 4 dropped (not complete)
+  states.at(4) = {false, 3};
+  CHECK(sumOf(tile, 0) != completed);
+  // a key not made yet is the term of no slot, and its slot made moves the sum
+  CHECK(sumOf({}, 1) != 0u);
+  CHECK(sumOf({}, 1) == shadowPerforatedImageTerm(~std::uint64_t{0}, false, 0));
+  CHECK(sumOf({9}, 0) != sumOf({}, 1));
+  // the perforated term marks a provisional caster (the light's key moves when it is
+  // no longer, so that a held provisional tile is drawn again)
+  const auto key = ChunkKey{1, 5, "textures/lp1b/grate", {0, 0, 0}, 0};
+  CHECK(
+    shadowPerforatedTerm(key, false, nullptr, nullptr, true)
+    != shadowPerforatedTerm(key, false, nullptr, nullptr, false));
+  CHECK(
+    shadowPerforatedTerm(key, false, nullptr, nullptr)
+    == shadowPerforatedTerm(key, false, nullptr, nullptr, false));
 }
 
 TEST_CASE("LitPasses: the shadow records' versions and caster hash (LP3.3, C61, D150)")

@@ -261,6 +261,12 @@ struct FrameLogRow
   std::optional<double> surfacesMs;
   std::optional<double> lightsMs;
   std::optional<double> linksMs;
+  // LP6.2 (C66, D169), frame rows: the caster sets the frame's lists build made (0 when
+  // the lists were kept: LitFrameStats::casterSetsBuilt) and pass 6's tiles drawn again
+  // because one of their own perforated images moved (LitFrameStats::tilesImageRedrawn);
+  // empty in a start or stop row, the last columns
+  std::optional<std::uint64_t> casterSetsBuilt;
+  std::optional<std::uint64_t> tilesImageRedrawn;
 };
 
 // the CSV header line, ending in a newline

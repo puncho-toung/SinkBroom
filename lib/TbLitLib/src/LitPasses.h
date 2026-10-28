@@ -411,6 +411,9 @@ struct LitFrameStats
   double surfacesMs = 0.0;
   double lightsMs = 0.0;
   double linksMs = 0.0;
+  // LP6.2 (C66): the caster sets the lists build made this frame (0 when the lists were
+  // kept or every set was: FrontendLists::casterSetsBuilt)
+  std::size_t casterSetsBuilt = 0;
 };
 
 // a recorded draw (setDrawLogForTesting)
