@@ -114,12 +114,14 @@ struct RecordedInteraction
 };
 
 // LP6.1 (C64): an ambient draw (pass 5): its interaction, its record, and on the grid
-// path the area's parms by its atlas texture's size (resolved with the record)
+// path the area's parms by its atlas texture's size (resolved with the record). LP6.5a
+// (C69): and the same stage group's pass-3 record (gbuffer 12, its bump image at t0)
 struct AmbientRecord
 {
   RecordedInteraction draw;
   DrawRecord record;
   GridParms grid;
+  DrawRecord gbuffer;
 };
 
 // LP6.1 (C64): an interaction draw (pass 7): its interaction and its records, the plain
@@ -188,6 +190,8 @@ struct SurfaceRecords
   DrawRecord prepass;
   std::vector<AmbientRecord> ambient;
   bool ambientFilled = false;
+  // LP6.5a (C69): pass 3 has drawn the groups (their gbuffer records count as held)
+  bool gbufferFilled = false;
   // the last build that linked it
   std::uint64_t lastLinked = 0;
 };
@@ -374,6 +378,9 @@ public:
   // interaction records): they count toward the held records
   void ambientFilled(SurfaceRecords& group);
   void filled(InteractionRecords& group);
+  // LP6.5a (C69): pass 3's first draw of a surface whose ambient records are made: their
+  // gbuffer records count toward the held records
+  void gbufferFilled(SurfaceRecords& group);
 
   // a record resolved: indexed under its slots
   void resolved(DrawRecord& record);
@@ -389,8 +396,8 @@ public:
   void clearSurfaces();
   void clearInteractions();
 
-  // the draw records held: the surfaces' (a prepass record each, their ambient records)
-  // and the interaction records
+  // the draw records held: the surfaces' (a prepass record each, their ambient records,
+  // LP6.5a their gbuffer records once pass 3 drew them) and the interaction records
   std::size_t records() const;
   std::size_t groups() const;
   // the resolved records under a slot (tests)

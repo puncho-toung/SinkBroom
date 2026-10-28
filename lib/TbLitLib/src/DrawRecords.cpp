@@ -34,11 +34,13 @@ void combine(std::size_t& seed, const std::size_t value)
   seed ^= value + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
 }
 
-// a surface's prepass record (an opaque one's), and its ambient records once made
+// a surface's prepass record (an opaque one's), and its ambient records once made;
+// LP6.5a: their gbuffer records once pass 3 drew them
 std::size_t recordCount(const SurfaceRecords& group)
 {
   return (group.depth == DepthClass::Opaque ? 1 : 0)
-         + (group.ambientFilled ? group.ambient.size() : 0);
+         + (group.ambientFilled ? group.ambient.size() : 0)
+         + (group.ambientFilled && group.gbufferFilled ? group.ambient.size() : 0);
 }
 
 namespace em = engine_material;
@@ -248,6 +250,15 @@ void DrawRecordTable::filled(InteractionRecords& group)
   m_records += group.draws.size();
 }
 
+void DrawRecordTable::gbufferFilled(SurfaceRecords& group)
+{
+  if (group.ambientFilled && !group.gbufferFilled)
+  {
+    group.gbufferFilled = true;
+    m_records += group.ambient.size();
+  }
+}
+
 void DrawRecordTable::resolved(DrawRecord& record)
 {
   for (const auto& version : record.slots)
@@ -381,6 +392,7 @@ void DrawRecordTable::releaseGroup(SurfaceRecords& group)
   for (auto& ambient : group.ambient)
   {
     release(ambient.record);
+    release(ambient.gbuffer);
   }
   m_records -= std::min(m_records, recordCount(group));
 }

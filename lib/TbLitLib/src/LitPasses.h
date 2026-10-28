@@ -120,6 +120,8 @@ struct LitFrameInputs
   nvrhi::ITimerQuery* interactionTimer = nullptr;
   // LP4.2a (C34, C16): the ambient pass's, or null
   nvrhi::ITimerQuery* ambientTimer = nullptr;
+  // LP6.5a (C69, C65): pass 3's (TimedPass::Gbuffer), or null
+  nvrhi::ITimerQuery* gbufferTimer = nullptr;
   // LP5.2a (C46, C16): the stage pass's, or null
   nvrhi::ITimerQuery* stageTimer = nullptr;
   // LP5.3 (C49, C16): pass 9's (FogAllLights), or null
@@ -140,6 +142,10 @@ struct LitFrameInputs
   // LP5.2a (C47, D9): the game folder whose renderprogs2/spirv holds a newStage
   // program's blobs (SessionOptions::gamePath)
   std::filesystem::path gamePath;
+  // LP6.5a (C69, C70, D176, D177): the session's SSAO is on (SessionOptions::
+  // ssaoForTesting): pass 3 fills the G-buffer's normals for pass 4, whose _ao0 the
+  // ambient pass reads at t4; off: the frame is LP6.4b's
+  bool ssao = false;
 };
 
 // C16's columns of the lit passes, per frame (LP2.2b logs them)
@@ -266,6 +272,19 @@ struct LitFrameStats
   std::uint64_t ambientConstantWrites = 0;
   bool ambientTimed = false;
   bool ambientDisabled = false;
+  // ----- LP6.5a (C69, D176): pass 3, AmbientPass( fillGbuffer true ) -----
+  // its draws (one per ambient stage group of the surfaces the ambient pass draws), those
+  // skipped (also in skippedDraws) and of them for a pending pipeline (also in
+  // pendingPipelines), whether it ran (SSAO on: its clears and draws recorded), its timer
+  // ran, a failed pipeline disabled it (D9: disabledReason says why), and its CPU record
+  // time (inside record_other_ms: no column of its own, C65)
+  std::size_t gbufferDraws = 0;
+  std::size_t gbufferSkipped = 0;
+  std::size_t gbufferPendingPipelines = 0;
+  bool gbufferRan = false;
+  bool gbufferTimed = false;
+  bool gbufferDisabled = false;
+  double gbufferRecordMs = 0.0;
   // C38 (LP4.2b's ambient-only rows): the interactions were not recorded
   // (skipInteractionsForTesting, r_skipInteractions 1)
   bool interactionsSkipped = false;
@@ -441,6 +460,8 @@ struct LitDrawRecord
     Shadow,
     // LP3.3 (D146): a tile relocated (copied to its new rect through the scratch)
     ShadowMove,
+    // LP6.5a (C69): pass 3's draws into geometryBufferFBO
+    Gbuffer,
   };
 
   Pass pass = Pass::Prepass;
@@ -561,9 +582,13 @@ void countInteractionDraw(LitFrameStats& stats, InteractionList list, int progra
  * pipeline is still Pending (PipelineLookup) is skipped, counted (pipelinesPending) and
  * leaves the frame unconverged (D77), and the compile thread's onReady draws the frame
  * again; a key asked for at Start only makes that wait shorter or none. LP6.5 and LP6.6
- * extend these keys with the passes they add and repeat this rule. Pure.
+ * extend these keys with the passes they add and repeat this rule. LP6.5a (C69, P8.12):
+ * a session with SSAO on (ssao) adds gbuffer 12 in ambientStateBits' two states (pass 3,
+ * which runs only then, D176); while one is pending pass 3 is skipped and the frame binds
+ * _white at t4, unconverged. Pure.
  */
-std::vector<PipelineKey> litStartPipelineKeys(nvrhi::Format depthFormat);
+std::vector<PipelineKey> litStartPipelineKeys(
+  nvrhi::Format depthFormat, bool ssao = false);
 
 /**
  * LP4.2a (C34, SC322): the ambient pass's GL state before a draw (AmbientPass,
@@ -1114,6 +1139,23 @@ private:
   // LP4.2a (C34): AmbientPass( fillGbuffer false ) on the probe path; LP4.3 (C36): and
   // on the light-grid path for a surface with a grid area (RenderBackend.cpp:1196-1305)
   void recordAmbient(Frame& frame);
+  /**
+   * LP6.5a (C69, SC807, P8.20, P8.21): AmbientPass( fillGbuffer true )
+   * (RenderBackend.cpp: 2264-2731) into geometryBufferFBO {_currentNormals,
+   * _currentDepth}: _currentNormals cleared to 0, then GL_Clear's colour (0, 0, 0, 1)
+   * (:2306-2309, :2351-2356); the ambient loop's surfaces and stage groups (the surface
+   * records' ambient groups: translucent and conditioned-off surfaces have none,
+   * :2430-2454) each drawn with gbuffer 12 in ambientStateBits' state (ONE / ZERO |
+   * DEPTHMASK | DEPTHFUNC_EQUAL, ONE / ONE for a group with a vertex colour, :2373,
+   * :2602-2700), the space's MVP as the prepass's (setAmbientSpace: so EQUAL passes), t0
+   * the group's bump image and its own sampler (GBUFFER's sets: DEFAULT's,
+   * RenderBackend_NVRHI.cpp:586-623), set 3's parms; each a record of its own
+   * (AmbientRecord::gbuffer, C64), the draw log's Pass::Gbuffer. NVRHI tracks
+   * _currentNormals RenderTarget -> ShaderResource for its readers. Render thread.
+   */
+  void recordGbuffer(Frame& frame);
+  // LP6.5a: AmbientPass' parms before its loop (:2292-2423), the same for both calls
+  void setAmbientPassParms(Frame& frame);
   /**
    * LP3.1 (C59, D142, D145, D147, SC714-SC720): ShadowAtlasPass (RenderBackend.cpp:
    * 3603-3922): nothing under r_skipShadows (the test's stand-in) or without view lights

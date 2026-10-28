@@ -165,6 +165,8 @@ constexpr auto RenderParmNames =
 constexpr auto MipmapGenConstantsSize = std::uint32_t{16};
 constexpr auto TemporalAntiAliasingConstantsSize = std::uint32_t{132};
 constexpr auto ToneMappingConstantsSize = std::uint32_t{80};
+// LP6.5a (C70): SsaoConstants (SsaoPass_cb.h)
+constexpr auto SsaoConstantsSize = std::uint32_t{272};
 // BlitConstants (CommonPasses.h:63-72)
 constexpr auto BlitConstantsSize = std::uint32_t{36};
 
@@ -284,6 +286,9 @@ int engineParmSetOfLayout(const EngineBindingLayout layout)
   case L::Histogram:
   case L::Exposure:
   case L::Num:
+  case L::SsaoDeinterleave:
+  case L::SsaoCompute:
+  case L::SsaoBlur:
     return -1;
   }
   return -1;
@@ -295,6 +300,8 @@ std::span<const EngineParmSetMember> engineParmSetMembers(const int set)
   {
   case 0:
     return EngineParmSet0;
+  case 3:
+    return EngineParmSet3;
   case 4:
     return EngineParmSet4;
   case 5:
@@ -369,6 +376,33 @@ EngineConstantBlock engineBlitBlock()
     BlitConstantsSize};
 }
 
+EngineConstantBlock engineSsaoBlock()
+{
+  // SsaoPass_cb.h, as the shaders declare it (ssao_*.cs.hlsl's SsaoConstants, packed by
+  // the cbuffer rules: a float2 never crosses a 16-byte row, a float4x4 starts one)
+  return EngineConstantBlock{
+    "SsaoConstants",
+    {
+      {"viewportOrigin", 0},
+      {"viewportSize", 8},
+      {"pixelOffset", 16},
+      {"unused", 24},
+      {"matClipToView", 32},
+      {"matWorldToView", 96},
+      {"matViewToWorld", 160},
+      {"clipToView", 224},
+      {"invQuantizedGbufferSize", 232},
+      {"quantizedViewportOrigin", 240},
+      {"amount", 248},
+      {"invBackgroundViewDepth", 252},
+      {"radiusWorld", 256},
+      {"surfaceBias", 260},
+      {"radiusToScreen", 264},
+      {"powerExponent", 268},
+    },
+    SsaoConstantsSize};
+}
+
 std::optional<EngineConstantBlock> engineLayoutConstantBlock(
   const EngineBindingLayout layout)
 {
@@ -380,6 +414,10 @@ std::optional<EngineConstantBlock> engineLayoutConstantBlock(
     return engineToneMappingBlock();
   case L::Blit:
     return engineBlitBlock();
+  case L::SsaoDeinterleave:
+  case L::SsaoCompute:
+  case L::SsaoBlur:
+    return engineSsaoBlock();
   default:
     break;
   }
@@ -497,11 +535,24 @@ std::optional<EngineMaterialProgram> engineMaterialProgram(
   return *program;
 }
 
+const EngineNamedProgram* engineNamedProgram(const int index)
+{
+  const auto place = index - EngineNamedProgramBase;
+  return place >= 0 && std::size_t(place) < EngineNamedPrograms.size()
+           ? &EngineNamedPrograms[std::size_t(place)]
+           : nullptr;
+}
+
 const EngineBuiltin* engineProgram(const int index)
 {
   if (const auto* builtin = engineBuiltin(index))
   {
     return builtin;
+  }
+  // LP6.5a (C70): a named program's row, as a builtin's
+  if (const auto* named = engineNamedProgram(index))
+  {
+    return &named->row;
   }
   const auto place = index - EngineMaterialProgramBase;
   return place >= 0 && std::size_t(place) < EngineMaterialPrograms.size()
@@ -533,13 +584,15 @@ std::optional<std::vector<nvrhi::BindingLayoutDesc>> engineBindingLayoutDescs(
       layoutDesc(S::All, {uniformsItem(pushConstants, parmSetBytes(0))})};
   case L::Default:
   case L::DefaultSkinned:
+  case L::Gbuffer:
   case L::Texture:
   case L::TextureSkinned:
   case L::Texgen:
   case L::Legacy:
     // :415-436: uniforms, the image (defaultLayout), its own sampler
     // (samplerOneBindingLayout); LP5.0: DEFAULT and its skinned form :426-427, TEXTURE's
-    // skinned form :433, TEXGEN :434, LEGACY :436
+    // skinned form :433, TEXGEN :434, LEGACY :436; LP6.5a (C69): GBUFFER :429 (its
+    // skinned form :430 is not mirrored: no skinned model)
     return std::vector{
       uniforms(layout == L::DefaultSkinned || layout == L::TextureSkinned),
       layoutDesc(S::Pixel, {Item::Texture_SRV(0)}),
@@ -669,6 +722,30 @@ std::optional<std::vector<nvrhi::BindingLayoutDesc>> engineBindingLayoutDescs(
       {Item::PushConstants(0, BlitConstantsSize),
        Item::Texture_SRV(0),
        Item::Sampler(0)})};
+  case L::SsaoDeinterleave:
+    // LP6.5a (C70): SsaoPass.cpp:78-87: the constants at b1 (b0 commented out), the
+    // depth, the deinterleaved depth
+    return std::vector{layoutDesc(
+      S::Compute,
+      {Item::VolatileConstantBuffer(1), Item::Texture_SRV(0), Item::Texture_UAV(0)})};
+  case L::SsaoCompute:
+    // :106-116: the deinterleaved depth, the normals, the deinterleaved occlusion
+    return std::vector{layoutDesc(
+      S::Compute,
+      {Item::VolatileConstantBuffer(1),
+       Item::Texture_SRV(0),
+       Item::Texture_SRV(1),
+       Item::Texture_UAV(0)})};
+  case L::SsaoBlur:
+    // :134-145: the deinterleaved depth and occlusion, the destination, the point clamp
+    // sampler
+    return std::vector{layoutDesc(
+      S::Compute,
+      {Item::VolatileConstantBuffer(1),
+       Item::Texture_SRV(0),
+       Item::Texture_SRV(1),
+       Item::Texture_UAV(0),
+       Item::Sampler(0)})};
   default:
     return std::nullopt;
   }
@@ -722,10 +799,11 @@ std::optional<std::vector<std::vector<EngineBindingSetItem>>> engineBindingSetSh
     // :666-679
     return Sets{{uniforms}};
   case L::Default:
+  case L::Gbuffer:
   case L::Texture:
   case L::Texgen:
   case L::Legacy:
-    // :586-623: unit 0 and its own sampler
+    // :586-623: unit 0 and its own sampler (LP6.5a: GBUFFER's, :586)
     return Sets{{uniforms}, {unit(0)}, {Item{Source::ImageSampler, 0, 0, C::PointClamp}}};
   case L::DefaultSkinned:
   case L::TextureSkinned:

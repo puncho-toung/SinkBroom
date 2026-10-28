@@ -76,6 +76,11 @@ struct SessionOptions
   // in use (the live figure); VK_EXT_memory_budget's own budget is the second trigger.
   // C11's panel setting is this field (its control comes with LP6.6)
   std::uint64_t vramBudgetBytes = DefaultVramBudgetBytes;
+  // LP6.5a (C69, C70, D176, D177, P8.14): the engine's r_useSSAO 1 (r_useNewSSAOPass 1)
+  // with r_taaJitter 0's pixelOffset: pass 3 fills the G-buffer's normals and pass 4 the
+  // ambient occlusion the ambient pass reads at t4. Off in TbLitLib tests (a case opts
+  // in), on in sessions (LitSessionHost, Q43); the panel's switch is C74's (LP6.6)
+  bool ssaoForTesting = false;
 };
 
 // D9: a program the compile thread was asked for, and whether the preview can draw with

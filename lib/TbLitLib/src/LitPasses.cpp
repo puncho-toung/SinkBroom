@@ -123,6 +123,19 @@ PassDesc ambientPassDesc()
   return pass;
 }
 
+// LP6.5a (C69, P8.21): AmbientPass( true ) into geometryBufferFBO {_currentNormals,
+// _currentDepth}, depth EQUAL against the prepass's; _currentNormals cleared first
+PassDesc gbufferPassDesc()
+{
+  auto pass = PassDesc{};
+  pass.name = "gbuffer";
+  pass.reads = {std::string{frame_resource::CurrentDepth}};
+  pass.writes = {
+    std::string{frame_resource::GbufferFramebuffer},
+    std::string{frame_resource::CurrentNormals}};
+  return pass;
+}
+
 // RenderBackend_NVRHI.cpp:698-788: set 1 t0-t2, set 2 t3 t4 t7 t8 t9 t10 t12 t13 t14
 constexpr auto AmbientUnits = std::array<AmbientUnitBinding, 12>{{
   {1, 0, 0},
@@ -380,6 +393,24 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
   if (inputs.afterPrepass)
   {
     inputs.afterPrepass();
+  }
+
+  if (inputs.stopRequested && inputs.stopRequested())
+  {
+    m_stats.stoppedEarly = true;
+    return;
+  }
+  // LP6.5a (C69, D176): pass 3, AmbientPass( true ), after the prepass and before the
+  // ambient pass (RenderBackend.cpp:6030-6040), only when a consumer needs the normals:
+  // SSAO on (LP6.5b adds bumpyenvironment2's); the engine runs it every 3D frame (K55: no
+  // picture differs)
+  if (inputs.ssao && !m_lists.drawSurfs.empty())
+  {
+    const auto start = FrameClock::now();
+    beginTimer(frame, inputs.gbufferTimer);
+    recordGbuffer(frame);
+    m_stats.gbufferTimed = endTimer(frame, inputs.gbufferTimer);
+    m_stats.gbufferRecordMs = recordMsSince(start);
   }
 
   if (inputs.stopRequested && inputs.stopRequested())
@@ -1902,10 +1933,10 @@ nvrhi::IBindingSet* LitPasses::ambientViewSet(
   }
   view.asked = true;
   // the view's images (RenderBackend.cpp:1361-1393): t3 the BRDF LUT, t4 _white (K31:
-  // r_useSSAO 0 until LP6), t7 the area's irradiance atlas on the grid path (:1270-1271)
-  // or _default on the probe path (D85), t8-t10 the radiance cubes, t12 the nearest's
-  // depth cube, t13 and t14 the next two's; a probe image that is not Ready is the
-  // default cube, never a slot's 2D stand-in (P4.28)
+  // r_useSSAO 0 until LP6.5a), t7 the area's irradiance atlas on the grid path
+  // (:1270-1271) or _default on the probe path (D85), t8-t10 the radiance cubes, t12 the
+  // nearest's depth cube, t13 and t14 the next two's; a probe image that is not Ready is
+  // the default cube, never a slot's 2D stand-in (P4.28)
   auto& images = *frame.inputs->images;
   const auto& probes = m_viewProbes;
   setUnit(images, UnitBrdfLut, Intrinsic::BrdfLut);
@@ -1973,21 +2004,8 @@ void LitPasses::setAmbientSpace(Frame& frame, const std::size_t index)
   m_parms.set(RenderParm::ModelViewMatrixX, engineMatrixTranspose(space.modelViewMatrix));
 }
 
-void LitPasses::recordAmbient(Frame& frame)
+void LitPasses::setAmbientPassParms(Frame& frame)
 {
-  // AmbientPass( drawSurfs, numDrawSurfs, fillGbuffer false ) (RenderBackend.cpp:
-  // 2264-2731) on the light-grid path (DrawSingleInteraction's useIBL branch with a grid
-  // area, :1196-1305, LP4.3) or the probe path (:1306-1394).
-  // The early outs (:2268-2287): no surface; a view without entities and RDF_NOAMBIENT
-  // never reach the preview's 3D view
-  const auto& surfaces = m_lists.drawSurfs;
-  if (surfaces.empty())
-  {
-    return;
-  }
-  const auto skippedBefore = m_stats.skippedDraws;
-  const auto pendingBefore = m_stats.pendingPipelines;
-
   // make sure rpWindowCoord is set even without post processing surfaces in the view
   // (:2292-2304): w = x2 - x1 + 1 of the viewport, the whole target here
   const auto w = float(frame.view.width);
@@ -2023,6 +2041,167 @@ void LitPasses::recordAmbient(Frame& frame)
   m_parms.set(RenderParm::VertexColorAdd, ignore[1]);
   m_parms.set(RenderParm::DiffuseModifier, diffuseColor);
   m_parms.set(RenderParm::SpecularModifier, specularColor);
+}
+
+void LitPasses::recordGbuffer(Frame& frame)
+{
+  // AmbientPass( drawSurfs, numDrawSurfs, fillGbuffer true ) (RenderBackend.cpp:
+  // 2264-2731). The early outs (:2268-2287): no surface (recordFrame's test); a view
+  // without entities and RDF_NOAMBIENT never reach the preview's 3D view
+  const auto& surfaces = m_lists.drawSurfs;
+  const auto target =
+    frame.inputs->frame->resolve(gbufferPassDesc()) | kdl::value_or(PassResources{});
+  if (
+    surfaces.empty() || target.writes.size() != 2 || !target.writes[0].framebuffer
+    || !target.writes[1].texture)
+  {
+    return;
+  }
+  m_stats.gbufferRan = true;
+  const auto skippedBefore = m_stats.skippedDraws;
+  const auto pendingBefore = m_stats.pendingPipelines;
+
+  // :2306-2309: the normals cleared to 0 (clearTextureFloat), and :2351-2356:
+  // geometryBufferFBO bound and GL_Clear's colour (0, 0, 0, 1)
+  auto& commandList = *frame.inputs->commandList;
+  auto* normals = target.writes[1].texture;
+  commandList.clearTextureFloat(normals, nvrhi::AllSubresources, nvrhi::Color{0.0f});
+  commandList.clearTextureFloat(
+    normals, nvrhi::AllSubresources, nvrhi::Color{0.0f, 0.0f, 0.0f, 1.0f});
+  // nvrhi rule 7: a clear ends the render pass, so the next draw sets its state again
+  m_state.valid = false;
+
+  // :2292-2423: the parms the loop starts from, as the second call's
+  setAmbientPassParms(frame);
+
+  auto* hdr = frame.framebuffer;
+  frame.framebuffer = target.writes[0].framebuffer;
+  auto& images = *frame.inputs->images;
+  const auto usage =
+    ImageUsage{[&](const MaterialImageKey& key) { return imageUsage(images, key); }};
+  auto disabled = false;
+  for (std::size_t i = 0; i < surfaces.size() && !disabled; ++i)
+  {
+    const auto& surface = surfaces[i];
+    auto& records = *m_surfaceLinks[i];
+    // the ambient pass's surfaces (recordAmbient: M-AMB-DIFF-02, :2430-2454)
+    if (!records.ambientDrawn)
+    {
+      continue;
+    }
+
+    // :2480-2502: the space's MVP (the prepass's: EQUAL passes, P8.20), the local view
+    // origin, the model and model-view matrices transposed
+    if (m_currentSpace != surface.space)
+    {
+      setAmbientSpace(frame, surface.space);
+    }
+
+    // :2538-2703: the stage loop's groups, the ambient pass's records' (made here when
+    // this pass draws the surface first)
+    if (!records.ambientFilled)
+    {
+      fillAmbientRecords(records, surface, usage);
+    }
+    m_records.gbufferFilled(records);
+    for (auto& ambientDraw : records.ambient)
+    {
+      const auto& interaction = ambientDraw.draw;
+      // :2603-2611 and alike: the group's blend (the "blend the normals" hack)
+      const auto stateBits = ambientStateBits(interaction.vertexColor);
+
+      // DrawSingleInteraction (:1175-1190) with useIBL false: the matrices, the vertex
+      // colour and the modifiers; set 3 reads the bump and specular matrices and the
+      // vertex colour
+      m_parms.set(RenderParm::BumpMatrixS, interaction.bumpMatrix[0]);
+      m_parms.set(RenderParm::BumpMatrixT, interaction.bumpMatrix[1]);
+      m_parms.set(RenderParm::DiffuseMatrixS, interaction.diffuseMatrix[0]);
+      m_parms.set(RenderParm::DiffuseMatrixT, interaction.diffuseMatrix[1]);
+      m_parms.set(RenderParm::SpecularMatrixS, interaction.specularMatrix[0]);
+      m_parms.set(RenderParm::SpecularMatrixT, interaction.specularMatrix[1]);
+      const auto vertexColor = engineVertexColorParms(interaction.vertexColor);
+      m_parms.set(RenderParm::VertexColorModulate, vertexColor[0]);
+      m_parms.set(RenderParm::VertexColorAdd, vertexColor[1]);
+      m_parms.set(RenderParm::DiffuseModifier, interaction.diffuseColor);
+      m_parms.set(RenderParm::SpecularModifier, interaction.specularColor);
+
+      // :2464-2477: BUILTIN_SMALL_GEOMETRY_BUFFER (no skinning); :1651-1663: GBUFFER
+      // binds unit 0, the bump image, and its sampler (C64: the group's own record)
+      auto& record = ambientDraw.gbuffer;
+      auto outcome = DrawOutcome::Drawn;
+      if (record.state != DrawRecord::State::Resolved)
+      {
+        setUnit(images, UnitBump, interaction.images[0]);
+        if (
+          const auto failed = resolveRecord(
+            frame,
+            record,
+            EngineBuiltinSmallGeometryBuffer,
+            stateBits,
+            *surface.chunk,
+            ~std::uint32_t{0},
+            {}))
+        {
+          outcome = *failed;
+        }
+      }
+      if (record.state == DrawRecord::State::Resolved)
+      {
+        outcome = drawRecord(frame, record, nullptr, nullptr);
+      }
+      switch (outcome)
+      {
+      case DrawOutcome::Drawn:
+        ++m_stats.gbufferDraws;
+        log(
+          frame,
+          LitDrawRecord::Pass::Gbuffer,
+          *surface.chunk,
+          EngineBuiltinSmallGeometryBuffer,
+          stateBits);
+        break;
+      case DrawOutcome::Disabled:
+        disabled = true;
+        break;
+      case DrawOutcome::Overflowed:
+        drawOverflowed(frame);
+        break;
+      case DrawOutcome::Skipped:
+        break;
+      }
+      if (disabled)
+      {
+        break;
+      }
+    }
+  }
+  // D9: the pass is disabled; programReport() says why
+  m_stats.gbufferDisabled = disabled;
+
+  // :2708-2725: disable blending, ALPHA_TEST 0, back to the previous framebuffer
+  m_parms.set(RenderParm::AlphaTest, ZeroVec4);
+  frame.framebuffer = hdr;
+  m_stats.gbufferSkipped = m_stats.skippedDraws - skippedBefore;
+  m_stats.gbufferPendingPipelines = m_stats.pendingPipelines - pendingBefore;
+}
+
+void LitPasses::recordAmbient(Frame& frame)
+{
+  // AmbientPass( drawSurfs, numDrawSurfs, fillGbuffer false ) (RenderBackend.cpp:
+  // 2264-2731) on the light-grid path (DrawSingleInteraction's useIBL branch with a grid
+  // area, :1196-1305, LP4.3) or the probe path (:1306-1394).
+  // The early outs (:2268-2287): no surface; a view without entities and RDF_NOAMBIENT
+  // never reach the preview's 3D view
+  const auto& surfaces = m_lists.drawSurfs;
+  if (surfaces.empty())
+  {
+    return;
+  }
+  const auto skippedBefore = m_stats.skippedDraws;
+  const auto pendingBefore = m_stats.pendingPipelines;
+
+  // :2292-2423 (LP6.5a: as pass 3's)
+  setAmbientPassParms(frame);
 
   // the probe path's view parms (:1308-1335), the same for every draw of the view: the
   // probe bounds with their validity, the three probe positions, the radiance blends and
@@ -4450,13 +4629,14 @@ bool LitPasses::countFogDraw(
   return true;
 }
 
-std::vector<PipelineKey> litStartPipelineKeys(const nvrhi::Format depthFormat)
+std::vector<PipelineKey> litStartPipelineKeys(
+  const nvrhi::Format depthFormat, const bool ssao)
 {
   const auto formats = FramebufferFormats{nvrhi::Format::RGBA16_FLOAT, depthFormat};
   const auto key = [&](const int program, const std::uint64_t state) {
     return PipelineKey{PipelineRecipe::Draw, program, state, 0, 0.0f, formats};
   };
-  return {
+  auto keys = std::vector<PipelineKey>{
     key(EngineBuiltinDepth, gls::Default),
     // V2.7: the solid prepass draw of a surface whose registers are pending (D77)
     key(EngineBuiltinDepth, gls::AlphaMask),
@@ -4511,6 +4691,16 @@ std::vector<PipelineKey> litStartPipelineKeys(const nvrhi::Format depthFormat)
       EngineBuiltinPbrInteractionShadowAtlasParallel,
       interactionStateBits(gls::DepthFuncLess)),
   };
+  if (ssao)
+  {
+    // LP6.5a (C69, P8.12): pass 3's gbuffer 12 in the ambient pass's two states, into
+    // geometryBufferFBO, whose formats are hdrFBO's (P8.21)
+    keys.push_back(
+      key(EngineBuiltinSmallGeometryBuffer, ambientStateBits(em::VertexColorIgnore)));
+    keys.push_back(
+      key(EngineBuiltinSmallGeometryBuffer, ambientStateBits(em::VertexColorModulate)));
+  }
+  return keys;
 }
 
 int LitPasses::imageUsage(ImageSlots& images, const MaterialImageKey& key) const
@@ -4699,6 +4889,7 @@ bool LitPasses::bindingSets(
                         : layout == EngineBindingLayout::Texture            ? 3u
                         : layout == EngineBindingLayout::Texgen             ? 3u
                         : layout == EngineBindingLayout::Default            ? 3u
+                        : layout == EngineBindingLayout::Gbuffer            ? 3u
                         : layout == EngineBindingLayout::Legacy             ? 3u
                         : layout == EngineBindingLayout::NormalCube         ? 3u
                         : layout == EngineBindingLayout::Fog                ? 3u
@@ -4852,6 +5043,7 @@ bool LitPasses::bindingSets(
   case EngineBindingLayout::Texture:
   case EngineBindingLayout::Texgen:
   case EngineBindingLayout::Default:
+  case EngineBindingLayout::Gbuffer:
   case EngineBindingLayout::Legacy: {
     if (
       (layout == EngineBindingLayout::Texture || layout == EngineBindingLayout::Texgen)
@@ -4890,7 +5082,8 @@ bool LitPasses::bindingSets(
     // TEXTURE: t0 the unit 0 image, s0 its own sampler (SC238, SC269); LP5.2a: TEXGEN
     // the same, LP5.2b: DEFAULT and LEGACY too (RenderBackend_NVRHI.cpp:586-623), whose
     // unit 0 is a cube: a cube image's repeat is TR_CLAMP from its load on
-    // (Image_load.cpp:587-591)
+    // (Image_load.cpp:587-591); LP6.5a (C69): GBUFFER the same (:586), unit 0 the bump
+    // image
     if (!textureSet(1, {0}, 0))
     {
       return false;

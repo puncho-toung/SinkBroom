@@ -4028,7 +4028,7 @@ namespace
 // only) into a test game root; LP4.2a: and the ambient pass's probe path; LP3.1 (C60):
 // and the shadow-atlas interactions (one pair of blob files for the six), which the cases
 // that run with shadows draw with
-constexpr auto Lp2Programs = std::array<int, 22>{
+constexpr auto Lp2Programs = std::array<int, 26>{
   EngineBuiltinColor,
   EngineBuiltinTextureVertexColor,
   EngineBuiltinInteraction,
@@ -4053,7 +4053,12 @@ constexpr auto Lp2Programs = std::array<int, 22>{
   EngineBuiltinPbrInteractionShadowAtlasPoint,
   EngineBuiltinPbrInteractionShadowAtlasParallel,
   // LP3.4 (D158): the shadow atlas debug view's (builtin/texture)
-  EngineBuiltinTextured};
+  EngineBuiltinTextured,
+  // LP6.5a (C69, C70): pass 3's and the SSAO pass's named programs
+  EngineBuiltinSmallGeometryBuffer,
+  EngineNamedSsaoDeinterleave,
+  EngineNamedSsaoCompute,
+  EngineNamedSsaoBlur};
 
 // the light stand-ins (a white light of no falloff: the default light shaders the
 // fixture map's lights reach) and a lit translucent material, written into the root
@@ -4122,7 +4127,7 @@ std::filesystem::path assembleLitRoot(const std::filesystem::path& gamePath)
   }
   for (const auto program : Lp2Programs)
   {
-    const auto* builtin = engineBuiltin(program);
+    const auto* builtin = engineProgram(program);
     for (const auto& [flag, stage] :
          {std::pair{EngineStageVertex, ShaderStage::Vertex},
           std::pair{EngineStageFragment, ShaderStage::Pixel},
@@ -20525,6 +20530,550 @@ TEST_CASE("LitSession arena compaction on a GPU (LP6.4b)", "[.][litgpu3]")
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }
+}
+
+namespace
+{
+
+// LP6.5a: a frame's targets read back by name: RGBA16F as four floats a pixel, RGBA8
+// and R8 as floats of 1/255 (four and one a pixel), rows top first
+struct TargetImage
+{
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  std::uint32_t channels = 0;
+  std::vector<float> values;
+
+  float at(const std::uint32_t x, const std::uint32_t y, const std::uint32_t c) const
+  {
+    return values[(std::size_t(y) * width + x) * channels + c];
+  }
+
+  // the mean, the least and the largest of channel c over [x0, x1) × [y0, y1)
+  std::array<double, 3> stats(
+    const std::uint32_t x0,
+    const std::uint32_t y0,
+    const std::uint32_t x1,
+    const std::uint32_t y1,
+    const std::uint32_t c) const
+  {
+    auto sum = 0.0;
+    auto least = 1e30;
+    auto most = -1e30;
+    for (auto y = y0; y < y1; ++y)
+    {
+      for (auto x = x0; x < x1; ++x)
+      {
+        const auto v = double(at(x, y, c));
+        sum += v;
+        least = std::min(least, v);
+        most = std::max(most, v);
+      }
+    }
+    return {sum / double((x1 - x0) * (y1 - y0)), least, most};
+  }
+};
+
+struct TargetFrame
+{
+  ChainFrame frame;
+  std::map<std::string, TargetImage, std::less<>> images;
+
+  const TargetImage& image(const std::string_view name) const
+  {
+    return images.find(name)->second;
+  }
+};
+
+/**
+ * LP6.5a: the first frame of camera that accept takes (on the render thread, after its
+ * tonemap passes: the frame's own stats and convergence), its targets of names copied
+ * into staging textures in that frame and read back after it; nullopt at the deadline.
+ */
+std::optional<TargetFrame> frameTargets(
+  LitSession& session,
+  const CameraState& camera,
+  const std::vector<std::string_view>& names,
+  const std::function<bool(const RenderFrameAccess&)>& accept,
+  const std::chrono::milliseconds timeout = 60000ms)
+{
+  session.setCamera(camera);
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    session.tableChanged();
+    auto stagings = std::vector<nvrhi::StagingTextureHandle>{};
+    auto frame = ChainFrame{};
+    auto taken = false;
+    auto done = std::make_shared<std::promise<void>>();
+    auto future = done->get_future();
+    session.runAfterTonemapForTesting([&, done](RenderFrameAccess& access) {
+      frame = chainFrameOf(access);
+      taken = access.passes.lastStats().camera == camera && accept(access);
+      if (taken)
+      {
+        for (const auto name : names)
+        {
+          const auto resource = access.frame.find(name);
+          if (!resource || !resource->texture)
+          {
+            taken = false;
+            break;
+          }
+          const auto& desc = resource->texture->getDesc();
+          auto staging = access.device.createStagingTexture(
+            nvrhi::TextureDesc{}
+              .setWidth(desc.width)
+              .setHeight(desc.height)
+              .setFormat(desc.format),
+            nvrhi::CpuAccessMode::Read);
+          access.commandList.copyTexture(
+            staging, nvrhi::TextureSlice{}, resource->texture, nvrhi::TextureSlice{});
+          stagings.push_back(std::move(staging));
+        }
+      }
+      done->set_value();
+    });
+    if (future.wait_for(10000ms) != std::future_status::ready)
+    {
+      return std::nullopt;
+    }
+    if (!taken)
+    {
+      stagings.clear();
+      std::this_thread::sleep_for(50ms);
+      continue;
+    }
+    auto out = TargetFrame{};
+    out.frame = frame;
+    const auto read = inFrame(session, [&](RenderFrameAccess& access) {
+      for (std::size_t i = 0; i < names.size(); ++i)
+      {
+        auto& staging = stagings[i];
+        const auto& desc = staging->getDesc();
+        auto image = TargetImage{};
+        image.width = desc.width;
+        image.height = desc.height;
+        image.channels = desc.format == nvrhi::Format::R8_UNORM ? 1u : 4u;
+        image.values.resize(std::size_t(desc.width) * desc.height * image.channels);
+        auto pitch = std::size_t{0};
+        const auto* bytes =
+          static_cast<const std::uint8_t*>(access.device.mapStagingTexture(
+            staging, nvrhi::TextureSlice{}, nvrhi::CpuAccessMode::Read, &pitch));
+        for (std::uint32_t y = 0; bytes && y < desc.height; ++y)
+        {
+          const auto* row = bytes + y * pitch;
+          auto* into = image.values.data() + std::size_t(y) * desc.width * image.channels;
+          for (std::uint32_t x = 0; x < desc.width * image.channels; ++x)
+          {
+            into[x] = desc.format == nvrhi::Format::RGBA16_FLOAT
+                        ? halfToFloat(reinterpret_cast<const std::uint16_t*>(row)[x])
+                        : float(row[x]) / 255.0f;
+          }
+        }
+        if (bytes)
+        {
+          access.device.unmapStagingTexture(staging);
+        }
+        staging = nullptr;
+        out.images.emplace(std::string{names[i]}, std::move(image));
+      }
+    });
+    if (!read)
+    {
+      return std::nullopt;
+    }
+    return out;
+  }
+  return std::nullopt;
+}
+
+// a settled frame of camera (the product's rule, D77) and its targets of names
+std::optional<TargetFrame> settledTargets(
+  LitSession& session,
+  const CameraState& camera,
+  const std::vector<std::string_view>& names,
+  const std::chrono::milliseconds timeout = 60000ms)
+{
+  return frameTargets(
+    session,
+    camera,
+    names,
+    [](const RenderFrameAccess& access) {
+      return access.convergence.settled() && access.images.pending() == 0
+             && !access.images.hasLoading() && !access.arenas.pending();
+    },
+    timeout);
+}
+
+// LP6.5a: the LP4.2a synthetic bake (an L0 SH of irradiance 1/4 per automatic probe,
+// constant radiance cubes) and its materials in the root, and an unlit opaque material
+// (one SL_AMBIENT stage: the prepass draws it, the ambient pass and pass 3 do not)
+void writeLp65aBake(const std::filesystem::path& root)
+{
+  const auto base = root / "base";
+  const auto c0 = 0.25f / ModelY00;
+  const auto sh = fmt::format(
+    "( {0:.9g} {0:.9g} {0:.9g} 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 )", c0);
+  writeTextFile(
+    base / "maps" / "lp1b_geometry.shprobes",
+    fmt::format("SHPROBES \"1\"\n2\n0 ( 132 0 64 ) {0}\n1 ( -124 0 64 ) {0}\n", sh));
+  const auto cubes = base / "generated" / "images" / "env" / "maps" / "lp1b_geometry";
+  std::filesystem::create_directories(cubes);
+  for (const auto* name :
+       {"area0_envprobe_132_0_64_spec#__2108.bimage",
+        "area1_envprobe__124_0_64_spec#__2108.bimage"})
+  {
+    auto file = std::ofstream{cubes / name, std::ios::binary};
+    const auto bytes = constantCubeCache(0.5f, 0.25f, 0.125f);
+    file.write(bytes.data(), std::streamsize(bytes.size()));
+  }
+  writeTextFile(
+    base / "materials" / "zz_lp65a.mtr",
+    Lp42aMaterials
+      + "textures/lp65a/unlit\n{\n\t{\n\t\tmap textures/lp42a/flat.tga\n\t}\n}\n");
+  std::filesystem::create_directories(base / "textures" / "lp42a");
+  for (const auto& [name, image] :
+       {std::pair{"flat.tga", test::flat(4, 4, 200, 120, 60)},
+        std::pair{"second.tga", test::flat(4, 4, 40, 90, 180)},
+        std::pair{"metal.tga", test::flat(4, 4, 230, 180, 100)},
+        std::pair{"metal_s.tga", test::flat(4, 4, 128, 255, 255)}})
+  {
+    auto file = std::ofstream{base / "textures" / "lp42a" / name, std::ios::binary};
+    const auto bytes = test::tgaFile(image);
+    file.write(bytes.data(), std::streamsize(bytes.size()));
+  }
+}
+
+// the LP4.2a map with an unlit box before the east wall (x 250-256, y -10-10, z 54-74)
+std::string lp65aMapText()
+{
+  auto map = lp42aMapText();
+  const auto entity1 = map.find("// entity 1");
+  map.insert(map.rfind('}', entity1), boxBrush(250, -10, 54, 256, 10, 74, "lp65a/unlit"));
+  return map;
+}
+
+// a headless 160 × 120 session with validation over the root, SSAO as asked, shadows
+// and the stage pass off (the ambient picture's cases), the interactions skipped
+std::unique_ptr<LitSession> lp65aSession(
+  const VulkanInstance& instance,
+  Events& events,
+  MaterialService& service,
+  const std::filesystem::path& root,
+  const bool ssao,
+  const std::filesystem::path& frameLog = {},
+  const bool startPipelines = true)
+{
+  auto options = SessionOptions{};
+  options.validation = true;
+  options.gamePath = root;
+  options.frameLogPath = frameLog;
+  options.requestStartPipelines = startPipelines;
+  options.skipShadowsForTesting = true;
+  options.ssaoForTesting = ssao;
+  auto session =
+    LitSession::create(
+      instance.handles(), VK_NULL_HANDLE, 160, 120, options, events.sink(), 7, &service)
+    | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  session->skipShaderPassesForTesting(true);
+  session->skipInteractionsForTesting(true);
+  return session;
+}
+
+// the frame log's column of a name, from its header row
+std::size_t frameLogColumn(
+  const std::vector<std::vector<std::string>>& rows, const std::string_view name)
+{
+  const auto& header = rows.at(0);
+  const auto it = std::find(header.begin(), header.end(), name);
+  return it == header.end() ? header.size() : std::size_t(it - header.begin());
+}
+
+} // namespace
+
+/**
+ * LP6.5a (C69, C70, D176, D177, P8.12-P8.14, P8.20, P8.21): the G-buffer pass (pass 3)
+ * and SSAO (pass 4) on the fixture with the LP4.2a synthetic bake, the interactions and
+ * the stage pass skipped (the ambient picture alone). The walls' and the floor's
+ * material is diffusemap-only (the implicit _flat bump), so pass 3 writes their vertex
+ * normals; the east wall faces -x.
+ */
+TEST_CASE("LitSession the G-buffer and SSAO on a GPU (LP6.5a)", "[.][litgpu4]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto started = std::chrono::steady_clock::now();
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  writeLp65aBake(root);
+  namespace fr = frame_resource;
+  // the east wall (x 256) straight on, the unlit box at the view's centre: columns
+  // 64-96, rows 44-76 (the wall 56 units away: half extents 56 × 42)
+  const auto wallView = litCamera({200, 0, 64}, {1, 0, 0}, {0, 0, 1});
+
+  SECTION(
+    "C69: (a) the normals on a wall, (b) no pass 3 without SSAO, (c) pass 3's draws, "
+    "(d) Stop")
+  {
+    const auto logPath =
+      std::filesystem::temp_directory_path() / "TbLitLibTest-lp65a-frame-log.csv";
+    const auto offLogPath =
+      std::filesystem::temp_directory_path() / "TbLitLibTest-lp65a-off-frame-log.csv";
+    std::filesystem::remove(logPath);
+    std::filesystem::remove(offLogPath);
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    auto offHdr = std::optional<TargetFrame>{};
+    auto onHdr = std::optional<TargetFrame>{};
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+
+      // (b) SSAO off (the default): pass 3 never runs, no target of its own
+      {
+        auto events = Events{};
+        auto session = lp65aSession(instance, events, *service, root, false, offLogPath);
+        session->setExposed(true);
+        REQUIRE(waitFor(
+          [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+          5000ms,
+          false));
+        REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+          access.passes.setDrawLogForTesting(true);
+        }));
+        REQUIRE(session->offerSnapshot(lp22aSnapshot(lp65aMapText(), root, 7, 1)));
+        offHdr = settledTargets(*session, wallView, {fr::CurrentRenderHdr});
+        REQUIRE(offHdr);
+        auto gbufferDraws = std::size_t{0};
+        auto hasNormals = true;
+        REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+          for (const auto& draw : access.passes.drawLogForTesting())
+          {
+            gbufferDraws += draw.pass == LitDrawRecord::Pass::Gbuffer ? 1 : 0;
+          }
+          hasNormals = access.frame.find(fr::CurrentNormals).has_value()
+                       || access.frame.find(fr::GbufferFramebuffer).has_value();
+          access.passes.setDrawLogForTesting(false);
+        }));
+        CHECK(gbufferDraws == 0u);
+        CHECK_FALSE(hasNormals);
+        CHECK_FALSE(offHdr->frame.lit.gbufferRan);
+        CHECK(offHdr->frame.lit.gbufferDraws == 0u);
+        CHECK_FALSE(offHdr->frame.lit.gbufferTimed);
+        CHECK(offHdr->frame.lit.ambientDraws > 0u);
+        teardown(*session);
+        CHECK(session->deviceMemoryAllocations() == 0);
+        CHECK(events.count(SessionEvent::Error) == 0u);
+        CHECK(events.count(SessionEvent::Warning) == 0u);
+      }
+
+      // (a), (c), (d) SSAO on
+      auto events = Events{};
+      auto session = lp65aSession(instance, events, *service, root, true, logPath);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        access.passes.setDrawLogForTesting(true);
+      }));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp65aMapText(), root, 7, 1)));
+      const auto wall =
+        settledTargets(*session, wallView, {fr::CurrentNormals, fr::CurrentRenderHdr});
+      REQUIRE(wall);
+      onHdr = wall;
+      const auto& stats = wall->frame.lit;
+      CHECK(stats.gbufferRan);
+      CHECK_FALSE(stats.gbufferDisabled);
+      CHECK(stats.gbufferPendingPipelines == 0u);
+      CHECK(stats.gbufferSkipped == 0u);
+      CHECK(stats.gbufferTimed);
+      // (c) one draw per ambient stage group, the same frame's
+      CHECK(stats.gbufferDraws > 0u);
+      CHECK(stats.gbufferDraws == stats.ambientDraws);
+
+      // (a) the wall's normal (-1 0 0) as n · 0.5 + 0.5, alpha 1: one value on every
+      // wall pixel (no hole where the prepass drew: EQUAL passed everywhere), within
+      // 2.5/255 of (0 0.5 0.5 1) per channel: the implicit _flat bump is TD_BUMP, DXT5 as
+      // the engine stores it (Image_load.cpp: CFM_NORMAL_DXT5), whose 6-bit green holds
+      // 128 as 129.5 (bump.y 1/64: 2/255 in n · 0.5 + 0.5), and the vertex normal is
+      // RGBA8; the unlit box, which the prepass drew and pass 3 did not: the clear
+      const auto& normals = wall->image(fr::CurrentNormals);
+      REQUIRE(normals.width == 160u);
+      REQUIRE(normals.height == 120u);
+      const auto expected = std::array<float, 4>{0.0f, 0.5f, 0.5f, 1.0f};
+      const auto reference = std::array<float, 4>{
+        normals.at(10, 10, 0),
+        normals.at(10, 10, 1),
+        normals.at(10, 10, 2),
+        normals.at(10, 10, 3)};
+      auto worst = 0.0f;
+      for (std::uint32_t c = 0; c < 4; ++c)
+      {
+        CAPTURE(c);
+        worst = std::max(worst, std::abs(reference[c] - expected[c]));
+        CHECK(std::abs(reference[c] - expected[c]) <= 2.5f / 255.0f);
+      }
+      auto wallPixels = 0;
+      auto wallOff = 0;
+      auto boxPixels = 0;
+      auto boxOff = 0;
+      for (std::uint32_t y = 0; y < 120; ++y)
+      {
+        for (std::uint32_t x = 0; x < 160; ++x)
+        {
+          const auto inBox = x >= 70 && x < 90 && y >= 50 && y < 70;
+          const auto nearBox = x >= 58 && x < 102 && y >= 38 && y < 82;
+          if (inBox)
+          {
+            ++boxPixels;
+            boxOff += normals.at(x, y, 0) != 0.0f || normals.at(x, y, 1) != 0.0f
+                          || normals.at(x, y, 2) != 0.0f || normals.at(x, y, 3) != 1.0f
+                        ? 1
+                        : 0;
+          }
+          else if (!nearBox)
+          {
+            ++wallPixels;
+            auto off = false;
+            for (std::uint32_t c = 0; c < 4; ++c)
+            {
+              off = off || normals.at(x, y, c) != reference[c];
+            }
+            wallOff += off ? 1 : 0;
+          }
+        }
+      }
+      CHECK(wallPixels > 10000);
+      CHECK(wallOff == 0);
+      CHECK(boxPixels == 400);
+      CHECK(boxOff == 0);
+
+      // (c) the last frame's pass 3 draws: the ambient pass's chunks, gbuffer 12 in the
+      // ambient states
+      auto gbufferChunks = std::multiset<ChunkKey>{};
+      auto ambientChunks = std::multiset<ChunkKey>{};
+      auto gbufferPrograms = std::set<int>{};
+      auto gbufferStates = std::set<std::uint64_t>{};
+      auto account = GpuMemoryAccount{};
+      auto recordsHeld = std::size_t{0};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        const auto& log = access.passes.drawLogForTesting();
+        auto last = std::size_t{0};
+        for (std::size_t i = 0; i < log.size(); ++i)
+        {
+          if (
+            log[i].pass == LitDrawRecord::Pass::Prepass
+            && (i == 0 || log[i - 1].pass != LitDrawRecord::Pass::Prepass))
+          {
+            last = i;
+          }
+        }
+        for (std::size_t i = last; i < log.size(); ++i)
+        {
+          if (log[i].pass == LitDrawRecord::Pass::Gbuffer)
+          {
+            gbufferChunks.insert(log[i].chunk);
+            gbufferPrograms.insert(log[i].program);
+            gbufferStates.insert(log[i].state);
+          }
+          else if (log[i].pass == LitDrawRecord::Pass::Ambient)
+          {
+            ambientChunks.insert(log[i].chunk);
+          }
+        }
+        account = accountOf(access);
+        recordsHeld = access.passes.lastStats().recordsHeld;
+        access.passes.setDrawLogForTesting(false);
+      }));
+      CHECK(gbufferChunks == ambientChunks);
+      CHECK(gbufferChunks.size() == stats.gbufferDraws);
+      CHECK(gbufferPrograms == std::set<int>{EngineBuiltinSmallGeometryBuffer});
+      CHECK(gbufferStates == std::set<std::uint64_t>{ambientStateBits(0)});
+      // C68 (e): _currentNormals (RGBA16F) on the targets' line
+      const auto d24s8 = session->deviceFacts().d24s8Supported;
+      std::cout << fmt::format(
+        "LP6.5a (a) the wall's normals: {} of {} pixels ({:.6f} {:.6f} {:.6f} {:.6f}), "
+        "{:.2f}/255 from (0 0.5 0.5 1) at most; the unlit box's {} pixels (0 0 0 1); (c) "
+        "{} pass 3 draws = {} ambient draws, {} records held; the targets {} B ({})\n",
+        wallPixels - wallOff,
+        wallPixels,
+        reference[0],
+        reference[1],
+        reference[2],
+        reference[3],
+        worst * 255.0f,
+        boxPixels - boxOff,
+        stats.gbufferDraws,
+        stats.ambientDraws,
+        recordsHeld,
+        account.renderTargetBytes,
+        d24s8 ? "D24S8" : "D32S8");
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      // (d) Stop: every allocation freed
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      CHECK(events.count(SessionEvent::Warning) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+    messages.print("LP6.5a C69, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+
+    // (b) pass 3 leaves the ambient picture as it was (no pass 4 reads it yet)
+    REQUIRE(offHdr);
+    REQUIRE(onHdr);
+    const auto& off = offHdr->image(fr::CurrentRenderHdr);
+    const auto& on = onHdr->image(fr::CurrentRenderHdr);
+    CHECK(off.values == on.values);
+
+    // the frame logs: gpu_gbuffer_ms filled on the frames that ran pass 3, never without
+    // SSAO
+    const auto rows = readCsv(logPath);
+    const auto offRows = readCsv(offLogPath);
+    REQUIRE(rows.size() >= 2u);
+    REQUIRE(offRows.size() >= 2u);
+    REQUIRE(rows[0].size() == FrameLogFields);
+    const auto gbufferColumn = frameLogColumn(rows, "gpu_gbuffer_ms");
+    REQUIRE(gbufferColumn < FrameLogFields);
+    auto timed = 0;
+    for (std::size_t i = 1; i < rows.size(); ++i)
+    {
+      timed += rows[i].size() == FrameLogFields && rows[i][1] == "frame"
+                   && !rows[i][gbufferColumn].empty()
+                   && std::stod(rows[i][gbufferColumn]) > 0.0
+                 ? 1
+                 : 0;
+    }
+    auto offTimed = 0;
+    for (std::size_t i = 1; i < offRows.size(); ++i)
+    {
+      offTimed +=
+        offRows[i].size() == FrameLogFields && !offRows[i][gbufferColumn].empty() ? 1 : 0;
+    }
+    CHECK(timed > 0);
+    CHECK(offTimed == 0);
+    std::filesystem::remove(logPath);
+    std::filesystem::remove(offLogPath);
+  }
+
+  std::cout << fmt::format(
+    "LP6.5a [litgpu4] case: {:.1f} s\n",
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
 }
 
 } // namespace tb::lit

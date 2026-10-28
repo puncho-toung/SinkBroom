@@ -108,7 +108,8 @@ std::uint64_t textureBytes(const nvrhi::ITexture* texture)
   }
   const auto& desc = texture->getDesc();
   const auto& info = nvrhi::getFormatInfo(desc.format);
-  return std::uint64_t(desc.width) * desc.height * info.bytesPerBlock;
+  // LP6.5a: an array's slices (the SSAO arrays)
+  return std::uint64_t(desc.width) * desc.height * desc.arraySize * info.bytesPerBlock;
 }
 
 } // namespace
@@ -155,9 +156,13 @@ void RetiredResources::releaseAll()
 }
 
 Result<void> FrameResources::create(
-  nvrhi::IDevice& device, const bool d24s8Supported, const vk::Extent2D extent)
+  nvrhi::IDevice& device,
+  const bool d24s8Supported,
+  const vk::Extent2D extent,
+  const bool ssaoTargets)
 {
   m_device = &device;
+  m_ssaoTargets = ssaoTargets;
   // SC254: _currentDepth is TD_DEPTH_STENCIL, AllocImage's FMT_DEPTH_STENCIL
   m_depthFormat = engineTextureFormat(engine_image::FormatDepthStencil, d24s8Supported)
                     .value_or(nvrhi::Format::D32S8);
@@ -188,7 +193,8 @@ Result<bool> FrameResources::ensureExtent(
            auto old = std::exchange(m_targets, std::move(targets));
            retire(old.hdrFramebuffer.Get(), 0, frame);
            retire(old.ldrFramebuffer.Get(), 0, frame);
-           for (const auto& texture : {old.hdr, old.depth, old.ldr})
+           retire(old.gbufferFramebuffer.Get(), 0, frame);
+           for (const auto& texture : {old.hdr, old.depth, old.ldr, old.normals})
            {
              retire(texture.Get(), textureBytes(texture.Get()), frame);
            }
@@ -272,6 +278,14 @@ std::optional<FrameResource> FrameResources::find(const std::string_view name) c
   {
     return FrameResource{nullptr, nullptr, m_targets.ldrFramebuffer.Get(), true};
   }
+  if (name == fr::CurrentNormals && m_targets.normals)
+  {
+    return FrameResource{m_targets.normals.Get(), nullptr, nullptr, true};
+  }
+  if (name == fr::GbufferFramebuffer && m_targets.gbufferFramebuffer)
+  {
+    return FrameResource{nullptr, nullptr, m_targets.gbufferFramebuffer.Get(), true};
+  }
   if (name == fr::HistogramBuffer && m_histogram)
   {
     return FrameResource{nullptr, m_histogram.Get(), nullptr, false};
@@ -320,7 +334,7 @@ Result<PassResources> FrameResources::resolve(const PassDesc& pass) const
 std::uint64_t FrameResources::renderTargetBytes() const
 {
   return textureBytes(m_targets.hdr.Get()) + textureBytes(m_targets.depth.Get())
-         + textureBytes(m_targets.ldr.Get());
+         + textureBytes(m_targets.ldr.Get()) + textureBytes(m_targets.normals.Get());
 }
 
 std::uint64_t FrameResources::bufferBytes() const
@@ -371,6 +385,26 @@ Result<FrameResources::Targets> FrameResources::makeTargets(
   if (!targets.hdrFramebuffer || !targets.ldrFramebuffer)
   {
     return Error{"Cannot create the frame's framebuffers"};
+  }
+  if (m_ssaoTargets)
+  {
+    // LP6.5a (C69, SC808): R_GeometryBufferImage_ResNative (Image_intrinsic.cpp:347-352)
+    // at one sample, and geometryBufferFBO (Framebuffer_NVRHI.cpp:184-187)
+    targets.normals = device.createTexture(renderTargetDesc(
+      "_currentNormals", nvrhi::Format::RGBA16_FLOAT, extent, false, false));
+    if (!targets.normals)
+    {
+      return Error{fmt::format(
+        "Cannot create the G-buffer's target at {}x{}", extent.width, extent.height)};
+    }
+    targets.gbufferFramebuffer =
+      device.createFramebuffer(nvrhi::FramebufferDesc{}
+                                 .addColorAttachment(targets.normals)
+                                 .setDepthAttachment(targets.depth));
+    if (!targets.gbufferFramebuffer)
+    {
+      return Error{"Cannot create the G-buffer's framebuffer"};
+    }
   }
   return targets;
 }

@@ -280,10 +280,12 @@ Result<void> RenderThread::createFrameResources(
   const auto extent = m_headless    ? m_headlessExtent
                       : m_swapchain ? m_swapchain->extent
                                     : vk::Extent2D{1, 1};
+  // LP6.5a (C69, C70): a session with SSAO has the G-buffer's and SSAO's targets too
   return m_frameResources.create(
            device,
            m_device.gpu().d24s8Supported,
-           vk::Extent2D{std::max(extent.width, 1u), std::max(extent.height, 1u)})
+           vk::Extent2D{std::max(extent.width, 1u), std::max(extent.height, 1u)},
+           m_options.ssaoForTesting)
          | kdl::transform([&]() {
              m_renderTargetGeneration = m_frameResources.renderTargetGeneration();
            });
@@ -1170,7 +1172,8 @@ void RenderThread::setBudgetPassHook(std::function<void(const BudgetPassReport&)
 std::vector<PipelineKey> RenderThread::startPipelineKeys() const
 {
   const auto depth = m_frameResources.depthFormat();
-  auto keys = litStartPipelineKeys(depth);
+  // LP6.5a (C69, P8.12): pass 3's two when the session's SSAO is on
+  auto keys = litStartPipelineKeys(depth, m_options.ssaoForTesting);
   keys.push_back(tonemapPipelineKey(depth));
   keys.push_back(blitPipelineKey(
     m_headless && m_headlessTarget ? m_headlessTarget->getDesc().format
@@ -1814,6 +1817,8 @@ bool RenderThread::recordLitPasses(
   inputs.prepassTimer = m_timers.query(slot, TimedPass::Prepass);
   inputs.interactionTimer = m_timers.query(slot, TimedPass::Interactions);
   inputs.ambientTimer = m_timers.query(slot, TimedPass::Ambient);
+  // LP6.5a (C69, C65): pass 3's, reserved by LP6.0
+  inputs.gbufferTimer = m_timers.query(slot, TimedPass::Gbuffer);
   // LP5.2a (C46, C47): the stage pass's timer, and the game folder of its material
   // programs' blobs
   inputs.stageTimer = m_timers.query(slot, TimedPass::Stages);
@@ -1826,6 +1831,8 @@ bool RenderThread::recordLitPasses(
   // LP3.3 (C62, D152)
   inputs.shadowsMoving = m_frameShadowsMoving;
   inputs.gamePath = m_options.gamePath;
+  // LP6.5a (C69, C70, D177): passes 3 and 4 when the session's SSAO is on
+  inputs.ssao = m_options.ssaoForTesting;
   inputs.afterPrepass = [this] { runDebugHook(DebugHook::AfterPrepass); };
   // C38 (LP4.2b): r_skipInteractions 1's stand-in, a test's switch
   m_passes.setSkipInteractionsForTesting(m_skipInteractionsForTesting.load());
@@ -1841,6 +1848,10 @@ bool RenderThread::recordLitPasses(
   if (stats.ambientTimed)
   {
     m_timers.passTimed(slot, TimedPass::Ambient);
+  }
+  if (stats.gbufferTimed)
+  {
+    m_timers.passTimed(slot, TimedPass::Gbuffer);
   }
   if (stats.interactionsTimed)
   {

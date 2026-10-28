@@ -21,6 +21,8 @@
 #include "lit/EnginePipelineState.h"
 #include "lit/EngineTables.h"
 #include "lit/ImageCache.h"
+#include "lit/ShaderBlobs.h"
+#include "lit/ShaderReflection.h"
 
 #include <cctype>
 #include <map>
@@ -214,7 +216,10 @@ TEST_CASE("EngineTables")
     CHECK(engineParmSetMembers(4).size() == std::size_t(EngineParmSetSizes[4]));
     CHECK(engineParmSetMembers(10).size() == std::size_t(EngineParmSetSizes[10]));
     CHECK(engineParmSetMembers(9).size() == std::size_t(EngineParmSetSizes[9]));
-    CHECK(engineParmSetMembers(3).empty());
+    // LP6.5a (C69): set 3, GBUFFER's rpNominalSet3
+    CHECK(engineParmSetMembers(3).size() == std::size_t(EngineParmSetSizes[3]));
+    CHECK(engineParmSetBlock(3).size == 256u);
+    CHECK(engineParmSetOfLayout(EngineBindingLayout::Gbuffer) == 3);
     // LP5.0 (C45-C49): sets 5, 7, 8 and 12
     for (const auto set : {5, 7, 8, 12})
     {
@@ -1491,6 +1496,138 @@ TEST_CASE("EnginePipelineState")
     {
       CAPTURE(format);
       CHECK(engineRowPitch(format, 8) == 8 * (engineBitsForFormat(format) / 8));
+    }
+  }
+}
+
+TEST_CASE("EngineTables: the G-buffer layout and the named programs (LP6.5a)")
+{
+  using L = EngineBindingLayout;
+
+  SECTION("GBUFFER is DEFAULT's three sets, its uniforms set 3's 256 bytes")
+  {
+    // C69 (RenderProgs.cpp:429): { uniforms, defaultLayout, samplerOneBindingLayout }
+    for (const auto pushed : {false, true})
+    {
+      CAPTURE(pushed);
+      const auto gbuffer = engineBindingLayoutDescs(L::Gbuffer, pushed);
+      const auto texture = engineBindingLayoutDescs(L::Texture, pushed);
+      REQUIRE(gbuffer);
+      REQUIRE(texture);
+      REQUIRE(gbuffer->size() == 3u);
+      REQUIRE((*gbuffer)[0].bindings.size() == 1u);
+      CHECK(
+        (*gbuffer)[0].bindings[0].type
+        == (pushed ? nvrhi::ResourceType::PushConstants : nvrhi::ResourceType::VolatileConstantBuffer));
+      CHECK((*gbuffer)[0].bindings[0].size == (pushed ? 256u : 0u));
+      CHECK((*gbuffer)[1].bindings[0].type == (*texture)[1].bindings[0].type);
+      CHECK((*gbuffer)[2].bindings[0].type == (*texture)[2].bindings[0].type);
+    }
+    CHECK(engineBindingSetShape(L::Gbuffer) == engineBindingSetShape(L::Default));
+    const auto block = engineLayoutConstantBlock(L::Gbuffer);
+    REQUIRE(block);
+    CHECK(block->name == "renderParmSet3_t");
+    CHECK(block->size == 256u);
+    CHECK(block->members.front().name == "rpLocalViewOrigin");
+    CHECK(block->members.back().name == "rpPSXDistortions");
+    const auto* row = engineBuiltin(EngineBuiltinSmallGeometryBuffer);
+    REQUIRE(row);
+    CHECK(row->bindingLayout == L::Gbuffer);
+    CHECK(
+      shaderPermutationKey(engineBuiltinDefines(*row, true))
+      == "USE_GPU_SKINNING=0 USE_NORMAL_FMT_RGB8=0 USE_PUSH_CONSTANTS=1");
+  }
+
+  SECTION("the table: three compute rows past the material programs")
+  {
+    REQUIRE(EngineNamedPrograms.size() == 3u);
+    CHECK(EngineNamedProgramBase > EngineMaterialProgramBase);
+    CHECK(
+      EngineNamedProgramBase
+      >= EngineMaterialProgramBase + int(EngineMaterialPrograms.size()));
+    const auto names = std::vector<std::string_view>{
+      "builtin/SSAO/ssao_deinterleave",
+      "builtin/SSAO/ssao_compute",
+      "builtin/SSAO/ssao_blur"};
+    // FindShader's defines in their order (SsaoPass.cpp:74, 98-102, 127-130), no
+    // USE_PUSH_CONSTANTS (CFG:126-128)
+    const auto keys = std::vector<std::string>{
+      "LINEAR_DEPTH=0",
+      "OCT_ENCODED_NORMALS=0 DIRECTIONAL_OCCLUSION=0",
+      "DIRECTIONAL_OCCLUSION=0"};
+    const auto layouts = std::vector<L>{L::SsaoDeinterleave, L::SsaoCompute, L::SsaoBlur};
+    const auto indices = std::vector<int>{
+      EngineNamedSsaoDeinterleave, EngineNamedSsaoCompute, EngineNamedSsaoBlur};
+    // the items of each set: b1, the SRVs, the UAV, the blur's sampler
+    const auto items = std::vector<std::size_t>{3, 4, 5};
+    for (std::size_t i = 0; i < EngineNamedPrograms.size(); ++i)
+    {
+      CAPTURE(i);
+      const auto& row = EngineNamedPrograms[i].row;
+      CHECK(row.index == EngineNamedProgramBase + int(i));
+      CHECK(row.index == indices[i]);
+      CHECK(std::string_view{row.name} == names[i]);
+      CHECK(std::string_view{row.nameOutSuffix}.empty());
+      CHECK(row.stages == EngineStageCompute);
+      CHECK(row.vertexLayout == EngineVertexLayout::Unknown);
+      CHECK(row.bindingLayout == layouts[i]);
+      CHECK_FALSE(row.requireGPUSkinningSupport);
+      // a define with a value is that value whatever the push-constant rule
+      CHECK(shaderPermutationKey(engineBuiltinDefines(row, true)) == keys[i]);
+      CHECK(shaderPermutationKey(engineBuiltinDefines(row, false)) == keys[i]);
+      CHECK(engineProgram(row.index) == &row);
+      CHECK(engineNamedProgram(row.index) == &EngineNamedPrograms[i]);
+      CHECK(engineParmSetOfLayout(row.bindingLayout) == -1);
+      CHECK_FALSE(enginePushConstantsEnabled(
+        row.bindingLayout, enginePushConstantLimit(256), 0x10DE));
+      CHECK_FALSE(engineBindingSetShape(row.bindingLayout));
+
+      // the expected layout D9 compares the blob with
+      const auto expected = engineExpectedLayout(row, false);
+      REQUIRE(expected);
+      REQUIRE(expected->sets.size() == 1u);
+      CHECK(expected->sets[0].visibility == nvrhi::ShaderType::Compute);
+      REQUIRE(expected->sets[0].bindings.size() == items[i]);
+      CHECK(
+        expected->sets[0].bindings[0].type
+        == nvrhi::ResourceType::VolatileConstantBuffer);
+      CHECK(expected->sets[0].bindings[0].slot == 1u);
+      CHECK(engineVulkanBinding(expected->sets[0].bindings[0]) == 257u);
+      CHECK_FALSE(expected->pushConstants);
+      CHECK(expected->vertexInputs.empty());
+      REQUIRE(expected->constants);
+      CHECK(*expected->constants == engineSsaoBlock());
+      auto uavs = 0;
+      auto srvs = 0;
+      auto samplers = 0;
+      for (const auto& item : expected->sets[0].bindings)
+      {
+        uavs += item.type == nvrhi::ResourceType::Texture_UAV ? 1 : 0;
+        srvs += item.type == nvrhi::ResourceType::Texture_SRV ? 1 : 0;
+        samplers += item.type == nvrhi::ResourceType::Sampler ? 1 : 0;
+      }
+      CHECK(uavs == 1);
+      CHECK(srvs == int(i == 0 ? 1 : 2));
+      CHECK(samplers == int(i == 2 ? 1 : 0));
+    }
+    CHECK_FALSE(engineNamedProgram(EngineNamedProgramBase + 3));
+    CHECK_FALSE(engineNamedProgram(EngineNamedProgramBase - 1));
+    CHECK_FALSE(engineProgram(EngineNamedProgramBase + 3));
+  }
+
+  SECTION("SsaoConstants: 272 bytes, SsaoPass_cb.h's members")
+  {
+    const auto block = engineSsaoBlock();
+    CHECK(block.name == "SsaoConstants");
+    CHECK(block.size == 272u);
+    REQUIRE(block.members.size() == 16u);
+    CHECK(block.members[2] == EngineConstantMember{"pixelOffset", 16});
+    CHECK(block.members[4] == EngineConstantMember{"matClipToView", 32});
+    CHECK(block.members[9] == EngineConstantMember{"quantizedViewportOrigin", 240});
+    CHECK(block.members[15] == EngineConstantMember{"powerExponent", 268});
+    for (const auto layout : {L::SsaoDeinterleave, L::SsaoCompute, L::SsaoBlur})
+    {
+      CHECK(engineLayoutConstantBlock(layout) == block);
     }
   }
 }

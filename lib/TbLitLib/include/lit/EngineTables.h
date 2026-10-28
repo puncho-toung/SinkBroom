@@ -200,6 +200,30 @@ inline constexpr auto EngineParmSet0 = std::array<EngineParmSetMember, 8>{{
   {RenderParm::PsxDistortions, "rpPSXDistortions"},
 }};
 
+/**
+ * LP6.5a (C69, SC807): rpNominalSet3 (RenderProgs.h:261, its layouts :263 GBUFFER and its
+ * skinned form) and renderParmSet3_t (renderParmSet3.inc.hlsl:32-57), 16 float4 = 256
+ * bytes: the G-buffer program (12)
+ */
+inline constexpr auto EngineParmSet3 = std::array<EngineParmSetMember, 16>{{
+  {RenderParm::LocalViewOrigin, "rpLocalViewOrigin"},
+  {RenderParm::BumpMatrixS, "rpBumpMatrixS"},
+  {RenderParm::BumpMatrixT, "rpBumpMatrixT"},
+  {RenderParm::SpecularMatrixS, "rpSpecularMatrixS"},
+  {RenderParm::SpecularMatrixT, "rpSpecularMatrixT"},
+  {RenderParm::VertexColorModulate, "rpVertexColorModulate"},
+  {RenderParm::VertexColorAdd, "rpVertexColorAdd"},
+  {RenderParm::MvpMatrixX, "rpMVPmatrixX"},
+  {RenderParm::MvpMatrixY, "rpMVPmatrixY"},
+  {RenderParm::MvpMatrixZ, "rpMVPmatrixZ"},
+  {RenderParm::MvpMatrixW, "rpMVPmatrixW"},
+  {RenderParm::ModelMatrixX, "rpModelMatrixX"},
+  {RenderParm::ModelMatrixY, "rpModelMatrixY"},
+  {RenderParm::ModelMatrixZ, "rpModelMatrixZ"},
+  {RenderParm::ProjMatrixW, "rpProjectionMatrixW"},
+  {RenderParm::PsxDistortions, "rpPSXDistortions"},
+}};
+
 // rpNominalSet4 and renderParmSet4_t (SC219): TEXTURE (texture_color)
 inline constexpr auto EngineParmSet4 = std::array<EngineParmSetMember, 16>{{
   {RenderParm::LocalViewOrigin, "rpLocalViewOrigin"},
@@ -486,8 +510,8 @@ inline constexpr auto EngineParmSetSizes = std::array<int, EngineParmSetCount>{
 // for renderParmNullSet
 int engineParmSetOfLayout(EngineBindingLayout layout);
 
-// the members of a mirrored set (0, 4, 9, 10; LP5.0: 5, 7, 8, 12; LP3.0: 11); empty for
-// the others
+// the members of a mirrored set (0, 4, 9, 10; LP5.0: 5, 7, 8, 12; LP3.0: 11; LP6.5a: 3);
+// empty for the others
 std::span<const EngineParmSetMember> engineParmSetMembers(int set);
 
 // ----- the constant blocks of the layouts LP2 uses (C26, P2.19) -----
@@ -518,12 +542,16 @@ EngineConstantBlock engineParmSetBlock(int set);
 EngineConstantBlock engineToneMappingBlock();
 // BlitConstants (CommonPasses.h:63-72, blit.cb.h), 36 bytes
 EngineConstantBlock engineBlitBlock();
+// LP6.5a (C70, SC812): SsaoConstants (SsaoPass_cb.h, the struct of the three SSAO
+// shaders' c_Ssao at b1), 272 bytes
+EngineConstantBlock engineSsaoBlock();
 
 /**
  * The block a binding layout's uniforms item holds: the layout's renderparm set
  * (RenderProgs.cpp:217-391), ToneMappingConstants for TONEMAP, HISTOGRAM and EXPOSURE
- * (TonemapPass.cpp:61), CommonPasses' BlitConstants for BLIT; nullopt for a layout with
- * none or one LP2 does not mirror.
+ * (TonemapPass.cpp:61), CommonPasses' BlitConstants for BLIT, LP6.5a SsaoConstants for
+ * the three SSAO layouts (their b1); nullopt for a layout with none or one LP2 does not
+ * mirror.
  */
 std::optional<EngineConstantBlock> engineLayoutConstantBlock(EngineBindingLayout layout);
 
@@ -649,8 +677,75 @@ const EngineMaterialProgram* findEngineMaterialProgram(std::string_view name);
 std::optional<EngineMaterialProgram> engineMaterialProgram(
   const std::filesystem::path& gamePath, std::string_view name);
 
-// the row of a program index: a builtin's (engineBuiltin) or a material program's
-// (EngineMaterialProgramBase + its place); null for any other index
+// ----- the named programs (LP6.5a, C70, P8.13, the director's reading (3)) -----
+
+/**
+ * A program a pass of the engine finds by name with FindShader( name, stage, "", defines,
+ * true, layout ) and binds with a binding layout of its own, not through the builtins
+ * table: SsaoPass' three compute shaders (SsaoPass.cpp:74-76, 98-104, 127-132). The
+ * preview keeps them in a table of their own (as the material programs): each row a
+ * builtins-shaped row (index EngineNamedProgramBase + its place, the name, no suffix, the
+ * defines in FindShader's order with their values, no USE_PUSH_CONSTANTS: CFG:126-128,
+ * the compute stage, no vertex layout, the pass's own EngineBindingLayout), so that the
+ * compile thread makes its pipeline as it makes a builtin's (makeCompute: the blob by
+ * name, the permutation by the defines, D9's reflection against
+ * engineExpectedLayout( row ), which engineBindingLayoutDescs and
+ * engineLayoutConstantBlock give for the row's layout).
+ */
+struct EngineNamedProgram
+{
+  EngineBuiltin row;
+};
+
+// the first index of the named programs, above the material programs
+inline constexpr int EngineNamedProgramBase = 2000;
+
+// SsaoPass::CreateParameters' defaults (SsaoPass.h:47-54, SsaoPass.cpp:163): no linear
+// depth, no octahedral normals, no directional occlusion
+inline constexpr auto EngineNamedPrograms = std::array<EngineNamedProgram, 3>{{
+  {EngineBuiltin{
+    EngineNamedProgramBase + 0,
+    "builtin/SSAO/ssao_deinterleave",
+    "",
+    {{{"LINEAR_DEPTH", "0"}}},
+    1,
+    false,
+    EngineStageCompute,
+    EngineVertexLayout::Unknown,
+    EngineBindingLayout::SsaoDeinterleave}},
+  {EngineBuiltin{
+    EngineNamedProgramBase + 1,
+    "builtin/SSAO/ssao_compute",
+    "",
+    {{{"OCT_ENCODED_NORMALS", "0"}, {"DIRECTIONAL_OCCLUSION", "0"}}},
+    2,
+    false,
+    EngineStageCompute,
+    EngineVertexLayout::Unknown,
+    EngineBindingLayout::SsaoCompute}},
+  {EngineBuiltin{
+    EngineNamedProgramBase + 2,
+    "builtin/SSAO/ssao_blur",
+    "",
+    {{{"DIRECTIONAL_OCCLUSION", "0"}}},
+    1,
+    false,
+    EngineStageCompute,
+    EngineVertexLayout::Unknown,
+    EngineBindingLayout::SsaoBlur}},
+}};
+
+// the named programs' indices, in SsaoPass::Render's dispatch order
+inline constexpr int EngineNamedSsaoDeinterleave = EngineNamedProgramBase + 0;
+inline constexpr int EngineNamedSsaoCompute = EngineNamedProgramBase + 1;
+inline constexpr int EngineNamedSsaoBlur = EngineNamedProgramBase + 2;
+
+// the row of a named program's index; null for any other index
+const EngineNamedProgram* engineNamedProgram(int index);
+
+// the row of a program index: a builtin's (engineBuiltin), a material program's
+// (EngineMaterialProgramBase + its place) or (LP6.5a) a named program's
+// (EngineNamedProgramBase + its place); null for any other index
 const EngineBuiltin* engineProgram(int index);
 
 // ----- binding layouts (C3, SC236-SC237, SC262) -----

@@ -239,8 +239,10 @@ TEST_CASE("LitPasses: RenderParms mirror SetUniformValue and SelectUniforms (SC2
       CHECK(out[36 * 4 + i] == sh[i]);
     }
     CHECK(parms.select(EngineBindingLayout::AmbientLightingIblSkinned, out) == 180u);
-    // a layout whose set is not mirrored selects nothing
-    CHECK(parms.select(EngineBindingLayout::Gbuffer, out) == 0u);
+    // a layout whose set is not mirrored selects nothing (LP6.5a: set 3 is, GBUFFER's
+    // 16 float4; set 6, DEBUG's, is not)
+    CHECK(parms.select(EngineBindingLayout::Gbuffer, out) == 64u);
+    CHECK(parms.select(EngineBindingLayout::Debug, out) == 0u);
   }
 }
 

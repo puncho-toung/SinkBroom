@@ -88,6 +88,11 @@ inline constexpr auto CurrentDepth = std::string_view{"_currentDepth"};
 inline constexpr auto CurrentRenderLdr = std::string_view{"_currentRenderLDR"};
 inline constexpr auto HdrFramebuffer = std::string_view{"hdrFBO"};
 inline constexpr auto LdrFramebuffer = std::string_view{"ldrFBO"};
+// LP6.5a (C69, SC807, SC808): the G-buffer's normals (Image_intrinsic.cpp:1125, 347-352)
+// and the framebuffer pass 3 draws into, {_currentNormals, _currentDepth}
+// (Framebuffer_NVRHI.cpp:184-187)
+inline constexpr auto CurrentNormals = std::string_view{"_currentNormals"};
+inline constexpr auto GbufferFramebuffer = std::string_view{"geometryBufferFBO"};
 inline constexpr auto HistogramBuffer = std::string_view{"HistogramBuffer"};
 inline constexpr auto ExposureBuffer = std::string_view{"ExposureBuffer"};
 // the frame's presentation target: the acquired swapchain image or the headless target
@@ -160,6 +165,13 @@ public:
  * targets and framebuffers and bumps the render-target generation once (C28); the old
  * handles go to NVRHI's garbage collection, which the render thread runs (D35).
  *
+ * LP6.5a (C69, C70, D176): a session whose SSAO is on also has the G-buffer's targets:
+ * _currentNormals (RGBA16_FLOAT, render target, keepInitialState: R_GeometryBufferImage_
+ * ResNative at one sample) and the framebuffer geometryBufferFBO {_currentNormals,
+ * _currentDepth}, whose formats are hdrFBO's (P8.21: no new format set on the compile
+ * thread); made and remade with the others, in renderTargetBytes (C68 (e)). A session
+ * without SSAO makes none of them, so its targets are LP6.4b's.
+ *
  * Threads: create on the GUI thread in phase B before the render thread starts (as the
  * headless target); releaseAll on the GUI thread in teardown step 2; everything else on
  * the render thread.
@@ -175,9 +187,14 @@ private:
     nvrhi::TextureHandle ldr;
     nvrhi::FramebufferHandle hdrFramebuffer;
     nvrhi::FramebufferHandle ldrFramebuffer;
+    // LP6.5a (C69): the G-buffer's, when the session's SSAO is on
+    nvrhi::TextureHandle normals;
+    nvrhi::FramebufferHandle gbufferFramebuffer;
   };
 
   nvrhi::IDevice* m_device = nullptr;
+  // LP6.5a (C69, C70): the session's SSAO is on: the G-buffer's targets are made too
+  bool m_ssaoTargets = false;
   nvrhi::Format m_depthFormat = nvrhi::Format::D24S8;
   Targets m_targets;
   nvrhi::BufferHandle m_histogram;
@@ -194,9 +211,14 @@ public:
 
   /**
    * GUI thread, phase B: the buffers and the targets at extent; the generation is 1.
-   * d24s8Supported is DeviceFacts::d24s8Supported (C30).
+   * d24s8Supported is DeviceFacts::d24s8Supported (C30); ssaoTargets (LP6.5a: the
+   * session's SSAO is on) adds the G-buffer's targets.
    */
-  Result<void> create(nvrhi::IDevice& device, bool d24s8Supported, vk::Extent2D extent);
+  Result<void> create(
+    nvrhi::IDevice& device,
+    bool d24s8Supported,
+    vk::Extent2D extent,
+    bool ssaoTargets = false);
 
   /**
    * Render thread, at the start of frame frame: new targets and framebuffers when the

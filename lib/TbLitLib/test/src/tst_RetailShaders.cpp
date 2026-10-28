@@ -32,6 +32,7 @@
 
 #include "kd/result.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -752,6 +753,118 @@ TEST_CASE(
   // six programs of two stages, not pushed: the twelve blobs' permutations
   CHECK(checked == 12);
   CHECK(blocks > 0);
+}
+
+TEST_CASE(
+  "Retail shaders: the G-buffer program, set 3 and the SSAO named programs (LP6.5a)",
+  "[.][retail]")
+{
+  const auto gamePath = retailGamePath();
+  if (!gamePath)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the shader test needs the game folder");
+  }
+
+  // C69 (SC807): builtin/gbuffer (12), GBUFFER's {uniforms, t0, s0} with set 3 pushed or
+  // not (pcEnabled: off only on Vulkan with AMD), both stages; C70 (P8.13, D9): the three
+  // named programs, the permutation their FindShader defines name (no
+  // USE_PUSH_CONSTANTS: CFG:126-128), reflected against engineExpectedLayout of their
+  // rows: one set, b1 the SsaoConstants block by name and offset, the SRVs, the UAV, the
+  // blur's sampler; and every item of each table declared by the shader
+  using L = EngineBindingLayout;
+  auto checked = 0;
+  auto ssaoBlocks = 0;
+  auto set3Blocks = 0;
+  const auto set3 = engineParmSetBlock(3);
+  REQUIRE(set3.members.size() == 16u);
+  REQUIRE(set3.size == 256u);
+  const auto ssao = engineSsaoBlock();
+  REQUIRE(ssao.size == 272u);
+
+  const auto check = [&](const EngineBuiltin& builtin, const bool pushed) {
+    CAPTURE(builtin.name, builtin.nameOutSuffix, pushed);
+    const auto expected = engineExpectedLayout(builtin, pushed);
+    REQUIRE(expected);
+    auto stages = std::vector<ShaderReflection>{};
+    for (const auto stage : stagesOf(builtin))
+    {
+      CAPTURE(shaderStageSuffix(stage));
+      const auto blob = readShaderBlob(*gamePath, builtin.name, stage);
+      REQUIRE(blob.is_success());
+      const auto defines = engineBuiltinDefines(builtin, pushed);
+      const auto key = shaderPermutationKey(defines);
+      const auto keys = shaderBlobKeys(blob.value());
+      // C2: the key the defines name is one the blob holds
+      CHECK(std::find(keys.begin(), keys.end(), key) != keys.end());
+      std::cout << "LP6.5a: " << builtin.name << "." << shaderStageSuffix(stage)
+                << " key '" << key << "' of " << keys.size() << " keys\n";
+      const auto code = findShaderPermutation(blob.value(), defines);
+      REQUIRE(code.is_success());
+      const auto reflection = reflectSpirv(code.value());
+      REQUIRE(reflection.is_success());
+      const auto difference = compareReflection(reflection.value(), *expected);
+      CHECK_FALSE(difference);
+      if (difference)
+      {
+        std::cout << builtin.name << "." << shaderStageSuffix(stage) << ": "
+                  << *difference << "\n";
+      }
+      for (const auto& binding : reflection.value().bindings)
+      {
+        std::cout << "  set " << binding.set << " binding " << binding.binding << " "
+                  << describeDescriptorKind(binding.kind) << " " << binding.name << "\n";
+        if (binding.block && binding.block->size == 272u)
+        {
+          REQUIRE(binding.block->members.size() == ssao.members.size());
+          for (std::size_t i = 0; i < ssao.members.size(); ++i)
+          {
+            CHECK(binding.block->members[i].name == ssao.members[i].name);
+            CHECK(binding.block->members[i].offset == ssao.members[i].offset);
+          }
+          ++ssaoBlocks;
+        }
+        if (binding.block && binding.set == 0 && binding.binding == 256)
+        {
+          CHECK(binding.block->size == 256u);
+          ++set3Blocks;
+        }
+      }
+      if (reflection.value().pushConstants)
+      {
+        CHECK(pushed);
+        CHECK(reflection.value().pushConstants->size == 256u);
+        ++set3Blocks;
+      }
+      stages.push_back(reflection.value());
+      ++checked;
+    }
+    const auto uncovered = compareLayoutCoverage(stages, *expected);
+    CHECK_FALSE(uncovered);
+    if (uncovered)
+    {
+      std::cout << builtin.name << ": " << *uncovered << "\n";
+    }
+  };
+
+  const auto& gbuffer = *engineBuiltin(EngineBuiltinSmallGeometryBuffer);
+  REQUIRE(gbuffer.bindingLayout == L::Gbuffer);
+  REQUIRE(engineParmSetOfLayout(gbuffer.bindingLayout) == 3);
+  check(gbuffer, true);
+  check(gbuffer, false);
+  for (const auto& named : EngineNamedPrograms)
+  {
+    REQUIRE(engineProgram(named.row.index) == &named.row);
+    REQUIRE(engineParmSetOfLayout(named.row.bindingLayout) == -1);
+    REQUIRE_FALSE(enginePushConstantsEnabled(
+      named.row.bindingLayout, enginePushConstantLimit(256), 0x10DE));
+    check(named.row, false);
+  }
+  std::cout << "LP6.5a: reflected and compared " << checked << " permutations, "
+            << ssaoBlocks << " SsaoConstants blocks, " << set3Blocks << " set 3 blocks\n";
+  // gbuffer's two stages pushed and not, the three compute shaders
+  CHECK(checked == 7);
+  CHECK(ssaoBlocks == 3);
+  CHECK(set3Blocks > 0);
 }
 
 } // namespace tb::lit

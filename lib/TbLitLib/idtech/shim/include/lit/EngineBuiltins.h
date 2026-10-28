@@ -108,6 +108,12 @@ enum class EngineBindingLayout : int
   Histogram,
   Exposure,
   Num,
+  // LP6.5a (C70, P8.13): SsaoPass' own binding layouts (SsaoPass.cpp:78-152), which the
+  // pass creates itself and bindingLayouts[] has no row for, past the engine's numbering:
+  // no renderparm set, no constant buffer named RenderParams_<number>
+  SsaoDeinterleave,
+  SsaoCompute,
+  SsaoBlur,
 };
 
 /**
@@ -1519,5 +1525,9 @@ inline constexpr int EngineBuiltinAmbientLightingIbl = 4;
 inline constexpr int EngineBuiltinAmbientLightingIblPbr = 6;
 inline constexpr int EngineBuiltinAmbientLightgridIbl = 8;
 inline constexpr int EngineBuiltinAmbientLightgridIblPbr = 10;
+// LP6.5a (C69, SC807): BUILTIN_SMALL_GEOMETRY_BUFFER, the G-buffer pass's program
+// (RenderProgs.h:414, "builtin/gbuffer", BINDING_LAYOUT_GBUFFER); its skinned form 13 is
+// never selected (no skinned model)
+inline constexpr int EngineBuiltinSmallGeometryBuffer = 12;
 
 } // namespace tb::lit

@@ -82,7 +82,8 @@ struct PipelineKey
 {
   PipelineRecipe recipe = PipelineRecipe::Draw;
   // a BUILTIN_ index (lit/EngineBuiltins.h), or LP5.0 a material program's
-  // (EngineMaterialProgramBase + its place, lit/EngineTables.h)
+  // (EngineMaterialProgramBase + its place, lit/EngineTables.h); a compute job's program
+  // may be LP6.5a's named program (EngineNamedProgramBase + its place)
   int program = 0;
   std::uint64_t state = 0;
   int depthBias = 0;
@@ -206,6 +207,7 @@ private:
   std::map<int, ProgramReport> m_programs;
   std::map<int, ExpectedShaderLayout> m_expectedForTesting;
   std::function<void()> m_beforeCreateForTesting;
+  std::function<void(int)> m_beforeCreateProgramForTesting;
   std::uint64_t m_created = 0;
   // the graphicsPipeline and computePipeline calls so far (T0.9's test)
   std::uint64_t m_lookups = 0;
@@ -252,8 +254,11 @@ public:
   // the layout a program's shaders are compared with instead of the tables' (a wrong
   // table row, D9); set before the program is first asked for
   void setExpectedLayoutForTesting(int program, ExpectedShaderLayout expected);
-  // runs on the compile thread just before each pipeline is created
+  // runs on the compile thread just before each graphics pipeline is created
   void setBeforeCreateForTesting(std::function<void()> hook);
+  // LP6.5a: runs on the compile thread just before each pipeline is created, graphics
+  // and compute, with its program (a test holds one program's job, the others go on)
+  void setBeforeCreateProgramForTesting(std::function<void(int)> hook);
   std::uint64_t pipelinesCreatedForTesting() const;
   // the graphicsPipeline and computePipeline calls so far, from any thread
   std::uint64_t lookupsForTesting() const;
@@ -282,6 +287,8 @@ private:
   // a graphics recipe's primitive type and render state
   void recipeState(const PipelineKey& key, nvrhi::GraphicsPipelineDesc& desc) const;
   Result<ComputePipelineLookup> makeCompute(int program);
+  // the test hooks before a pipeline of program is created (graphics: both)
+  void beforeCreate(int program, bool graphics);
   Result<BindingLayoutLookup> makeLayouts(EngineBindingLayout layout);
   // a program whose pipeline was made is enabled, unless it was disabled before
   void enable(int program);

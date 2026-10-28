@@ -261,6 +261,34 @@ void PipelineCompiler::setBeforeCreateForTesting(std::function<void()> hook)
   m_beforeCreateForTesting = std::move(hook);
 }
 
+void PipelineCompiler::setBeforeCreateProgramForTesting(std::function<void(int)> hook)
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  m_beforeCreateProgramForTesting = std::move(hook);
+}
+
+void PipelineCompiler::beforeCreate(const int program, const bool graphics)
+{
+  auto hook = std::function<void()>{};
+  auto programHook = std::function<void(int)>{};
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    if (graphics)
+    {
+      hook = m_beforeCreateForTesting;
+    }
+    programHook = m_beforeCreateProgramForTesting;
+  }
+  if (hook)
+  {
+    hook();
+  }
+  if (programHook)
+  {
+    programHook(program);
+  }
+}
+
 std::uint64_t PipelineCompiler::pipelinesCreatedForTesting() const
 {
   const auto lock = std::scoped_lock{m_mutex};
@@ -670,15 +698,7 @@ Result<GraphicsPipelineLookup> PipelineCompiler::makeGraphics(const PipelineKey&
              return unlessStopping() | kdl::transform([&]() { return target; });
            })
          | kdl::and_then([&](nvrhi::IFramebuffer* target) {
-             auto hook = std::function<void()>{};
-             {
-               const auto lock = std::scoped_lock{m_mutex};
-               hook = m_beforeCreateForTesting;
-             }
-             if (hook)
-             {
-               hook();
-             }
+             beforeCreate(builtin->index, true);
              const auto started = std::chrono::steady_clock::now();
              lookup.pipeline = m_device.device().createGraphicsPipeline(desc, target);
              timePipeline(started);
@@ -775,7 +795,9 @@ Result<ComputePipelineLookup> PipelineCompiler::makeCompute(const int program)
              return unlessStopping();
            })
          | kdl::and_then([&]() -> Result<ComputePipelineLookup> {
-             // TonemapPass.cpp:144-147, 196-199
+             // TonemapPass.cpp:144-147, 196-199; LP6.5a (C70): SsaoPass.cpp:89-92,
+             // 118-121, 147-150, a named program's as a builtin's
+             beforeCreate(builtin->index, false);
              const auto started = std::chrono::steady_clock::now();
              lookup.pipeline = m_device.device().createComputePipeline(desc);
              timePipeline(started);
