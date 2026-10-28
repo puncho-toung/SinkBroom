@@ -375,8 +375,9 @@ using namespace std::chrono_literals;
 // proc_bytes and the eleven model, dress and adoption counts (C52, P7.20), LP7.3's
 // inlined_surfaces (C54), LP3.1's pass 6 and caster columns (D157), LP3.2's per-list
 // shadow-atlas interaction draws, LP3.4's perforated_draws (D155), LP6.0's ten split
-// columns of the CPU record and three reserved GPU columns (C65)
-constexpr auto FrameLogFields = std::size_t{108};
+// columns of the CPU record and three reserved GPU columns (C65), LP6.1's two draw-record
+// counts (C64)
+constexpr auto FrameLogFields = std::size_t{110};
 
 // LP2.0, T0.2: the validation layer's id of "Vertex attribute at location N not consumed
 // by vertex shader" (mirror.json M-PIPE-DEFECT-01), as this machine's layer names it
@@ -5404,6 +5405,277 @@ void checkCpuSplit(const std::vector<std::string>& row)
 
 } // namespace
 
+namespace
+{
+
+// LP6.1: the HDR target of the next frame whatever it waits for (frameHdr's read-back)
+std::optional<HdrImage> hdrNow(LitSession& session)
+{
+  auto staging = nvrhi::StagingTextureHandle{};
+  auto done = std::make_shared<std::promise<void>>();
+  auto future = done->get_future();
+  session.runAfterTonemapForTesting([&, done](RenderFrameAccess& access) {
+    auto* hdr = access.frame.find(frame_resource::CurrentRenderHdr)->texture;
+    const auto& desc = hdr->getDesc();
+    staging = access.device.createStagingTexture(
+      nvrhi::TextureDesc{}
+        .setWidth(desc.width)
+        .setHeight(desc.height)
+        .setFormat(desc.format),
+      nvrhi::CpuAccessMode::Read);
+    access.commandList.copyTexture(
+      staging, nvrhi::TextureSlice{}, hdr, nvrhi::TextureSlice{});
+    done->set_value();
+  });
+  inFrame(session, [](RenderFrameAccess&) {});
+  if (future.wait_for(10000ms) != std::future_status::ready)
+  {
+    return std::nullopt;
+  }
+  auto image = HdrImage{};
+  const auto read = inFrame(session, [&](RenderFrameAccess& access) {
+    const auto& desc = staging->getDesc();
+    image.width = desc.width;
+    image.height = desc.height;
+    image.rgba.resize(std::size_t(desc.width) * desc.height * 4);
+    auto pitch = std::size_t{0};
+    const auto* bytes = static_cast<const std::uint8_t*>(access.device.mapStagingTexture(
+      staging, nvrhi::TextureSlice{}, nvrhi::CpuAccessMode::Read, &pitch));
+    for (std::uint32_t y = 0; y < desc.height; ++y)
+    {
+      const auto* row = reinterpret_cast<const std::uint16_t*>(bytes + y * pitch);
+      for (std::uint32_t x = 0; x < desc.width * 4; ++x)
+      {
+        image.rgba[std::size_t(y) * desc.width * 4 + x] = halfToFloat(row[x]);
+      }
+    }
+    access.device.unmapStagingTexture(staging);
+    staging = nullptr;
+  });
+  if (!read)
+  {
+    return std::nullopt;
+  }
+  return image;
+}
+
+} // namespace
+
+// LP6.1 (C64, P8.1): the draw records of passes 1, 5 and 7 on the LP2.2a fixture, the
+// camera still: a slot's drop (as an eviction's) and its arrival re-resolve exactly the
+// records resolved with it, at the frames its version moves, and the picture follows (the
+// slot's stand-in, then its texture again: the picture before the drop, bit for bit); no
+// record outlives a set the cache erased. Hidden as LP2.2a's case; it needs a GPU.
+TEST_CASE("LitSession draw records on a GPU (LP6.1)", "[.][litgpu]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto service = rootService(root);
+    auto events = Events{};
+    auto session = rootSession(instance, events, *service, root);
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+    REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+
+    // camera 1 of LP2.2a's case: above the floor at (60 0 0), looking down, lit
+    const auto lit = litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0});
+    const auto before = settledHdr(*session, lit, 1);
+    REQUIRE(before);
+    CHECK(before->first.brightest(80, 60) > 0.0f);
+    CHECK(before->second.stats.recordsHeld > 0u);
+
+    // A: the floor's diffuse image (textures/lp1b/floor), and the records resolved with
+    // it
+    auto a = NoImageSlot;
+    auto heldA = std::size_t{0};
+    auto held = std::size_t{0};
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      for (const auto& surface : access.passes.lists().drawSurfs)
+      {
+        if (surface.material && surface.material->name == "textures/lp1b/floor")
+        {
+          for (const auto& stage : surface.material->stages)
+          {
+            if (stage.lighting == engine_material::LightingDiffuse && stage.image)
+            {
+              if (const auto id = access.images.find(*stage.image))
+              {
+                a = *id;
+              }
+            }
+          }
+        }
+      }
+      if (a != NoImageSlot)
+      {
+        heldA = access.passes.recordsForTesting().recordsOf(a);
+      }
+      held = access.passes.recordsForTesting().records();
+    }));
+    REQUIRE(a != NoImageSlot);
+    // its ambient and interaction draws
+    CHECK(heldA > 0u);
+
+    // every frame's record resolutions, read at the next frame's start (the passes' last
+    // frame)
+    struct Seen
+    {
+      std::uint64_t frame = 0;
+      std::size_t resolves = 0;
+      std::size_t held = 0;
+    };
+    auto seenMutex = std::mutex{};
+    auto seen = std::vector<Seen>{};
+    session->setEveryFrameHookForTesting([&](RenderFrameAccess& access) {
+      const auto& stats = access.passes.lastStats();
+      const auto lock = std::scoped_lock{seenMutex};
+      seen.push_back(
+        Seen{access.frameIndex - 1, stats.recordResolves, stats.recordsHeld});
+    });
+    const auto resolvesOf = [&](const std::uint64_t frame) -> std::optional<Seen> {
+      const auto lock = std::scoped_lock{seenMutex};
+      for (const auto& s : seen)
+      {
+        if (s.frame == frame)
+        {
+          return s;
+        }
+      }
+      return std::nullopt;
+    };
+    const auto frames = [&](const std::uint64_t until) {
+      return waitFor(
+        [&] {
+          inFrame(*session, [](RenderFrameAccess&) {});
+          return resolvesOf(until).has_value();
+        },
+        10000ms,
+        false);
+    };
+
+    // A's texture is dropped (as an eviction would) with no upload to bring it back: the
+    // frame of the drop and the next one resolve exactly A's records (the frame's passes
+    // see the hook's bump; the bump's erase after them lets go of the sets they made)
+    session->setUploadCapForTesting(0);
+    auto dropFrame = std::uint64_t{0};
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      dropFrame = access.frameIndex;
+      access.images.dropTexture(a, access.frameIndex);
+    }));
+    REQUIRE(frames(dropFrame + 3));
+    const auto atDrop = resolvesOf(dropFrame);
+    const auto afterDrop = resolvesOf(dropFrame + 1);
+    const auto settledDrop = resolvesOf(dropFrame + 2);
+    REQUIRE(atDrop);
+    REQUIRE(afterDrop);
+    REQUIRE(settledDrop);
+    CHECK(atDrop->resolves == heldA);
+    CHECK(afterDrop->resolves == heldA);
+    CHECK(settledDrop->resolves == 0u);
+    // no record made or swept: the same ones re-resolved
+    CHECK(afterDrop->held == held);
+    // the probe follows: A binds its stand-in, the picture differs
+    const auto dropped = hdrNow(*session);
+    REQUIRE(dropped);
+    auto stillDropped = false;
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      stillDropped = access.images.binding(a).intrinsic;
+    }));
+    CHECK(stillDropped);
+
+    // uploads again: every frame that writes A's levels (each bumps its version)
+    // resolves exactly A's records, and the settled picture is the one before the drop
+    const auto arrivalFrom = dropFrame + 3;
+    session->setUploadCapForTesting(UploadBytesPerFrame);
+    const auto after = settledHdr(*session, lit, 1);
+    REQUIRE(after);
+    auto lastFrame = std::uint64_t{0};
+    REQUIRE(inFrame(
+      *session, [&](RenderFrameAccess& access) { lastFrame = access.frameIndex; }));
+    REQUIRE(frames(lastFrame));
+    auto arrivals = std::size_t{0};
+    auto others = std::size_t{0};
+    {
+      const auto lock = std::scoped_lock{seenMutex};
+      for (const auto& s : seen)
+      {
+        if (s.frame < arrivalFrom || s.resolves == 0)
+        {
+          continue;
+        }
+        ++(s.resolves == heldA ? arrivals : others);
+      }
+    }
+    CHECK(arrivals > 0u);
+    CHECK(others == 0u);
+    // settled: no record resolves any more
+    const auto quiet = resolvesOf(lastFrame);
+    REQUIRE(quiet);
+    CHECK(quiet->resolves == 0u);
+    CHECK(after->second.stats.recordsHeld == held);
+    CHECK(after->first.rgba == before->first.rgba);
+    auto differs = std::size_t{0};
+    if (dropped->rgba.size() == before->first.rgba.size())
+    {
+      for (std::size_t i = 0; i < dropped->rgba.size(); ++i)
+      {
+        differs += dropped->rgba[i] != before->first.rgba[i] ? 1 : 0;
+      }
+    }
+    std::cout << fmt::format(
+      "LP6.1 draw records: {} held, {} of them resolved with the floor's diffuse slot; "
+      "resolved at the drop's frame {} and the next {}, then {}; {} arrival frames each "
+      "resolving {} ({} other); the dropped picture differs in {} of {} channels, the "
+      "settled one {} the first\n",
+      held,
+      heldA,
+      atDrop->resolves,
+      afterDrop->resolves,
+      settledDrop->resolves,
+      arrivals,
+      heldA,
+      others,
+      differs,
+      dropped->rgba.size(),
+      after->first.rgba == before->first.rgba ? "equals" : "differs from");
+    CHECK(differs > 0u);
+
+    // no record outlived a set the cache erased
+    auto heldErased = std::uint64_t{1};
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      heldErased = access.bindingSets.heldErased();
+    }));
+    CHECK(heldErased == 0u);
+    session->setEveryFrameHookForTesting({});
+
+    teardown(*session);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  CHECK(resetDispatcher());
+  messages.print("draw records, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+}
+
 // LP2.2b: the tonemap passes and the blit put the lit picture on the frame's target.
 // Hidden as LP2.2a's lit case: the blobs come from the game folder (TB_LIT_GAME_PATH),
 // copied into a test game root; it needs a GPU.
@@ -5723,6 +5995,9 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     CHECK(rows[0][RecordOtherMsColumn + 1] == "gpu_gbuffer_ms");
     CHECK(rows[0][RecordOtherMsColumn + 2] == "gpu_ssao_ms");
     CHECK(rows[0][RecordOtherMsColumn + 3] == "gpu_taa_ms");
+    // LP6.1 (C64): and the draw records' two, the last
+    CHECK(rows[0][RecordOtherMsColumn + 4] == "records_held");
+    CHECK(rows[0][RecordOtherMsColumn + 5] == "record_resolves");
     auto lastLit = std::optional<std::vector<std::string>>{};
     auto settledRows = 0;
     for (std::size_t i = 1; i < rows.size(); ++i)

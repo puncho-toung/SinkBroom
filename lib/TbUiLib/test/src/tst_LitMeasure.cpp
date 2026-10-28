@@ -1183,6 +1183,9 @@ constexpr auto TonemapCpuMs = std::size_t{101};
 constexpr auto UploadMs = std::size_t{102};
 constexpr auto SubmitMs = std::size_t{103};
 constexpr auto RecordOtherMs = std::size_t{104};
+// LP6.1 (C64): the draw records held and resolved, after LP6.0's reserved GPU columns
+constexpr auto RecordsHeld = std::size_t{108};
+constexpr auto RecordResolves = std::size_t{109};
 // LPF.1 (C44, P5.21): and the live feed's three (feed_applied, feed_ms, override_bytes);
 // LP5.1 (C45): and the interaction phases' two (math_lights, ambient_lights); LP5.2a
 // (C46): and the stage pass's three (stage_draws, stage_skipped, gpu_stages_ms); LP5.3
@@ -1194,8 +1197,9 @@ constexpr auto RecordOtherMs = std::size_t{104};
 // and the per-list shadow-atlas interaction draws after set11_writes, the 94th; LP3.4
 // (D155): and perforated_draws, the 95th; LP6.0 (C65): and the CPU record's ten split
 // columns after it, the 105th, and the three GPU columns reserved for LP6's passes, the
-// 108th the last
-constexpr auto Count = std::size_t{108};
+// 108th; LP6.1 (C64): and the draw records' two (records_held, record_resolves), the
+// 110th the last
+constexpr auto Count = std::size_t{110};
 } // namespace column
 
 /**

@@ -250,6 +250,11 @@ struct FrameLogRow
   std::optional<double> gpuGbufferMs;
   std::optional<double> gpuSsaoMs;
   std::optional<double> gpuTaaMs;
+  // LP6.1 (C64), frame rows: the draw records of passes 1, 5 and 7 the lit passes hold at
+  // the frame's end, and their resolutions this frame (LitFrameStats::recordsHeld,
+  // recordResolves); empty in a start or stop row, the last columns
+  std::optional<std::uint64_t> recordsHeld;
+  std::optional<std::uint64_t> recordResolves;
 };
 
 // the CSV header line, ending in a newline

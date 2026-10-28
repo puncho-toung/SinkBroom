@@ -237,6 +237,14 @@ std::string lp6GpuFields(const FrameLogRow& row)
     optionalField(row.gpuTaaMs, "{:.3f}"));
 }
 
+// LP6.1's columns (C64): the draw records held at the frame's end and their resolutions
+// this frame; empty in a start or stop row
+std::string recordFields(const FrameLogRow& row)
+{
+  return fmt::format(
+    "{},{}", optionalCount(row.recordsHeld), optionalCount(row.recordResolves));
+}
+
 std::string_view eventName(const FrameLogEvent event)
 {
   switch (event)
@@ -274,7 +282,8 @@ std::string_view frameLogHeader()
          "lights,caster_pairs,caster_pairs_resident,caster_pairs_pending,casters,caster_"
          "ms,light_triangle_entries,perforated_draws,lists_ms,prepass_cpu_ms,ambient_cpu_"
          "ms,interaction_cpu_ms,stage_cpu_ms,fog_cpu_ms,tonemap_cpu_ms,upload_ms,submit_"
-         "ms,record_other_ms,gpu_gbuffer_ms,gpu_ssao_ms,gpu_taa_ms\n";
+         "ms,record_other_ms,gpu_gbuffer_ms,gpu_ssao_ms,gpu_taa_ms,records_held,record_"
+         "resolves\n";
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)
@@ -286,11 +295,11 @@ std::string formatFrameLogRow(const FrameLogRow& row)
   if (row.event != FrameLogEvent::Frame)
   {
     // the frame's columns empty (gpu_prepass_ms ... gpu_fog_ms), then proc_bytes, then
-    // LP7's twelve counts, LP3.1's twenty-one, LP3.2's three, LP3.4's one and LP6.0's
-    // ten and three empty
+    // LP7's twelve counts, LP3.1's twenty-one, LP3.2's three, LP3.4's one, LP6.0's ten
+    // and three and LP6.1's two empty
     return fmt::format(
       "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,{},,,,,,,,,,,,"
-      ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n",
+      ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n",
       row.session,
       eventName(row.event),
       vram,
@@ -299,7 +308,7 @@ std::string formatFrameLogRow(const FrameLogRow& row)
   }
   return fmt::format(
     "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},"
-    "{},{}\n",
+    "{},{},{}\n",
     row.session,
     eventName(row.event),
     row.frameIndex,
@@ -325,7 +334,8 @@ std::string formatFrameLogRow(const FrameLogRow& row)
     lp7Fields(row),
     shadowFields(row),
     cpuSplitFields(row),
-    lp6GpuFields(row));
+    lp6GpuFields(row),
+    recordFields(row));
 }
 
 std::optional<std::string> FrameLogWriter::open(const std::filesystem::path& path)

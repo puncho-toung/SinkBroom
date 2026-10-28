@@ -2276,6 +2276,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
              + litStats.shadowRecordMs + litStats.interactionRecordMs
              + litStats.stageRecordMs + litStats.fogRecordMs + tonemapMs + uploadMs
              + submitMs));
+      // LP6.1 (C64): the draw records held at the frame's end and resolved this frame
+      row.recordsHeld = litStats.recordsHeld;
+      row.recordResolves = litStats.recordResolves;
       m_timers.frameShown(slot, row);
       ++m_framesPresented;
       // LP2.3 (D9): the panel's status line reads the frame's counts
