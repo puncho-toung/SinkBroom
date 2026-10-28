@@ -3090,7 +3090,7 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       "largest {}, the smallest {} bytes); textures_dedicated {} "
       "({}; made dedicated so far: {} a class refused, {} larger than a heap, {} no "
       "heap, {} before the probe, {} a bind refused; the largest {}); the Start probe "
-      "{:.1f} ms at the first frame: {} | — | — |\n\n",
+      "{:.1f} ms at the first frame: {} | — | — |\n",
       first.settledFrame,
       rowField(column::TextureHeaps),
       rowField(column::HeapBytes),
@@ -3115,6 +3115,84 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       firstProbeLine.empty() ? std::string{"(no line)"} : firstProbeLine);
     CHECK(heaps.dedicatedBindRefused == 0u);
     CHECK(!firstProbeLine.empty());
+  }
+  // LP6.4b (C68 (b), (d), the director's reading (9)): the eviction and the compaction
+  // at the three Starts' settled frames; at the default budget on admin nothing is
+  // evicted, floored or compacted (one arena per kind): the rows report the figures
+  {
+    const auto statusAt = [](const StartMeasure& measure) {
+      const auto* settled = measure.record(measure.settledFrame);
+      return settled ? settled->status : lit::SessionStatus{};
+    };
+    const auto s1 = statusAt(first);
+    const auto s2 = statusAt(second);
+    const auto s3 = statusAt(third);
+    const auto liveOf = [&](const lit::SessionStatus& s) {
+      return fmt::format(
+        "{} = arenas used {} + heaps used {} + dedicated {} + targets and buffers {} + "
+        "released {}",
+        mb(double(s.vramLiveBytes)),
+        mb(double(s.vramArenaUsedBytes)),
+        mb(double(s.vramHeapUsedBytes)),
+        mb(double(s.vramDedicatedTextureBytes)),
+        mb(double(s.vramRenderTargetBytes)),
+        mb(double(s.vramReleasedBytes)));
+    };
+    summary += fmt::format(
+      "| Eviction (LP6.4b, C68 (b)) | the session's budget {}; the live figure at the "
+      "settled frames (frames {} / {} / {}): {}; {}; {}; textures_evicted {} / {} / {}, "
+      "textures_floored {} / {} / {} | 0 evicted, 0 floored at the default budget | {} "
+      "|\n",
+      mb(double(s1.vramBudgetBytes)),
+      first.settledFrame,
+      second.settledFrame,
+      third.settledFrame,
+      liveOf(s1),
+      liveOf(s2),
+      liveOf(s3),
+      s1.texturesEvicted,
+      s2.texturesEvicted,
+      s3.texturesEvicted,
+      s1.texturesFloored,
+      s2.texturesFloored,
+      s3.texturesFloored,
+      pass(
+        s1.texturesEvicted + s2.texturesEvicted + s3.texturesEvicted == 0
+        && s1.texturesFloored + s2.texturesFloored + s3.texturesFloored == 0));
+    const auto eventRows = [&](const StartMeasure& measure) {
+      const auto session = std::to_string(measure.generation);
+      return std::size_t(std::ranges::count_if(log, [&](const LogRow& row) {
+        return row.at(column::Session) == session
+               && row.at(column::Event) == "compaction";
+      }));
+    };
+    summary += fmt::format(
+      "| Compaction (LP6.4b, C68 (d)) | the arenas per kind at the settled frames "
+      "{} vertex / {} index, {} / {}, {} / {}; compactions run {} / {} / {} ({} / {} / "
+      "{} "
+      "in an uploads-only idle submission), arena_moved_bytes {} / {} / {}; compaction "
+      "event rows {} / {} / {} | 0: one arena per kind | {} |\n\n",
+      s1.vertexArenas,
+      s1.indexArenas,
+      s2.vertexArenas,
+      s2.indexArenas,
+      s3.vertexArenas,
+      s3.indexArenas,
+      s1.compactions,
+      s2.compactions,
+      s3.compactions,
+      s1.compactionSubmissions,
+      s2.compactionSubmissions,
+      s3.compactionSubmissions,
+      s1.arenaMovedBytes,
+      s2.arenaMovedBytes,
+      s3.arenaMovedBytes,
+      eventRows(first),
+      eventRows(second),
+      eventRows(third),
+      pass(s1.compactions + s2.compactions + s3.compactions == 0));
+    CHECK(s1.vramLiveBytes > 0u);
+    CHECK(s1.vramBudgetBytes == lit::DefaultVramBudgetBytes);
   }
 
   summary += "Camera moving, per frame (median / p95 / max, count):\n\n";
