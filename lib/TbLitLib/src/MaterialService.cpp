@@ -309,6 +309,8 @@ struct MaterialService::Shared
   // D100: every hand-over, bumped with the mutex held; atomic, so that the render thread
   // reads it without the mutex
   std::atomic<std::uint64_t> feedRequested = 0;
+  // LP6.4b step 0b: feedRequested() answers one more (holdFeedBehindForTesting)
+  std::atomic<bool> feedHeldBehind = false;
   // C40: what became of each name's last hand-over
   std::unordered_map<std::string, ImageOverrideStatus> overrideStatus;
   // LPF.0b (D96): the re-parse hand-overs, one per name as asked, in the order the names
@@ -3986,7 +3988,9 @@ void MaterialService::clearMaterialReparse(std::string name)
 
 std::uint64_t MaterialService::feedRequested() const
 {
-  return m_shared->feedRequested.load();
+  // LP6.4b step 0b: one ahead of every table while a test holds the feed behind
+  return m_shared->feedRequested.load()
+         + (m_shared->feedHeldBehind.load() ? std::uint64_t{1} : std::uint64_t{0});
 }
 
 ImageOverrideStatus MaterialService::imageOverrideStatus(
@@ -4069,6 +4073,11 @@ void MaterialService::holdMeasuresForTesting(const bool hold)
   }
   // a release wakes the thread for the measures queued meanwhile
   m_shared->requested.notify_one();
+}
+
+void MaterialService::holdFeedBehindForTesting(const bool hold)
+{
+  m_shared->feedHeldBehind = hold;
 }
 
 } // namespace tb::lit

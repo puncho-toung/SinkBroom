@@ -780,6 +780,14 @@ public:
    * wakes the thread for the measures queued. Tests only.
    */
   void holdMeasuresForTesting(bool hold);
+  /**
+   * LP6.4b step 0b, any thread: while held, feedRequested() answers one hand-over more
+   * than were made, so that no published table's feedApplied reaches it and every frame
+   * is behind its counters (LPF.1's feedBehind): a feed that never lets the session
+   * settle, by construction (a storm of hand-overs a millisecond apart does not: a frame
+   * whose table, start and check all fall between two hand-overs settles). Tests only.
+   */
+  void holdFeedBehindForTesting(bool hold);
 
   deleteCopyAndMove(MaterialService);
 };

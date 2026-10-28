@@ -411,6 +411,193 @@ std::string slabMapText()
            "\"light_radius\" \"600 600 600\"\n}\n";
 }
 
+// LP6.4b step 0b: a storm hand-over's stamps, before and after the call (the service's
+// count moved between them)
+struct StormStamp
+{
+  std::chrono::steady_clock::time_point before;
+  std::chrono::steady_clock::time_point after;
+};
+
+// a frame under the storm: its index, its start (the pacer's stamp), the start of its
+// passes (its table read before it) and the service's count then
+struct StormFrameWindow
+{
+  std::uint64_t frame = 0;
+  std::chrono::steady_clock::time_point start;
+  std::chrono::steady_clock::time_point passes;
+  std::uint64_t requested = 0;
+};
+
+double stormMs(
+  const std::chrono::steady_clock::time_point from,
+  const std::chrono::steady_clock::time_point to)
+{
+  return std::chrono::duration<double, std::milli>(to - from).count();
+}
+
+// the longest time between two hand-overs' returns (the first's from the storm's start
+// is not counted), and the hand-over (1-based) it followed
+struct StormGap
+{
+  double ms = 0.0;
+  std::size_t after = 0;
+};
+
+StormGap longestStormGap(const std::vector<StormStamp>& stamps)
+{
+  auto gap = StormGap{};
+  for (std::size_t i = 1; i < stamps.size(); ++i)
+  {
+    if (const auto ms = stormMs(stamps[i - 1].after, stamps[i].after); ms > gap.ms)
+    {
+      gap = StormGap{ms, i};
+    }
+  }
+  return gap;
+}
+
+// a frame log's frame rows by frame index: the table's feed count, the settle, the record
+struct StormFrameRow
+{
+  std::uint64_t feedApplied = 0;
+  bool settled = false;
+  double cpuRecordMs = 0.0;
+};
+
+std::map<std::uint64_t, StormFrameRow> stormFrameRows(const std::filesystem::path& path)
+{
+  const auto split = [](const std::string& text) {
+    auto fields = std::vector<std::string>{};
+    auto field = std::string{};
+    for (const auto c : text)
+    {
+      if (c == ',')
+      {
+        fields.push_back(std::exchange(field, {}));
+      }
+      else if (c != '\r')
+      {
+        field += c;
+      }
+    }
+    fields.push_back(std::move(field));
+    return fields;
+  };
+  auto rows = std::map<std::uint64_t, StormFrameRow>{};
+  auto file = std::ifstream{path};
+  auto line = std::string{};
+  if (!std::getline(file, line))
+  {
+    return rows;
+  }
+  const auto header = split(line);
+  const auto column = [&](const std::string_view name) {
+    return std::size_t(std::ranges::find(header, name) - header.begin());
+  };
+  const auto event = column("event");
+  const auto frame = column("frame");
+  const auto applied = column("feed_applied");
+  const auto settled = column("settled");
+  const auto record = column("cpu_record_ms");
+  while (std::getline(file, line))
+  {
+    const auto fields = split(line);
+    if (
+      fields.size() != header.size() || fields[event] != "frame"
+      || fields[applied].empty())
+    {
+      continue;
+    }
+    rows[std::stoull(fields[frame])] = StormFrameRow{
+      std::stoull(fields[applied]), fields[settled] == "1", std::stod(fields[record])};
+  }
+  return rows;
+}
+
+/**
+ * LP6.4b step 0b: what the settled frames under the storm were, in the brief's order:
+ * (i) a counter fault, a frame settled although the service's count at the start of its
+ * passes (before its check) was past its table's feed count; (ii) else the premise did
+ * not hold: no hand-over came between the one its table held and its check (the gap
+ * between those two hand-overs against the frame's window: its start to the end of its
+ * record).
+ */
+struct StormVerdict
+{
+  bool counterFault = false;
+  std::string text;
+};
+
+StormVerdict stormVerdict(
+  const std::vector<StormStamp>& stamps,
+  const std::vector<StormFrameWindow>& windows,
+  const std::chrono::steady_clock::time_point stormStart,
+  const std::chrono::steady_clock::time_point readbackEnd,
+  const std::filesystem::path& frameLogPath)
+{
+  const auto rows = stormFrameRows(frameLogPath);
+  auto verdict = StormVerdict{};
+  auto lines = std::vector<std::string>{};
+  for (const auto& window : windows)
+  {
+    const auto row = rows.find(window.frame);
+    if (
+      window.start < stormStart || window.passes > readbackEnd || row == rows.end()
+      || !row->second.settled)
+    {
+      continue;
+    }
+    const auto applied = row->second.feedApplied;
+    const auto check =
+      window.passes
+      + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+        std::chrono::duration<double, std::milli>(row->second.cpuRecordMs));
+    if (window.requested > applied)
+    {
+      verdict.counterFault = true;
+      lines.push_back(fmt::format(
+        "(i) COUNTER FAULT: frame {} settled with its table's feed count {} while the "
+        "service had counted {} at the start of its passes (+{:.3f} ms)",
+        window.frame,
+        applied,
+        window.requested,
+        stormMs(stormStart, window.passes)));
+      continue;
+    }
+    // the hand-over its table held (1-based applied) and the next one
+    const auto held = applied > 0 && applied <= stamps.size()
+                        ? std::optional{stamps[applied - 1]}
+                        : std::nullopt;
+    const auto next =
+      applied < stamps.size() ? std::optional{stamps[applied]} : std::nullopt;
+    const auto heldAt = held ? stormMs(stormStart, held->after) : 0.0;
+    const auto nextAt = next ? stormMs(stormStart, next->before) : -1.0;
+    const auto windowMs = stormMs(window.start, check);
+    lines.push_back(fmt::format(
+      "(ii) frame {} settled with feed count {} (the count at its passes {}): its window "
+      "+{:.3f} -> passes +{:.3f} -> check by +{:.3f} ms ({:.3f} ms); hand-over {} "
+      "returned at +{:.3f}, hand-over {} called at +{:.3f}: a gap of {:.3f} ms {} the "
+      "window",
+      window.frame,
+      applied,
+      window.requested,
+      stormMs(stormStart, window.start),
+      stormMs(stormStart, window.passes),
+      stormMs(stormStart, check),
+      windowMs,
+      applied,
+      heldAt,
+      applied + 1,
+      nextAt,
+      nextAt - heldAt,
+      nextAt - heldAt >= windowMs ? "covering" : "shorter than"));
+  }
+  verdict.text = lines.empty() ? std::string{"no settled frame found in the log"}
+                               : fmt::format("{}", fmt::join(lines, "; "));
+  return verdict;
+}
+
 } // namespace
 
 TEST_CASE("Feed host: lit::VulkanInstance (LPF.2, D107)", "[.][feed]")
@@ -509,7 +696,13 @@ TEST_CASE(
   SECTION(
     "readbackLdr: a settled frame, one staging texture per extent, a storm's timeout")
   {
-    auto host = Host{root, *gamePath};
+    // LP6.4b step 0b: the frame log says each frame's table's feed count and its settle
+    const auto frameLogPath =
+      std::filesystem::temp_directory_path() / "TbLitLibTest-feed-storm-frame-log.csv";
+    std::filesystem::remove(frameLogPath);
+    auto hostOptions = HostOptions{};
+    hostOptions.frameLogPath = frameLogPath;
+    auto host = Host{root, *gamePath, hostOptions};
     REQUIRE(waitFor(
       [&] { return host.events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms));
     host.offer(snapshotOfMapText(slabMapText(), 1, 1) | kdl::value());
@@ -546,18 +739,43 @@ TEST_CASE(
     REQUIRE(host.session->readbackLdr(10000ms).is_success());
     CHECK(host.session->ldrStagingCreationsForTesting() == creations + 1);
 
-    // a storm: a hand-over every millisecond keeps every frame behind its counters, so no
-    // frame settles and the readback times out with the reason (FEED.md)
+    // a storm: a feed that keeps every frame behind its counters, so no frame settles and
+    // the readback times out with the reason (FEED.md). LP6.4b step 0b: a hand-over every
+    // millisecond did not hold every frame behind (a frame whose table, start and check
+    // all fell inside the gap between two hand-overs settled: 7 of 20 runs of the section
+    // in Release at e4fa0242c), so the service holds the feed behind by construction
+    // (holdFeedBehindForTesting) while the storm hands over as before. Each hand-over's
+    // stamps (before and after the call: the service's count moved between them) and each
+    // frame's window (its start, the start of its passes after its table was read, the
+    // service's count then) say what a readback that comes back under it was
+    host.service->holdFeedBehindForTesting(true);
+    auto windowsMutex = std::mutex{};
+    auto windows = std::vector<StormFrameWindow>{};
+    host.session->setEveryFrameHookForTesting([&](RenderFrameAccess& access) {
+      const auto passes = std::chrono::steady_clock::now();
+      const auto requested = host.service->feedRequested();
+      const auto lock = std::scoped_lock{windowsMutex};
+      windows.push_back(
+        StormFrameWindow{access.frameIndex, access.frameStart, passes, requested});
+    });
     auto stop = std::atomic<bool>{false};
     auto handed = std::atomic<int>{0};
+    auto stamps = std::vector<StormStamp>{};
+    stamps.reserve(std::size_t{1} << 16);
+    const auto stormStart = std::chrono::steady_clock::now();
     auto storm = std::thread{[&] {
       auto next = std::chrono::steady_clock::now();
       for (auto i = 0; !stop; ++i)
       {
+        const auto before = std::chrono::steady_clock::now();
         static_cast<void>(host.service->setImageOverride(
           "textures/lp5/feed_side",
           constantOverride(
             64, 64, {std::uint8_t(i), std::uint8_t(255 - i), std::uint8_t(i * 7)})));
+        if (stamps.size() < stamps.capacity())
+        {
+          stamps.push_back(StormStamp{before, std::chrono::steady_clock::now()});
+        }
         ++handed;
         next += 1ms;
         while (std::chrono::steady_clock::now() < next)
@@ -568,8 +786,26 @@ TEST_CASE(
     }};
     std::this_thread::sleep_for(100ms);
     const auto stormed = host.session->readbackLdr(1500ms);
+    const auto readbackEnd = std::chrono::steady_clock::now();
     stop = true;
     storm.join();
+    host.service->holdFeedBehindForTesting(false);
+    host.session->setEveryFrameHookForTesting({});
+    const auto gaps = longestStormGap(stamps);
+    std::cout << "LP6.4b storm: " << handed << " hand-overs, the longest gap "
+              << fmt::format("{:.3f}", gaps.ms) << " ms after hand-over " << gaps.after
+              << "\n";
+    if (stormed.is_success())
+    {
+      // the log is whole once the session has stopped
+      static_cast<void>(host.close());
+      const auto lock = std::scoped_lock{windowsMutex};
+      const auto verdict =
+        stormVerdict(stamps, windows, stormStart, readbackEnd, frameLogPath);
+      std::cout << "LP6.4b storm: a readback came back: " << verdict.text << "\n";
+      // (i): a settled frame whose table was behind the hand-overs is a counter fault
+      CHECK_FALSE(verdict.counterFault);
+    }
     REQUIRE(stormed.is_error());
     CHECK_THAT(
       std::get<Error>(stormed.error()).msg,
