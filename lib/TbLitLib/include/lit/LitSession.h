@@ -374,6 +374,7 @@ enum class DebugHook
 constexpr auto ParkTimeout = std::chrono::milliseconds{500};
 
 class CpuPool;
+struct FirstBatchCounts;
 class GpuDevice;
 struct EngineTonemapDefaults;
 class GridTablePublication;
@@ -654,6 +655,9 @@ public:
   std::shared_ptr<const Snapshot> lastSnapshotForTesting() const;
   // the batches of chunk or light jobs the render thread has applied; any thread
   std::uint64_t geometryBatchesForTesting() const;
+  // LP6.3 (C67 (b)), any thread: the scene's first batch as the render thread last synced
+  // it (lit/SceneGeometry.h): its jobs, the view's cells, the cells applied early, whole
+  FirstBatchCounts firstBatchForTesting() const;
   // LP7.2 (P7.14), any thread: the scene's models as the render thread last synced and
   // placed them (ModelTotals)
   ModelTotals modelTotalsForTesting() const;

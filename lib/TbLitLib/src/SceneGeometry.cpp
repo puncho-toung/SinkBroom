@@ -19,11 +19,13 @@
 
 #include "lit/SceneGeometry.h"
 
+#include "LitView.h"
 #include "ViewFlow.h"
 #include "lit/AreaData.h"
 #include "lit/EngineLight.h"
 #include "lit/EntityState.h"
 #include "lit/LightData.h"
+#include "lit/LitSession.h"
 #include "lit/MapBake.h"
 #include "lit/MaterialService.h"
 #include "lit/ProcFile.h"
@@ -36,6 +38,7 @@
 #include <atomic>
 #include <chrono>
 #include <limits>
+#include <numeric>
 #include <thread>
 #include <utility>
 
@@ -181,9 +184,9 @@ SceneGeometry::~SceneGeometry()
   // R5.22: the futures of a batch in flight are only waited for
   for (auto& job : m_jobs)
   {
-    if (job.valid())
+    if (job.future.valid())
     {
-      job.wait();
+      job.future.wait();
     }
   }
 }
@@ -525,6 +528,19 @@ void SceneGeometry::takeSnapshot(const Snapshot& snapshot)
   }
   m_lights.takeSnapshot(snapshot, m_proc);
   startBatch();
+  // LP6.3 (C67 (b)): the session's first batch, which the scene's first snapshot starts,
+  // applies its world cells as they are done; every later batch applies together (K44)
+  if (!std::exchange(m_snapshotTaken, true) && !m_jobs.empty())
+  {
+    m_earlyApply = true;
+    m_firstBatch = FirstBatchCounts{};
+    for (const auto& job : m_jobs)
+    {
+      m_firstBatch.worldJobs += job.world ? 1u : 0u;
+      m_firstBatch.entityJobs += job.world ? 0u : 1u;
+      m_firstBatch.viewJobs += job.inView ? 1u : 0u;
+    }
+  }
   // LP7.2 (C52): the model entities the snapshot changed, at once (no job: a few lookups
   // per surface); a brush entity's again once its batch applies
   updateModelEntities();
@@ -826,6 +842,7 @@ void SceneGeometry::startBatch()
   {
     m_lastBatchCells.insert(job.begin(), job.end());
   }
+  const auto worldJobs = jobs.size();
   for (auto& [entity, refs] : entityJobs)
   {
     if (const auto nodes = m_entityNodes.find(entity); nodes != m_entityNodes.end())
@@ -851,11 +868,58 @@ void SceneGeometry::startBatch()
     m_lastBatchCells.insert(refs.begin(), refs.end());
   }
 
+  // LP6.3 (C67 (b)): the order the jobs go on the pool: with a view, the world cells
+  // whose cube meets the view frustum (the frontend's cull of a world chunk's bounds),
+  // the nearest to the eye first, then the other world cells, then the entities' jobs,
+  // each part in the dirty set's order; without one, that order. They apply in that order
+  auto inView = std::vector<bool>(jobs.size(), false);
+  auto order = std::vector<std::size_t>(jobs.size());
+  std::iota(order.begin(), order.end(), std::size_t{0});
+  if (m_view)
+  {
+    auto distance = std::vector<double>(worldJobs, 0.0);
+    for (std::size_t i = 0; i < worldJobs; ++i)
+    {
+      const auto& cell = jobs[i].front().cell;
+      auto bounds = EngineBounds{};
+      auto squared = 0.0;
+      for (std::size_t axis = 0; axis < 3; ++axis)
+      {
+        const auto low = double(cell[axis]) * CellSize;
+        const auto high = low + CellSize;
+        bounds[0][axis] = float(low);
+        bounds[1][axis] = float(high);
+        const auto eye = double(m_view->eye[axis]);
+        const auto outside = eye < low ? low - eye : (eye > high ? eye - high : 0.0);
+        squared += outside * outside;
+      }
+      inView[i] = !engineCullBoundsToMvp(m_view->worldMvp, bounds, false);
+      distance[i] = squared;
+    }
+    std::stable_sort(
+      order.begin(),
+      order.begin() + std::ptrdiff_t(worldJobs),
+      [&](const std::size_t lhs, const std::size_t rhs) {
+        if (inView[lhs] != inView[rhs])
+        {
+          return bool(inView[lhs]);
+        }
+        return inView[lhs] && distance[lhs] < distance[rhs];
+      });
+  }
+  m_jobs.resize(jobs.size());
+  m_lastBatchOrder.clear();
+
   const auto worldspawn = m_entities.find(m_worldspawn);
   // LP7.4 (C55): with a .proc's islands the jobs return their pieces
   const auto collectPieces = m_proc && m_islands;
-  for (auto& refs : jobs)
+  for (const auto index : order)
   {
+    const auto& refs = jobs[index];
+    auto& batchJob = m_jobs[index];
+    batchJob.world = index < worldJobs;
+    batchJob.inView = inView[index];
+    m_lastBatchOrder.push_back(refs);
     auto input = std::make_shared<ChunkJobInput>();
     input->cells = refs;
     input->proc = m_proc;
@@ -942,7 +1006,12 @@ void SceneGeometry::startBatch()
       }
     }
 
-    auto job = [input](const CpuJobContext& context) -> Result<ChunkJobOutput> {
+    auto job = [input, beforeJob = m_beforeJobForTesting](
+                 const CpuJobContext& context) -> Result<ChunkJobOutput> {
+      if (beforeJob)
+      {
+        beforeJob(input->cells);
+      }
       // R2.1: the job of a cancelled pool returns at its next node
       auto output = buildChunks(*input, &context);
       if (context.stale())
@@ -953,17 +1022,50 @@ void SceneGeometry::startBatch()
     };
     if (m_pool && !m_pool->stopped())
     {
-      m_jobs.push_back(m_pool->run(std::move(job)));
+      batchJob.future = m_pool->run(std::move(job));
     }
     else
     {
       // no pool: the job runs here, and its messages are drained here
       auto promise = std::promise<CpuJobResult<ChunkJobOutput>>{};
-      m_jobs.push_back(promise.get_future());
+      batchJob.future = promise.get_future();
+      if (m_beforeJobForTesting)
+      {
+        m_beforeJobForTesting(input->cells);
+      }
       auto output = CpuJobResult<ChunkJobOutput>{buildChunks(*input), {}};
       output.messages = drainEngineMessagesForThread(std::this_thread::get_id());
       promise.set_value(std::move(output));
     }
+  }
+}
+
+void SceneGeometry::applyJob(BatchJob& job)
+{
+  // a job's messages, then its output's warnings or its error, as they were applied
+  job.applied = true;
+  try
+  {
+    auto result = job.future.get();
+    for (const auto& message : result.messages)
+    {
+      if (message.kind != DeclMessageKind::Info)
+      {
+        job.warnings.push_back(message.text);
+      }
+    }
+    std::move(result.result) | kdl::transform([&](ChunkJobOutput output) {
+      job.warnings.insert(
+        job.warnings.end(),
+        std::make_move_iterator(output.warnings.begin()),
+        std::make_move_iterator(output.warnings.end()));
+      output.warnings.clear();
+      apply(std::move(output));
+    }) | kdl::transform_error([&](auto e) { job.warnings.push_back(std::move(e.msg)); });
+  }
+  catch (const std::exception& e)
+  {
+    job.warnings.push_back(fmt::format("A chunk job failed: {}", e.what()));
   }
 }
 
@@ -1647,36 +1749,48 @@ bool SceneGeometry::collectChunks()
 {
   if (!m_jobs.empty())
   {
-    for (const auto& job : m_jobs)
+    const auto done = [](const BatchJob& job) {
+      return job.applied
+             || job.future.wait_for(std::chrono::seconds{0}) == std::future_status::ready;
+    };
+    if (!std::ranges::all_of(m_jobs, done))
     {
-      if (job.wait_for(std::chrono::seconds{0}) != std::future_status::ready)
+      // LP6.3 (C67 (b)): the session's first batch applies each world-cell job as soon as
+      // it is done (a frame then draws the camera's cells); its entity jobs, the
+      // post-steps and appliedSequence wait for the whole batch, and busy() with them
+      if (m_earlyApply)
       {
-        return false;
+        for (auto& job : m_jobs)
+        {
+          if (job.world && !job.applied && done(job))
+          {
+            applyJob(job);
+            ++m_firstBatch.earlyCells;
+            m_firstBatch.earlyViewCells += job.inView ? 1u : 0u;
+            m_earlyApplied = true;
+          }
+        }
       }
+      return false;
     }
-    // every job of the batch is done: its results apply together, in sequence order
+    // every job of the batch is done: its results apply together, in sequence order (the
+    // first batch's early world cells applied already); the warnings in the jobs' order
     auto jobs = std::move(m_jobs);
     m_jobs.clear();
     for (auto& job : jobs)
     {
-      try
+      if (!job.applied)
       {
-        auto result = job.get();
-        for (const auto& message : result.messages)
-        {
-          if (message.kind != DeclMessageKind::Info)
-          {
-            m_warnings.push_back(message.text);
-          }
-        }
-        std::move(result.result)
-          | kdl::transform([&](ChunkJobOutput output) { apply(std::move(output)); })
-          | kdl::transform_error([&](auto e) { m_warnings.push_back(std::move(e.msg)); });
+        applyJob(job);
       }
-      catch (const std::exception& e)
-      {
-        m_warnings.push_back(fmt::format("A chunk job failed: {}", e.what()));
-      }
+      m_warnings.insert(
+        m_warnings.end(),
+        std::make_move_iterator(job.warnings.begin()),
+        std::make_move_iterator(job.warnings.end()));
+    }
+    if (std::exchange(m_earlyApply, false))
+    {
+      m_firstBatch.whole = true;
     }
     // LP7.2 (C52): a brush entity whose model names a file is built from its batch's
     // state
@@ -1733,6 +1847,40 @@ std::size_t SceneGeometry::solidPieces() const
 const std::set<CellRef>& SceneGeometry::lastBatchCellsForTesting() const
 {
   return m_lastBatchCells;
+}
+
+const std::vector<std::vector<CellRef>>& SceneGeometry::lastBatchOrderForTesting() const
+{
+  return m_lastBatchOrder;
+}
+
+std::size_t SceneGeometry::earlyCellsForTesting() const
+{
+  return m_firstBatch.earlyCells;
+}
+
+void SceneGeometry::setBeforeJobForTesting(
+  std::function<void(const std::vector<CellRef>&)> hook)
+{
+  m_beforeJobForTesting = std::move(hook);
+}
+
+void SceneGeometry::setView(
+  const CameraState& camera, const std::uint32_t width, const std::uint32_t height)
+{
+  // the frame's view as the passes make it (LitPasses: litViewOf at the target's size)
+  const auto view = litViewOf(camera, std::max(width, 1u), std::max(height, 1u));
+  m_view = BatchView{view.worldMvp, view.viewOrigin};
+}
+
+bool SceneGeometry::takeEarlyApplied()
+{
+  return std::exchange(m_earlyApplied, false);
+}
+
+FirstBatchCounts SceneGeometry::firstBatch() const
+{
+  return m_firstBatch;
 }
 
 std::uint64_t SceneGeometry::appliedSequence() const
@@ -1843,7 +1991,10 @@ void SceneGeometry::finishForTesting()
   {
     for (auto& job : m_jobs)
     {
-      job.wait();
+      if (job.future.valid())
+      {
+        job.future.wait();
+      }
     }
     m_lights.finishForTesting();
     m_probes.finishForTesting();

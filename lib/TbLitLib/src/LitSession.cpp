@@ -615,6 +615,11 @@ std::uint64_t LitSession::geometryBatchesForTesting() const
   return m_renderThread ? m_renderThread->batchesApplied() : 0u;
 }
 
+FirstBatchCounts LitSession::firstBatchForTesting() const
+{
+  return m_renderThread ? m_renderThread->firstBatch() : FirstBatchCounts{};
+}
+
 ModelTotals LitSession::modelTotalsForTesting() const
 {
   return m_renderThread ? m_renderThread->modelTotals() : ModelTotals{};

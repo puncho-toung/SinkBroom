@@ -444,6 +444,12 @@ std::uint64_t RenderThread::batchesApplied() const
   return m_batchesApplied;
 }
 
+FirstBatchCounts RenderThread::firstBatch() const
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  return m_firstBatch;
+}
+
 ModelTotals RenderThread::modelTotals() const
 {
   const auto lock = std::scoped_lock{m_mutex};
@@ -1669,6 +1675,7 @@ void RenderThread::runLoop()
       m_pacer.frameStarted(now);
       m_frameStart = now;
       const auto frameCamera = m_camera;
+      const auto cameraSet = m_cameraSet;
       // S31, B0.3: the frame takes the snapshot offered once the last one's chunks are
       // applied; ReadyForSnapshot then says the inbox is free again
       auto snapshot = std::shared_ptr<const Snapshot>{};
@@ -1689,6 +1696,14 @@ void RenderThread::runLoop()
         m_events.post(SessionEvent::ReadyForSnapshot, {});
         if (m_geometry)
         {
+          // LP6.3 (C67 (b)): the batch the snapshot starts puts the view's cells on the
+          // pool first, the frame's view at the target's size; without a camera (a
+          // headless session that set none) in the dirty set's order
+          if (cameraSet)
+          {
+            const auto extent = m_swapchain ? m_swapchain->extent : m_headlessExtent;
+            m_geometry->setView(frameCamera, extent.width, extent.height);
+          }
           m_geometry->takeSnapshot(*snapshot);
         }
       }
@@ -2790,6 +2805,10 @@ bool RenderThread::geometryTick()
     return false;
   }
   const auto applied = m_geometry->collect();
+  // LP6.3 (C67 (b)): world cells of the scene's first batch applied before it is whole:
+  // their chunks are synced and drawn, the batch is not applied (batchesApplied, the
+  // applied sequence and D77's geometryInFlight wait for the whole batch)
+  const auto early = m_geometry->takeEarlyApplied();
   // DX.4: a frame that waited for the scene (a batch, the bake, an entityDef, a light
   // rebuilt; LP4.2b: a probe build) is drawn again once the scene's state moves, also
   // when nothing was uploaded
@@ -2803,7 +2822,7 @@ bool RenderThread::geometryTick()
     const auto lock = std::scoped_lock{m_mutex};
     m_pacer.trigger();
   }
-  if (applied)
+  if (applied || early)
   {
     for (auto& warning : m_geometry->takeWarnings())
     {
@@ -2814,9 +2833,13 @@ bool RenderThread::geometryTick()
     ++m_chunksVersion;
     const auto uploads = syncChunks();
     const auto lock = std::scoped_lock{m_mutex};
-    m_appliedSequence = m_geometry->appliedSequence();
     m_chunkCount = m_geometry->chunks().size();
-    ++m_batchesApplied;
+    m_firstBatch = m_geometry->firstBatch();
+    if (applied)
+    {
+      m_appliedSequence = m_geometry->appliedSequence();
+      ++m_batchesApplied;
+    }
     // a snapshot waiting in the inbox is taken at the next frame
     if (m_snapshotInbox || uploads)
     {

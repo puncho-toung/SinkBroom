@@ -34,6 +34,7 @@
 #include "lit/FramePacer.h"
 #include "lit/LitConfig.h"
 #include "lit/LitSession.h"
+#include "lit/SceneGeometry.h"
 
 #include <nvrhi/nvrhi.h>
 #include <vulkan/vulkan.hpp>
@@ -496,6 +497,8 @@ private:
   bool m_tableChanged = false;
   // the batches of chunk or light jobs applied so far (tests)
   std::uint64_t m_batchesApplied = 0;
+  // LP6.3 (C67 (b)): the scene's first batch as last synced (tests)
+  FirstBatchCounts m_firstBatch;
   FramePacer m_pacer;
   std::array<std::function<void()>, 5> m_debugHooks;
   // LP2.1 test hooks: the headless extent the next frame takes, and the functions the
@@ -588,6 +591,8 @@ public:
   // see LitSession::tableChanged
   void tableChanged();
   std::uint64_t batchesApplied() const;
+  // LP6.3: see LitSession::firstBatchForTesting
+  FirstBatchCounts firstBatch() const;
   // LP7.2 (P7.14): see LitSession::modelTotalsForTesting
   ModelTotals modelTotals() const;
 

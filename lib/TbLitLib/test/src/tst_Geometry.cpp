@@ -31,6 +31,7 @@
 #include "lit/ImageOverride.h"
 #include "lit/LightData.h"
 #include "lit/LightRecord.h"
+#include "lit/LitSession.h"
 #include "lit/MaterialService.h"
 #include "lit/ProcFile.h"
 #include "lit/SceneGeometry.h"
@@ -679,6 +680,190 @@ TEST_CASE("SceneGeometry: batches on the pool, entity records and removals (B0.3
     return c.first.entity == func.id;
   }));
   pool->stop();
+}
+
+// LP6.3 (C67 (b), P8.17, D77, K44): the session's first batch puts the view's world cells
+// on the pool first, the nearest first, and applies its world cells as they are done,
+// while its entity jobs, the references, appliedSequence and busy() wait for the whole
+// batch; a later batch applies together; the chunks are a from-scratch build's
+TEST_CASE("SceneGeometry: the view-first first batch (LP6.3, C67 (b))")
+{
+  using namespace std::chrono_literals;
+  // world boxes in five cells: the eye's (mapText's box at the origin), two ahead, one
+  // behind, one aside; a brush entity in a sixth
+  const auto worldBoxes = box(1100, 100, 100, 1164, 164, 164, "lp1b/wall")
+                          + box(3172, 100, 100, 3236, 164, 164, "lp1b/wall")
+                          + box(-900, 100, 100, -836, 164, 164, "lp1b/wall")
+                          + box(100, 5200, 100, 164, 5264, 164, "lp1b/wall");
+  const auto entity = std::string{"{\n\"classname\" \"func_static\"\n\"name\" \"a\"\n"}
+                      + "\"model\" \"a\"\n"
+                      + box(2100, 100, 100, 2164, 164, 164, "lp1b/crate") + "}\n";
+  auto snapshot = snapshotOfMapText(mapText(worldBoxes, entity));
+  snapshot.sequence = 1;
+  REQUIRE(snapshot.entities.size() == 2u);
+  const auto world = snapshot.entities[0].id;
+  const auto func = snapshot.entities[1].id;
+  const auto cell = [](const int x, const int y, const int z) {
+    return CellCoord{x, y, z};
+  };
+  // the eye in the origin's cell, looking along +x with a 90 degree view
+  auto camera = CameraState{};
+  camera.position = vm::vec3f{512.0f, 132.0f, 132.0f};
+  camera.direction = vm::vec3f{1.0f, 0.0f, 0.0f};
+  camera.up = vm::vec3f{0.0f, 0.0f, 1.0f};
+  camera.fovDegrees = 90.0f;
+
+  SECTION("without a view the dirty set's order")
+  {
+    auto scene = SceneGeometry{nullptr, nullptr};
+    scene.takeSnapshot(snapshot);
+    const auto order = scene.lastBatchOrderForTesting();
+    REQUIRE(order.size() == 6u);
+    for (std::size_t i = 0; i < 5; ++i)
+    {
+      CHECK(order[i].front().entity == world);
+    }
+    CHECK(order[0].front().cell == cell(-1, 0, 0));
+    CHECK(order[1].front().cell == cell(0, 0, 0));
+    CHECK(order[2].front().cell == cell(0, 5, 0));
+    CHECK(order[3].front().cell == cell(1, 0, 0));
+    CHECK(order[4].front().cell == cell(3, 0, 0));
+    CHECK(order[5].front().entity == func);
+    const auto counts = scene.firstBatch();
+    CHECK(counts.worldJobs == 5u);
+    CHECK(counts.entityJobs == 1u);
+    CHECK(counts.viewJobs == 0u);
+    scene.finishForTesting();
+    // no pool: every job was done at the first look, so nothing applied early
+    CHECK(scene.firstBatch().earlyCells == 0u);
+    CHECK(scene.firstBatch().whole);
+  }
+
+  SECTION("the view's cells first, applied before the batch is whole")
+  {
+    auto pool = CpuPool::create() | kdl::value();
+    auto held = std::make_shared<ParseGate>();
+    held->close();
+    {
+      auto scene = SceneGeometry{pool.get(), nullptr};
+      // a failed REQUIRE releases the held job before the scene waits for it
+      const auto releaseAtExit = OpenAtExit{held};
+      // the entity's job held on the pool
+      scene.setBeforeJobForTesting([held, world](const std::vector<CellRef>& cells) {
+        if (cells.front().entity != world)
+        {
+          held->pass();
+        }
+      });
+      scene.setView(camera, 64, 64);
+      scene.takeSnapshot(snapshot);
+
+      const auto order = scene.lastBatchOrderForTesting();
+      REQUIRE(order.size() == 6u);
+      CHECK(order[0].front().cell == cell(0, 0, 0));
+      CHECK(order[1].front().cell == cell(1, 0, 0));
+      CHECK(order[2].front().cell == cell(3, 0, 0));
+      CHECK(order[3].front().cell == cell(-1, 0, 0));
+      CHECK(order[4].front().cell == cell(0, 5, 0));
+      CHECK(order[5].front().entity == func);
+      CHECK(order[5].front().cell == cell(2, 0, 0));
+      auto counts = scene.firstBatch();
+      CHECK(counts.worldJobs == 5u);
+      CHECK(counts.entityJobs == 1u);
+      CHECK(counts.viewJobs == 3u);
+      CHECK_FALSE(counts.whole);
+
+      // the world cells apply as they are done; the batch is not applied
+      auto early = false;
+      const auto deadline = std::chrono::steady_clock::now() + 10s;
+      while (scene.firstBatch().earlyCells < 5u
+             && std::chrono::steady_clock::now() < deadline)
+      {
+        static_cast<void>(scene.collect());
+        early = scene.takeEarlyApplied() || early;
+        std::this_thread::sleep_for(1ms);
+      }
+      counts = scene.firstBatch();
+      CHECK(counts.earlyCells == 5u);
+      CHECK(counts.earlyViewCells == 3u);
+      CHECK(scene.earlyCellsForTesting() == 5u);
+      CHECK(early);
+      CHECK_FALSE(counts.whole);
+      CHECK(scene.busy());
+      CHECK_FALSE(scene.readyForSnapshot());
+      CHECK(scene.appliedSequence() == 0u);
+      auto worldCells = std::set<CellCoord>{};
+      for (const auto& [key, chunk] : scene.chunks())
+      {
+        CHECK(key.entity == world);
+        worldCells.insert(key.cell);
+      }
+      CHECK(worldCells.size() == 5u);
+      // the entity's job and its references wait for the whole batch
+      CHECK_FALSE(scene.entityStates().contains(func));
+
+      held->open();
+      scene.finishForTesting();
+      counts = scene.firstBatch();
+      CHECK(counts.whole);
+      CHECK(counts.earlyCells == 5u);
+      CHECK(scene.appliedSequence() == 1u);
+      REQUIRE(scene.entityStates().contains(func));
+      CHECK_FALSE(scene.entityStates().at(func).materialBounds.empty());
+
+      // the chunks a from-scratch build makes
+      auto scratch = SceneGeometry{nullptr, nullptr};
+      scratch.takeSnapshot(snapshot);
+      scratch.finishForTesting();
+      CHECK(summaryOf(scene.chunks()) == summaryOf(scratch.chunks()));
+
+      // a later batch applies together: two world cells changed, one of their jobs held
+      auto moved = snapshotOfMapText(mapText(
+        box(1100, 100, 100, 1164, 164, 196, "lp1b/wall")
+          + box(3172, 100, 100, 3236, 164, 196, "lp1b/wall")
+          + box(-900, 100, 100, -836, 164, 164, "lp1b/wall")
+          + box(100, 5200, 100, 164, 5264, 164, "lp1b/wall"),
+        entity));
+      moved.sequence = 2;
+      const auto before = summaryOf(scene.chunks());
+      held->close();
+      scene.setBeforeJobForTesting([held](const std::vector<CellRef>& cells) {
+        if (cells.front().cell == CellCoord{1, 0, 0})
+        {
+          held->pass();
+        }
+      });
+      scene.setView(camera, 64, 64);
+      scene.takeSnapshot(moved);
+      // the moved boxes' cells among the batch's jobs (the held one included)
+      auto movedCells = std::set<CellCoord>{};
+      for (const auto& job : scene.lastBatchOrderForTesting())
+      {
+        movedCells.insert(job.front().cell);
+      }
+      CHECK(movedCells.contains(cell(1, 0, 0)));
+      CHECK(movedCells.contains(cell(3, 0, 0)));
+      for (auto i = 0; i < 50; ++i)
+      {
+        static_cast<void>(scene.collect());
+        CHECK_FALSE(scene.takeEarlyApplied());
+        std::this_thread::sleep_for(1ms);
+      }
+      // nothing of it applied while one job is held
+      CHECK(summaryOf(scene.chunks()) == before);
+      CHECK(scene.appliedSequence() == 1u);
+      CHECK(scene.firstBatch() == counts);
+      held->open();
+      scene.finishForTesting();
+      CHECK(scene.appliedSequence() == 2u);
+      CHECK(summaryOf(scene.chunks()) != before);
+      auto movedScratch = SceneGeometry{nullptr, nullptr};
+      movedScratch.takeSnapshot(moved);
+      movedScratch.finishForTesting();
+      CHECK(summaryOf(scene.chunks()) == summaryOf(movedScratch.chunks()));
+    }
+    pool->stop();
+  }
 }
 
 // LP7.0 (D128, P7.17): a hidden brush entity's chunks go when the key is set and come

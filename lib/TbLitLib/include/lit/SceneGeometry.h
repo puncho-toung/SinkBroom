@@ -29,7 +29,9 @@
 #include "lit/Snapshot.h"
 
 #include <compare>
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <future>
 #include <map>
 #include <memory>
@@ -43,11 +45,30 @@ namespace tb::lit
 {
 class MaterialService;
 struct AreaData;
+struct CameraState;
 struct MapBake;
 struct MapBakeSlot;
 struct MaterialTable;
 struct PortalFogTable;
 struct ProcTree;
+
+/**
+ * LP6.3 (C67 (b)): what the session's first geometry batch did: its world-cell jobs, its
+ * brush-entity jobs, its world cells whose cube meets the view frustum (none without a
+ * view), the world cells applied before the batch was whole and of them the frustum's,
+ * and whether it applied whole (SceneGeometry; LitSession::firstBatchForTesting)
+ */
+struct FirstBatchCounts
+{
+  std::size_t worldJobs = 0;
+  std::size_t entityJobs = 0;
+  std::size_t viewJobs = 0;
+  std::size_t earlyCells = 0;
+  std::size_t earlyViewCells = 0;
+  bool whole = false;
+
+  bool operator==(const FirstBatchCounts&) const = default;
+};
 
 /**
  * The render thread's scene and chunks (§3.3, §3.4, S31, B0.3): it merges each snapshot
@@ -58,6 +79,21 @@ struct ProcTree;
  * (readyForSnapshot), so results apply in the snapshots' sequence order. A brush entity's
  * job rebuilds every cell of the entity, because its state (the origin brushes' pivot
  * among it) applies to all its chunks.
+ *
+ * LP6.3 (C67 (b), P8.17, D77, K44): a batch's jobs go on the pool in the view's order
+ * when the render thread has handed the scene its frame's view (setView, before each
+ * takeSnapshot): the world cells whose cube ([c·1024, (c+1)·1024)³) meets the view
+ * frustum first, the nearest to the eye first, then the other world cells, then the
+ * brush entities' jobs; without a view, the dirty set's order. The order decides which
+ * job runs first, nothing else: the jobs apply in the dirty set's order. The session's
+ * first batch (the one its first snapshot starts) applies each world-cell job as soon as
+ * it is done, so that a frame draws the camera's cells before the whole map is built;
+ * its brush-entity jobs, the post-steps (the model entities, the references, the
+ * adoption, the dress) and appliedSequence wait for the whole batch, and busy() stays
+ * true until then, so a frame drawn meanwhile is not settled (D77) and a settled frame
+ * sees what the whole batch built. Every later batch applies together (K44). A world
+ * chunk reads no reference (no ChunkEntityState is made for worldspawn): the early cells
+ * need no post-step. The jobs' warnings are taken in the jobs' order either way.
  *
  * Every batch first adopts the latest material table, and each table it adopts is
  * scanned for what the scene waits for (R3.1, R3.2): a material that was pending when a
@@ -266,12 +302,40 @@ private:
   // once the batch has applied
   std::set<PreviewId> m_touchedEntities;
 
-  // the batch in flight
+  // the batch in flight, its jobs in the dirty set's order (the order they apply in);
+  // LP6.3: a world-cell job of the session's first batch may apply before the others
+  struct BatchJob
+  {
+    std::future<CpuJobResult<ChunkJobOutput>> future;
+    bool world = false;
+    bool inView = false;
+    bool applied = false;
+    // the job's warnings, taken in the jobs' order once the batch is whole
+    std::vector<std::string> warnings;
+  };
   std::set<CellRef> m_dirty;
-  std::vector<std::future<CpuJobResult<ChunkJobOutput>>> m_jobs;
+  std::vector<BatchJob> m_jobs;
   std::uint64_t m_batchSequence = 0;
   std::uint64_t m_appliedSequence = 0;
   std::vector<std::string> m_warnings;
+
+  // LP6.3 (C67 (b)): the frame's view (its world mvp and eye) the jobs are ordered by
+  struct BatchView
+  {
+    EngineMat4 worldMvp = {};
+    EngineVec3 eye = {0, 0, 0};
+  };
+  std::optional<BatchView> m_view;
+  // the scene took its first snapshot; its batch applies its world cells early until
+  // whole; world cells applied early since takeEarlyApplied last said so
+  bool m_snapshotTaken = false;
+  bool m_earlyApply = false;
+  bool m_earlyApplied = false;
+  FirstBatchCounts m_firstBatch;
+  // the last batch's jobs, each its cells, in the order they went on the pool (tests)
+  std::vector<std::vector<CellRef>> m_lastBatchOrder;
+  // runs on the pool before each chunk job, with its cells (tests)
+  std::function<void(const std::vector<CellRef>&)> m_beforeJobForTesting;
 
   // LP4.2a (D87): the probe inputs may have changed since they were last handed over
   bool m_probesDirty = true;
@@ -403,6 +467,20 @@ public:
   void takeSnapshot(const Snapshot& snapshot);
 
   /**
+   * LP6.3 (C67 (b)): the view the next batches' jobs are ordered by: the frame's camera
+   * at the target's size (litViewOf); the render thread hands it before takeSnapshot
+   */
+  void setView(const CameraState& camera, std::uint32_t width, std::uint32_t height);
+  /**
+   * LP6.3 (C67 (b)): world cells of the session's first batch were applied before it was
+   * whole since the last call: the chunks changed without a batch applying (collect
+   * returned false); the render thread syncs them and draws a frame
+   */
+  bool takeEarlyApplied();
+  // LP6.3: the session's first batch so far
+  FirstBatchCounts firstBatch() const;
+
+  /**
    * Collects the finished jobs; once every job of the batch is done its results replace
    * the chunks of its cells, and true is returned; so too when the light job is done and
    * its records are published. LP4.2a: a finished probe build is published too, without
@@ -514,6 +592,13 @@ public:
   void finishForTesting();
   // LPF.0b: the cells the last batch started builds (tests)
   const std::set<CellRef>& lastBatchCellsForTesting() const;
+  // LP6.3: the last batch's jobs, each its cells, in the order they went on the pool
+  const std::vector<std::vector<CellRef>>& lastBatchOrderForTesting() const;
+  // LP6.3: the session's first batch's world cells applied before it was whole
+  std::size_t earlyCellsForTesting() const;
+  // LP6.3: runs on the pool before each chunk job of the batches started from now on,
+  // with the job's cells (a test holds one job there)
+  void setBeforeJobForTesting(std::function<void(const std::vector<CellRef>&)> hook);
 
   deleteCopyAndMove(SceneGeometry);
 
@@ -536,6 +621,8 @@ private:
   void updateMeasureWait();
   void forgetMaterialCells(const std::vector<CellRef>& cells);
   void apply(ChunkJobOutput output);
+  // LP6.3: a batch job's result applied, its warnings kept with the job
+  void applyJob(BatchJob& job);
   // C31, D80: the touched entities' bounds and area references from their chunks
   void updateEntityReferences();
   // LP7.4 (C55): a new tree's islands and models, the old adoption forgotten
