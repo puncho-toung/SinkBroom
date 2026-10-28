@@ -52,6 +52,12 @@ const ChunkEntityState* entityState(const FrontendInputs& inputs, const PreviewI
   return nullptr;
 }
 
+// the pair keys' order (ChunkKey::operator<)
+bool keyLess(const ChunkKey& lhs, const ChunkKey& rhs)
+{
+  return lhs < rhs;
+}
+
 } // namespace
 
 CasterSetsKey casterSetsKeyOf(const FrontendInputs& inputs, const bool flowed)
@@ -331,7 +337,8 @@ CasterSet CasterSets::make(
     }
     set.casters.push_back(std::move(caster));
   }
-  std::sort(set.pairKeys.begin(), set.pairKeys.end());
+  // ChunkKey has operator< alone (not std::totally_ordered): the comparator is given
+  std::ranges::sort(set.pairKeys, keyLess);
   return set;
 }
 
@@ -375,8 +382,7 @@ bool CasterSets::holds(const PreviewId light, const ChunkKey& chunk) const
 {
   const auto it = m_sets.find(light);
   return it != m_sets.end()
-         && std::binary_search(
-           it->second.pairKeys.begin(), it->second.pairKeys.end(), chunk);
+         && std::ranges::binary_search(it->second.pairKeys, chunk, keyLess);
 }
 
 const CasterSet* CasterSets::find(const PreviewId light) const

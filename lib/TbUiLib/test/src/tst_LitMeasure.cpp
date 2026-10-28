@@ -1170,7 +1170,12 @@ constexpr auto AdoptedTris = std::size_t{66};
 // LP3.1 (D157): pass 6's draws and CPU record time; LP3.0 (C57): the caster gathering's
 // time (inside lists_ms)
 constexpr auto ShadowDraws = std::size_t{70};
+// LP6.2 (D169): pass 6's tiles drawn and provisional
+constexpr auto TilesDrawn = std::size_t{71};
+constexpr auto TilesProvisional = std::size_t{75};
 constexpr auto ShadowCpuMs = std::size_t{82};
+// LP6.2 (C66): the caster pairs pending (light triangles not known yet)
+constexpr auto CasterPairsPending = std::size_t{90};
 constexpr auto CasterMs = std::size_t{92};
 // LP6.0 (C65): the CPU record's split after perforated_draws
 constexpr auto ListsMs = std::size_t{95};
@@ -2727,6 +2732,87 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       heldMoving.max,
       startSum,
       startResolves.empty() ? std::string{"none"} : startResolves);
+    // LP6.2 (C66, D169): pass 6's tiles drawn per frame over the first Start's frames to
+    // its settled one, those drawn again for an image and those provisional (drawn or
+    // held) beside them, with the caster pairs pending (castersPending's tiles are drawn
+    // again each frame until their triangles arrive); the moving frames' tiles; and the
+    // caster gathering's time with the caster sets made while moving
+    auto startTiles = std::string{};
+    auto startDrawn = 0.0;
+    auto startImage = 0.0;
+    for (std::size_t k = 0; k < first.settledFrame && k < firstRows.size(); ++k)
+    {
+      const auto& row = firstRows[k];
+      const auto drawn = row.number(column::TilesDrawn).value_or(0.0);
+      const auto image = row.number(column::TilesImageRedrawn).value_or(0.0);
+      const auto provisionalTiles = row.number(column::TilesProvisional).value_or(0.0);
+      const auto pendingPairs = row.number(column::CasterPairsPending).value_or(0.0);
+      startDrawn += drawn;
+      startImage += image;
+      if (drawn > 0.0 || provisionalTiles > 0.0)
+      {
+        startTiles += fmt::format(
+          "{}{}: {:.0f} ({:.0f} image, {:.0f} provisional, {:.0f} pairs pending)",
+          startTiles.empty() ? "" : ", ",
+          k + 1,
+          drawn,
+          image,
+          provisionalTiles,
+          pendingPairs);
+      }
+    }
+    const auto movingTiles = orbit(column::TilesDrawn);
+    const auto movingImage = orbit(column::TilesImageRedrawn);
+    const auto movingProvisional = orbit(column::TilesProvisional);
+    auto drawing = std::size_t{0};
+    for (auto k = orbitBegin; k <= orbitEnd; ++k)
+    {
+      drawing += firstRows[k].number(column::TilesDrawn).value_or(0.0) > 0.0 ? 1 : 0;
+    }
+    summary += fmt::format(
+      "| Shadow tiles (LP6.2, D169): the first Start's frames to the settled one (frame "
+      "{}) | {:.0f} tiles drawn, {:.0f} of them for an image; per frame drawn (drawn "
+      "again for an image, provisional at the frame's end, caster pairs pending): {}; "
+      "camera moving: tiles_drawn median {:.0f}, p95 {:.0f}, max {:.0f}, {:.0f} in all, "
+      "{} "
+      "of {} frames drawing any; tiles_image_redrawn {:.0f} in all (max {:.0f}); "
+      "tiles_provisional max {:.0f} | — | — |\n",
+      first.settledFrame,
+      startDrawn,
+      startImage,
+      startTiles.empty() ? std::string{"none"} : startTiles,
+      movingTiles.median,
+      movingTiles.p95,
+      movingTiles.max,
+      movingTiles.sum,
+      drawing,
+      orbitEnd - orbitBegin + 1,
+      movingImage.sum,
+      movingImage.max,
+      movingProvisional.max);
+    const auto casterMs = orbit(column::CasterMs);
+    const auto setsBuilt = orbit(column::CasterSetsBuilt);
+    auto building = std::size_t{0};
+    for (auto k = orbitBegin; k <= orbitEnd; ++k)
+    {
+      building +=
+        firstRows[k].number(column::CasterSetsBuilt).value_or(0.0) > 0.0 ? 1 : 0;
+    }
+    summary += fmt::format(
+      "| Caster sets (LP6.2, C66): camera moving | caster_ms median {:.3f} ms, p95 "
+      "{:.3f} "
+      "ms, max {:.3f} ms; caster_sets_built median {:.0f}, max {:.0f}, {:.0f} in all, {} "
+      "of {} frames making any; the settled start view's caster_sets_built {} | — | — "
+      "|\n",
+      casterMs.median,
+      casterMs.p95,
+      casterMs.max,
+      setsBuilt.median,
+      setsBuilt.max,
+      setsBuilt.sum,
+      building,
+      orbitEnd - orbitBegin + 1,
+      field(column::CasterSetsBuilt));
   }
   {
     const auto flow = orbit(column::FlowMs);
