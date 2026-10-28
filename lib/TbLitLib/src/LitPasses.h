@@ -542,7 +542,21 @@ void countInteractionDraw(LitFrameStats& stats, InteractionList list, int progra
  * ask for them against the HDR target and this depth format: the depth prepass
  * (builtin/depth, GLS_DEFAULT, and GLS_ALPHAMASK for a surface whose registers are
  * pending), a perforated surface's (texture_color, state 0) and the interaction programs'
- * four (interaction and PBR interaction, EQUAL and LESS). Pure.
+ * four (interaction and PBR interaction, EQUAL and LESS); LP4.2a (C34) the ambient
+ * pass's probe path, ambient_lighting_IBL and its PBR form, overwriting and adding.
+ * LP6.3 (C67 (c), P8.12): and what a start view's first frames draw with beside them: the
+ * light-grid path's programs (ambient_lightgrid_IBL 8 and its PBR form 10, overwriting
+ * and adding, the probe path's states) and the shadow-atlas interactions of a casting
+ * light (interactionSM spot 39, point 41, parallel 43 and their PBR forms 45, 47, 49;
+ * EQUAL for the local and global lists, LESS for the translucent one), never the skinned
+ * rows the preview does not draw (P3.24e). The session asks for them at Start, so that no
+ * first frame waits for a compile.
+ *
+ * The pending rule (P8.12), once for every key here and every later one: a draw whose
+ * pipeline is still Pending (PipelineLookup) is skipped, counted (pipelinesPending) and
+ * leaves the frame unconverged (D77), and the compile thread's onReady draws the frame
+ * again; a key asked for at Start only makes that wait shorter or none. LP6.5 and LP6.6
+ * extend these keys with the passes they add and repeat this rule. Pure.
  */
 std::vector<PipelineKey> litStartPipelineKeys(nvrhi::Format depthFormat);
 

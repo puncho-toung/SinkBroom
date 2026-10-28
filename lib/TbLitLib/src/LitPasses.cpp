@@ -4443,6 +4443,46 @@ std::vector<PipelineKey> litStartPipelineKeys(const nvrhi::Format depthFormat)
     key(EngineBuiltinAmbientLightingIbl, ambientStateBits(em::VertexColorModulate)),
     key(EngineBuiltinAmbientLightingIblPbr, ambientStateBits(em::VertexColorIgnore)),
     key(EngineBuiltinAmbientLightingIblPbr, ambientStateBits(em::VertexColorModulate)),
+    // LP6.3 (C67 (c)): the light-grid path's, in the probe path's states
+    key(EngineBuiltinAmbientLightgridIbl, ambientStateBits(em::VertexColorIgnore)),
+    key(EngineBuiltinAmbientLightgridIbl, ambientStateBits(em::VertexColorModulate)),
+    key(EngineBuiltinAmbientLightgridIblPbr, ambientStateBits(em::VertexColorIgnore)),
+    key(EngineBuiltinAmbientLightgridIblPbr, ambientStateBits(em::VertexColorModulate)),
+    // LP6.3 (C67 (c)): a casting light's shadow-atlas interactions by its type, the
+    // local and global lists EQUAL, the translucent one LESS (the skinned rows never)
+    key(
+      EngineBuiltinInteractionShadowAtlasSpot, interactionStateBits(gls::DepthFuncEqual)),
+    key(
+      EngineBuiltinInteractionShadowAtlasSpot, interactionStateBits(gls::DepthFuncLess)),
+    key(
+      EngineBuiltinInteractionShadowAtlasPoint,
+      interactionStateBits(gls::DepthFuncEqual)),
+    key(
+      EngineBuiltinInteractionShadowAtlasPoint, interactionStateBits(gls::DepthFuncLess)),
+    key(
+      EngineBuiltinInteractionShadowAtlasParallel,
+      interactionStateBits(gls::DepthFuncEqual)),
+    key(
+      EngineBuiltinInteractionShadowAtlasParallel,
+      interactionStateBits(gls::DepthFuncLess)),
+    key(
+      EngineBuiltinPbrInteractionShadowAtlasSpot,
+      interactionStateBits(gls::DepthFuncEqual)),
+    key(
+      EngineBuiltinPbrInteractionShadowAtlasSpot,
+      interactionStateBits(gls::DepthFuncLess)),
+    key(
+      EngineBuiltinPbrInteractionShadowAtlasPoint,
+      interactionStateBits(gls::DepthFuncEqual)),
+    key(
+      EngineBuiltinPbrInteractionShadowAtlasPoint,
+      interactionStateBits(gls::DepthFuncLess)),
+    key(
+      EngineBuiltinPbrInteractionShadowAtlasParallel,
+      interactionStateBits(gls::DepthFuncEqual)),
+    key(
+      EngineBuiltinPbrInteractionShadowAtlasParallel,
+      interactionStateBits(gls::DepthFuncLess)),
   };
 }
 

@@ -1520,6 +1520,17 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     dock.setFloating(true);
     REQUIRE(harness.startAndWaitForFrame());
     REQUIRE(harness.waitForFrame());
+    // LP6.3 (C67 (c)): the start list's pipelines are made first (in Debug, under the
+    // validation layer, the compile thread works about 0.2 s past the first frames, and
+    // a handshake meanwhile is slower on the GUI thread: the restore below took 83 ms
+    // instead of 1-2 ms), so that the timing this section checks is the park's alone
+    REQUIRE(QTest::qWaitFor(
+      [&] {
+        const auto timings = harness.session()->compileTimingsForTesting();
+        return timings.lastJobEnd
+               && std::chrono::steady_clock::now() - *timings.lastJobEnd > 300ms;
+      },
+      10000));
     const auto size = dock.size();
     for (auto i = 0; i < 3; ++i)
     {

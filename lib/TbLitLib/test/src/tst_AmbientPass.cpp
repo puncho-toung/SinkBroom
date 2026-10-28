@@ -237,7 +237,8 @@ TEST_CASE("AmbientPass: the stage loop, the state and the units (LP4.2a, C34)")
   SECTION("DX.5's start list gains the ambient pass's four pipelines")
   {
     const auto keys = litStartPipelineKeys(nvrhi::Format::D24S8);
-    REQUIRE(keys.size() == 11u);
+    // LP6.3 (C67 (c)): 11 until LP6.2, then the grid's 4 and the shadow atlas's 12
+    REQUIRE(keys.size() == 27u);
     auto ambient = std::vector<std::pair<int, std::uint64_t>>{};
     for (const auto& key : keys)
     {
@@ -258,6 +259,64 @@ TEST_CASE("AmbientPass: the stage loop, the state and the units (LP4.2a, C34)")
         {4, ambientStateBits(em::VertexColorModulate)},
         {6, ambientStateBits(em::VertexColorIgnore)},
         {6, ambientStateBits(em::VertexColorModulate)}});
+  }
+
+  SECTION("LP6.3: the start list holds the grid path's and the shadow atlas's pipelines")
+  {
+    // C67 (c), P8.12: the (program, state) pairs a start view's first frames draw with
+    // beside DX.5's: the light-grid programs in the probe path's two states, and the
+    // shadow-atlas interactions of the three light types, legacy and PBR, EQUAL for the
+    // local and global lists and LESS for the translucent one; no skinned row
+    const auto keys = litStartPipelineKeys(nvrhi::Format::D24S8);
+    auto added = std::vector<std::pair<int, std::uint64_t>>{};
+    for (const auto& key : keys)
+    {
+      CHECK(key.recipe == PipelineRecipe::Draw);
+      CHECK(key.framebuffer.color == nvrhi::Format::RGBA16_FLOAT);
+      CHECK(key.framebuffer.depth == nvrhi::Format::D24S8);
+      CHECK(key.depthBias == 0);
+      CHECK(key.slopeBias == 0.0f);
+      if (
+        key.program == EngineBuiltinAmbientLightgridIbl
+        || key.program == EngineBuiltinAmbientLightgridIblPbr
+        || engineShadowAtlasProgram(key.program))
+      {
+        added.emplace_back(key.program, key.state);
+      }
+    }
+    const auto equal = interactionStateBits(gls::DepthFuncEqual);
+    const auto less = interactionStateBits(gls::DepthFuncLess);
+    CHECK(
+      added
+      == std::vector<std::pair<int, std::uint64_t>>{
+        {8, ambientStateBits(em::VertexColorIgnore)},
+        {8, ambientStateBits(em::VertexColorModulate)},
+        {10, ambientStateBits(em::VertexColorIgnore)},
+        {10, ambientStateBits(em::VertexColorModulate)},
+        {39, equal},
+        {39, less},
+        {41, equal},
+        {41, less},
+        {43, equal},
+        {43, less},
+        {45, equal},
+        {45, less},
+        {47, equal},
+        {47, less},
+        {49, equal},
+        {49, less}});
+    // every key once; the builtins' ids are the rows named (their skinned rows follow)
+    for (std::size_t i = 0; i < keys.size(); ++i)
+    {
+      for (auto k = i + 1; k < keys.size(); ++k)
+      {
+        CHECK_FALSE(keys[i] == keys[k]);
+      }
+    }
+    CHECK(EngineBuiltinAmbientLightgridIbl == 8);
+    CHECK(EngineBuiltinAmbientLightgridIblPbr == 10);
+    CHECK(EngineBuiltinInteractionShadowAtlasSpot == 39);
+    CHECK(EngineBuiltinPbrInteractionShadowAtlasParallel == 49);
   }
 }
 

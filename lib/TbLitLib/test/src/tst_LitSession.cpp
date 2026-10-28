@@ -4418,6 +4418,14 @@ int unreadLocations(const int program)
     return 3;
   case EngineBuiltinInteraction:
   case EngineBuiltinPbrInteraction:
+  // LP6.3 (C67 (c)): the shadow-atlas interactions' vertex shader likewise, which the
+  // start list makes now in every session that asks for it
+  case EngineBuiltinInteractionShadowAtlasSpot:
+  case EngineBuiltinInteractionShadowAtlasPoint:
+  case EngineBuiltinInteractionShadowAtlasParallel:
+  case EngineBuiltinPbrInteractionShadowAtlasSpot:
+  case EngineBuiltinPbrInteractionShadowAtlasPoint:
+  case EngineBuiltinPbrInteractionShadowAtlasParallel:
   // LP4.2a: the ambient pass's vertex shader reads locations 0-4, not COLOR1
   case EngineBuiltinAmbientLightingIbl:
   case EngineBuiltinAmbientLightingIblPbr:
