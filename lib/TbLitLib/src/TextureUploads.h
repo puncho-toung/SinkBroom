@@ -63,6 +63,14 @@ Result<std::uint64_t> levelUploadBytes(
   const CachedImage& image, const CachedImageLevel& level);
 
 /**
+ * LP6.4b (C68 (b), the director's reading (4)): the mip floor of a texture of width ×
+ * height with levels levels: its first level whose width and height are both at most
+ * MipFloorExtent, at least its last level; 0 when the whole texture is at its floor.
+ * Pure.
+ */
+int mipFloorLevel(std::uint32_t width, std::uint32_t height, int levels);
+
+/**
  * SC268, P2.14c (LP2.1 step 5): the render thread's texture uploads, in its frame's
  * command list before the frame's first pass (D78). For each slot whose image is loading,
  * in slot order (an intrinsic before the slots it stands in for), the texture is made on
@@ -90,7 +98,9 @@ Result<std::uint64_t> levelUploadBytes(
  * only for a device allocation (the director's reading (1)): a new heap, or a dedicated
  * texture, which a class the probe or a test refused, a texture larger than a heap, or no
  * heap made gets as before (its virtual texture let go and made again non-virtual).
- * Render thread only.
+ * LP6.4b (C68 (b), the director's reading (4)): a floored slot's texture is made from the
+ * image's levels from its mip floor on (mipFloorLevel): their size, their count, their
+ * bytes, each written as its level less the floor's. Render thread only.
  */
 class TextureUploads
 {

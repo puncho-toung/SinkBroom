@@ -132,6 +132,10 @@ public:
     // bound while the new image is answered and written (pixels, texture); Resident again
     // at the swap
     Replacing,
+    // LP6.4b (C68 (b), D172, the director's reading (3)): its texture let go for the
+    // budget: it binds its intrinsic, it is not pending, and it is asked again only when
+    // a frame draws it (reRequestEvicted)
+    Evicted,
   };
 
   struct Slot
@@ -165,6 +169,10 @@ public:
     std::optional<int> replacingFormat;
     // D102: Replacing, the new texture waits for the allocation headroom (said once)
     bool waitsForRoom = false;
+    // LP6.4b (C68 (b), the director's reading (4)): at the mip floor: its textures are
+    // made from the image's levels from the first of at most MipFloorExtent on; kept
+    // until the slot is evicted
+    bool floored = false;
     // why the service has no image (Default)
     std::string reason;
   };
@@ -200,6 +208,12 @@ private:
   std::uint64_t m_frame = 0;
   // LP6.4a: the heaps the uploader places textures in (none: every texture dedicated)
   TextureHeaps* m_heaps = nullptr;
+  // LP6.4b (C68 (b)): the Evicted slots, those a frame's draw asked for by their state
+  // (want), and the evictions and floors so far
+  std::unordered_set<ImageSlotId> m_evicted;
+  std::unordered_set<ImageSlotId> m_wanted;
+  std::uint64_t m_evictions = 0;
+  std::uint64_t m_floors = 0;
 
 public:
   ImageSlots() = default;
@@ -244,9 +258,44 @@ public:
   // tests: the slot of key holds image, as if the service had answered it (Loading)
   ImageSlotId provideForTesting(
     const MaterialImageKey& key, std::shared_ptr<const CachedImage> image);
-  // the slot's texture is let go and it is asked again (eviction, a test's drop): Pending
-  // and its intrinsic until the texture is back
+  // the slot's texture is let go and it is asked again (a test's drop): Pending and its
+  // intrinsic until the texture is back
   void dropTexture(ImageSlotId slot, std::uint64_t frame);
+
+  /**
+   * LP6.4b (C68 (b), D172, D35, the director's reading (3)): a Resident slot's complete
+   * texture is let go for the budget in frame (its heap range with it): Evicted, its
+   * intrinsic bound, its version bumped (its sets and records go), not pending, the floor
+   * mark cleared; the image's facts (its usage and format) kept. The bytes it held (its
+   * heap range's, or its texture's), 0 when the slot was not evictable (not Resident, an
+   * intrinsic, or no complete texture).
+   */
+  std::uint64_t evict(ImageSlotId slot, std::uint64_t frame);
+  // a frame's draw asked for an Evicted slot by its state (a stage, a cube, a probe, a
+  // grid atlas: paths that bind nothing for a slot without written levels); no-op else
+  void want(ImageSlotId slot);
+  bool wanted(ImageSlotId slot) const;
+  // the Evicted slots, in id order, and those wanted (cleared at the frame's re-requests)
+  std::vector<ImageSlotId> evictedSlots() const;
+  std::size_t evicted() const;
+  void clearWanted();
+  // an Evicted slot a frame drew is asked again as a first request is (Pending, the
+  // immediate ask); no-op for a slot not Evicted
+  void reRequestEvicted(ImageSlotId slot, std::uint64_t frame);
+  /**
+   * LP6.4b (C68 (b), the director's reading (4)): a Resident slot's complete texture is
+   * replaced by its mip floor through the Replacing path (the complete texture bound
+   * until the floor texture is written); false when it is not Resident and complete, or
+   * already floored
+   */
+  bool floor(ImageSlotId slot, std::uint64_t frame);
+  // the session's evictions and floors so far, and the slots at the floor now
+  std::uint64_t evictions() const;
+  std::uint64_t floors() const;
+  std::size_t floored() const;
+  // the replaced bytes of the floors in flight (Replacing with the floor mark), which
+  // their swaps let go
+  std::uint64_t flooringBytes() const;
 
   // what a slot binds now
   Binding binding(ImageSlotId slot) const;

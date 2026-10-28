@@ -28,6 +28,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -97,8 +98,10 @@ public:
 private:
   std::size_t m_capacity;
   std::unordered_map<BindingSetKey, Entry, BindingSetKeyHash> m_sets;
-  // the keys (owned by m_sets, whose nodes do not move) that hold each slot
-  std::unordered_map<ImageSlotId, std::unordered_set<const BindingSetKey*>> m_bySlot;
+  // the keys (owned by m_sets, whose nodes do not move) that hold each slot, with their
+  // entries (LP6.4b: the slot's last-bound frame reads them)
+  std::unordered_map<ImageSlotId, std::unordered_map<const BindingSetKey*, const Entry*>>
+    m_bySlot;
   std::uint64_t m_made = 0;
   std::uint64_t m_heldErased = 0;
 
@@ -137,6 +140,12 @@ public:
   std::size_t capacity() const;
   // the sets that hold a slot (the reverse index)
   std::size_t setsOf(ImageSlotId slot) const;
+  /**
+   * LP6.4b (C68 (b), D172, A54, the director's reading (2)): the last frame a set holding
+   * slot was used in (lastUsed: a set's get, a record's per-frame stamp), whether the set
+   * binds the slot's own texture or its intrinsic for it; none when no set holds it
+   */
+  std::optional<std::uint64_t> lastBound(ImageSlotId slot) const;
   // the sets made so far
   std::uint64_t made() const;
   // LP6.1 (C64): the held entries erased so far (a record outliving its set: 0)

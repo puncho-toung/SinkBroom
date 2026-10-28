@@ -158,14 +158,14 @@ bool FrameConvergence::settled() const
          && !imagesPending && !provisionalChunks && !lutPending && !entityDefsPending
          && !modelsPending && !lightsProvisional && !geometryInFlight && !drawsOverflowed
          && !lightTrianglesPending && !probeImagesPending && !gridImagesPending
-         && !probesInFlight && !feedBehind && !shadowsPending;
+         && !probesInFlight && !feedBehind && !shadowsPending && !budgetLeft;
 }
 
 bool FrameConvergence::retriggers() const
 {
   // what the next frame converges by itself: the uploads it records and the draws they
-  // let it make
-  return drawsSkipped || uploadsLeft;
+  // let it make; LP6.4b: the evictions and floors its budget pass left
+  return drawsSkipped || uploadsLeft || budgetLeft;
 }
 
 std::uint64_t GpuMemoryAccount::total() const
@@ -176,6 +176,12 @@ std::uint64_t GpuMemoryAccount::total() const
 std::uint64_t GpuMemoryAccount::hostVisible() const
 {
   return volatileBufferBytes + uploadPoolBytes;
+}
+
+std::uint64_t GpuMemoryAccount::live() const
+{
+  return arenaUsedBytes + heapUsedBytes + dedicatedTextureBytes + renderTargetBytes
+         + releasedBytes;
 }
 
 GpuMemoryAccount accountGpuMemory(
@@ -197,6 +203,10 @@ GpuMemoryAccount accountGpuMemory(
                               + passes.shadowAtlasBytes() + passes.shadowScratchBytes();
   // LP6.4a: the slots' retired textures count only the dedicated ones' bytes
   account.releasedBytes = frame.retiredBytes() + images.retiredBytes();
+  // LP6.4b (C68 (b), the director's reading (1)): the live figure's lines
+  account.arenaUsedBytes = arenas.usedBytes();
+  account.heapUsedBytes = heaps.usedBytes();
+  account.dedicatedTextureBytes = images.dedicatedTextureBytes();
   // U2.6: the volatile buffers are host-visible (NVRHI allocates them for CPU writes);
   // the rest of the host-visible bytes is the upload pool and a readback's staging
   account.volatileBufferBytes =
@@ -213,6 +223,7 @@ RenderThread::RenderThread(
   : m_device{device}
   , m_events{events}
   , m_options{std::move(options)}
+  , m_vramBudget{m_options.vramBudgetBytes}
 {
 }
 
@@ -736,14 +747,11 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
     m_materials && m_frameFeedApplied < m_materials->feedRequested();
   convergence.passesDisabled =
     lit.prepassDisabled || lit.interactionsDisabled || tonemap.disabled;
+  // LP6.4b (C68 (b)): the budget pass left evictions or floors for the next frame
+  convergence.budgetLeft = m_budgetLeft;
   m_convergence = convergence;
   m_lastSettled = convergence.settled();
   m_sceneWaitSeen = m_geometry ? std::optional{sceneWaitState()} : std::nullopt;
-  if (m_lastSettled)
-  {
-    // U2.6: what a settled frame holds against the device's budget
-    checkVramBudget();
-  }
 
   // the livelock guard: a frame that re-triggers itself without uploading anything or
   // changing what it waits for has made no progress; after MaxStalledFrames of them the
@@ -1121,7 +1129,18 @@ void RenderThread::setSkipInteractions(const bool skip)
 
 void RenderThread::setVramBudget(const std::uint64_t bytes)
 {
-  m_vramBudgetForTesting = bytes;
+  m_vramBudget = bytes != 0 ? bytes : m_options.vramBudgetBytes;
+}
+
+std::uint64_t RenderThread::vramBudget() const
+{
+  return m_vramBudget.load();
+}
+
+void RenderThread::setBudgetPassHook(std::function<void(const BudgetPassReport&)> hook)
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  m_budgetPassHook = std::move(hook);
 }
 
 std::vector<PipelineKey> RenderThread::startPipelineKeys() const
@@ -1225,37 +1244,234 @@ void RenderThread::probeFormatClassesAtStart()
   m_formatClassLine = std::move(line);
 }
 
-void RenderThread::checkVramBudget()
+void RenderThread::warnVramBudget(const std::uint64_t used, const std::uint64_t budget)
 {
-  // §3.10, C11 (U2.6, V2.6): the device-local heaps' usage, as the driver counts it for
-  // this process (VK_EXT_memory_budget's heapUsage; the account's device-local estimate
-  // without the extension), and the device's budget for them, at the session's first
-  // frame and at every settled frame (the caller's); LP6 evicts against it, until then a
-  // session past it says so once
-  if (m_budgetWarned)
+  // §3.10, C11 (U2.6, V2.6): once per session, what eviction cannot bring under
+  if (std::exchange(m_budgetWarned, true))
   {
     return;
   }
-  m_budgetChecked = true;
-  const auto set = m_vramBudgetForTesting.load();
-  const auto vram = m_device.vram();
-  const auto budget = set != 0 ? std::optional{set}
-                      : vram   ? std::optional{vram->budgetBytes}
-                               : std::nullopt;
-  const auto used =
-    vram ? vram->usedBytes
-         : accountGpuMemory(
-             m_frameResources, m_arenas, m_images, m_passes, m_tonemap, m_textureHeaps)
-             .total();
-  if (budget && used > *budget)
+  m_events.post(
+    SessionEvent::Warning,
+    fmt::format(
+      "The lit preview's GPU memory ({} MB) passes the device's budget ({} MB)",
+      used / (1024 * 1024),
+      budget / (1024 * 1024)));
+}
+
+void RenderThread::budgetPass()
+{
+  const auto frame = m_frameIndex;
+  auto hook = std::function<void(const BudgetPassReport&)>{};
   {
-    m_budgetWarned = true;
-    m_events.post(
-      SessionEvent::Warning,
-      fmt::format(
-        "The lit preview's GPU memory ({} MB) passes the device's budget ({} MB)",
-        used / (1024 * 1024),
-        *budget / (1024 * 1024)));
+    const auto lock = std::scoped_lock{m_mutex};
+    hook = m_budgetPassHook;
+  }
+  auto report = BudgetPassReport{};
+  report.frame = frame;
+  const auto finish = kdl::invoke_later{[&] {
+    report.left = m_budgetLeft;
+    if (hook)
+    {
+      // the stamp: the slots a set of this frame bound, before the bumps' erase
+      for (ImageSlotId id = 0; id < ImageSlotId(m_images.size()); ++id)
+      {
+        if (const auto last = m_bindingSets.lastBound(id); last && *last == frame)
+        {
+          report.drawn.push_back(id);
+        }
+      }
+      hook(report);
+    }
+  }};
+
+  // D172 read the other way (the director's reading (3)): an Evicted slot a set of this
+  // frame bound (its intrinsic standing in for it) or a draw asked for by its state is
+  // asked again, as a first request is
+  for (const auto id : m_images.evictedSlots())
+  {
+    const auto last = m_bindingSets.lastBound(id);
+    if (m_images.wanted(id) || (last && *last == frame))
+    {
+      m_images.reRequestEvicted(id, frame);
+      report.reRequested.push_back(id);
+    }
+  }
+  m_images.clearWanted();
+  m_budgetLeft = false;
+
+  // Q48: the session's budget against the live figure, and VK_EXT_memory_budget's
+  // budget against its usage (read at the first frame, after a settled one, and while
+  // it says over: a driver call)
+  const auto account = accountGpuMemory(
+    m_frameResources, m_arenas, m_images, m_passes, m_tonemap, m_textureHeaps);
+  const auto live = account.live();
+  const auto budget = vramBudget();
+  if (!m_budgetChecked || m_lastSettled || m_extensionOver)
+  {
+    m_budgetChecked = true;
+    m_extensionVram = m_device.vram();
+  }
+  m_extensionOver =
+    m_extensionVram && m_extensionVram->usedBytes > m_extensionVram->budgetBytes;
+  report.liveBytes = live;
+  report.budgetBytes = budget;
+  report.over = live > budget || m_extensionOver;
+  if (!report.over)
+  {
+    m_budgetExhaustedLive.reset();
+    return;
+  }
+  // nothing was left to let go at this live figure: no further pass until it changes
+  if (m_budgetExhaustedLive == live)
+  {
+    return;
+  }
+
+  // what is let go already and waits for its frames, and the complete textures the
+  // floors in flight let go at their swaps, are not counted again
+  const auto freeing =
+    account.releasedBytes + m_textureHeaps.pendingBytes() + m_images.flooringBytes();
+  // what to let go: to the budget less a sixteenth (the hysteresis), and to the budget
+  // itself (the floor's trigger)
+  const auto excess = [&](const std::uint64_t used, const std::uint64_t limit) {
+    const auto net = used > freeing ? used - freeing : 0;
+    return net > limit ? net - limit : std::uint64_t{0};
+  };
+  auto needed = std::uint64_t{0};
+  auto passing = std::uint64_t{0};
+  if (live > budget)
+  {
+    needed = excess(live, budget - budget / 16);
+    passing = excess(live, budget);
+  }
+  if (m_extensionOver)
+  {
+    const auto extension = m_extensionVram->budgetBytes;
+    needed =
+      std::max(needed, excess(m_extensionVram->usedBytes, extension - extension / 16));
+    passing = std::max(passing, excess(m_extensionVram->usedBytes, extension));
+  }
+  if (needed == 0)
+  {
+    return;
+  }
+
+  // the candidates: Resident slots, no intrinsic, their own complete texture bound, no
+  // frame has bound for EvictionIdleFrames frames (the max lastUsed over their sets, the
+  // stamp of C64's record path, A54; 0 when no set holds them); never one of this frame
+  struct Candidate
+  {
+    std::uint64_t lastBound = 0;
+    ImageSlotId id = NoImageSlot;
+  };
+  auto candidates = std::vector<Candidate>{};
+  const auto complete = [&](const ImageSlots::Slot& slot) {
+    return slot.state == ImageSlots::State::Resident && slot.intrinsic != NoImageSlot
+           && slot.texture && slot.firstWrittenMip == 0 && slot.mipLevels > 0;
+  };
+  for (ImageSlotId id = 0; id < ImageSlotId(m_images.size()); ++id)
+  {
+    if (!complete(*m_images.slot(id)))
+    {
+      continue;
+    }
+    const auto last = m_bindingSets.lastBound(id).value_or(0);
+    if (last + EvictionIdleFrames <= frame)
+    {
+      candidates.push_back(Candidate{last, id});
+    }
+  }
+  // least recently bound first
+  std::ranges::sort(candidates, [](const Candidate& a, const Candidate& b) {
+    return std::tie(a.lastBound, a.id) < std::tie(b.lastBound, b.id);
+  });
+  auto freed = std::uint64_t{0};
+  auto done = std::size_t{0};
+  for (const auto& candidate : candidates)
+  {
+    if (freed >= needed)
+    {
+      break;
+    }
+    if (done == EvictionsPerFrame)
+    {
+      m_budgetLeft = true;
+      break;
+    }
+    if (const auto bytes = m_images.evict(candidate.id, frame); bytes > 0)
+    {
+      freed += bytes;
+      ++done;
+      report.evicted.emplace_back(candidate.id, candidate.lastBound);
+    }
+  }
+
+  // the mip floor (the director's reading (4)): no unbound candidate left and the budget
+  // itself still passed: the bound slots not at their floor, the largest first, through
+  // the Replacing path, to the budget less a sixteenth; a floor's saving as its levels'
+  // share of the texture (a level a quarter of the one before)
+  if (freed < passing && !m_budgetLeft)
+  {
+    struct FloorCandidate
+    {
+      std::uint64_t bytes = 0;
+      std::uint64_t saving = 0;
+      ImageSlotId id = NoImageSlot;
+    };
+    auto floors = std::vector<FloorCandidate>{};
+    for (ImageSlotId id = 0; id < ImageSlotId(m_images.size()); ++id)
+    {
+      const auto& slot = *m_images.slot(id);
+      if (!complete(slot) || slot.floored)
+      {
+        continue;
+      }
+      const auto& desc = slot.texture->getDesc();
+      const auto level = mipFloorLevel(desc.width, desc.height, int(desc.mipLevels));
+      if (level == 0)
+      {
+        continue;
+      }
+      const auto kept = slot.textureBytes >> std::min(2 * level, 62);
+      floors.push_back(FloorCandidate{slot.textureBytes, slot.textureBytes - kept, id});
+    }
+    std::ranges::sort(floors, [](const FloorCandidate& a, const FloorCandidate& b) {
+      return a.bytes != b.bytes ? a.bytes > b.bytes : a.id < b.id;
+    });
+    for (const auto& candidate : floors)
+    {
+      if (freed >= needed)
+      {
+        break;
+      }
+      if (done == EvictionsPerFrame)
+      {
+        m_budgetLeft = true;
+        break;
+      }
+      if (m_images.floor(candidate.id, frame))
+      {
+        freed += candidate.saving;
+        ++done;
+        report.floored.push_back(candidate.id);
+      }
+    }
+  }
+
+  // every bound slot at its floor and the budget still passed: said once (D77 accepts
+  // the floor)
+  if (done == 0 && passing > 0)
+  {
+    m_budgetExhaustedLive = live;
+    if (m_extensionOver)
+    {
+      warnVramBudget(m_extensionVram->usedBytes, m_extensionVram->budgetBytes);
+    }
+    else
+    {
+      warnVramBudget(live, budget);
+    }
   }
 }
 
@@ -2104,10 +2320,6 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       {
         return FrameOutcome::Stopped;
       }
-      if (!m_budgetChecked)
-      {
-        checkVramBudget();
-      }
       runFrameHooks(commandList);
       // LP2.2a: the lit passes into hdrFBO (D77: a draw skipped for a texture without
       // levels or a chunk not placed yet is retried at once; a pending material or
@@ -2143,6 +2355,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         litStats.skippedDraws = after.skippedDraws;
         litStats.debugViewDraws = after.debugViewDraws;
       }
+      // LP6.4b (C68 (b), D172): the frame's stamps are final: the evicted slots it drew
+      // are asked again, and the budget lets go what no frame binds
+      budgetPass();
       // D77: what the frame waits for, whether it is settled, whether it re-triggers
       converge(litStats, m_materials ? m_materials->table()->version : std::uint64_t{0});
       // C29: a settled frame's LDR target for the readbacks asked for
@@ -2409,6 +2624,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.textureHeaps = m_textureHeaps.heaps();
       row.heapBytes = m_textureHeaps.usedBytes();
       row.texturesDedicated = m_images.dedicatedTextures(&m_textureHeaps);
+      // LP6.4b (C68 (b)): the evictions so far and the slots at the floor now
+      row.texturesEvicted = m_images.evictions();
+      row.texturesFloored = m_images.floored();
       m_timers.frameShown(slot, row);
       ++m_framesPresented;
       // LP2.3 (D9): the panel's status line reads the frame's counts
@@ -2436,6 +2654,14 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         status.vramArenaBytes = account.arenaBytes;
         status.vramRenderTargetBytes = account.renderTargetBytes;
         status.vramReleasedBytes = account.releasedBytes;
+        // LP6.4b (C68 (b)): the live figure, its used lines, the budget, the evictions
+        // and the floors
+        status.vramLiveBytes = account.live();
+        status.vramArenaUsedBytes = account.arenaUsedBytes;
+        status.vramHeapUsedBytes = account.heapUsedBytes;
+        status.vramBudgetBytes = vramBudget();
+        status.texturesEvicted = m_images.evictions();
+        status.texturesFloored = m_images.floored();
         status.heaps = textureHeapStatus();
         // D90 (LP4.1): the view's portal flow
         status.viewArea = litStats.viewArea;
@@ -2495,6 +2721,8 @@ void RenderThread::framesCompleted(const std::uint64_t completedFrames)
   m_images.collectRetired(m_completedFrames);
   // LP6.4a (C68 (a), D35): the heap ranges freed in those frames, after their textures
   m_textureHeaps.reclaim(m_completedFrames);
+  // LP6.4b (the director's reading (7)): a heap left with no range is released
+  m_textureHeaps.releaseEmpty();
 }
 
 void RenderThread::refreshImages()

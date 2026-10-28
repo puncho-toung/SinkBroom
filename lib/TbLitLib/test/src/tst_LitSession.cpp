@@ -379,8 +379,9 @@ using namespace std::chrono_literals;
 // columns of the CPU record and three reserved GPU columns (C65), LP6.1's two draw-record
 // counts (C64), LP6.2's three parts of lists_ms (C65), caster sets made and tiles drawn
 // again for an image (C66, D169), LP6.4a's texture heaps, their bytes and the dedicated
-// slot textures (C68 (a))
-constexpr auto FrameLogFields = std::size_t{118};
+// slot textures (C68 (a)), LP6.4b's evictions, floored slots, in-place feeds and arena
+// bytes moved (C68 (b)-(d))
+constexpr auto FrameLogFields = std::size_t{122};
 
 // LP2.0, T0.2: the validation layer's id of "Vertex attribute at location N not consumed
 // by vertex shader" (mirror.json M-PIPE-DEFECT-01), as this machine's layer names it
@@ -19272,6 +19273,690 @@ TEST_CASE("LitSession shadow debug views on the shadows map (LP3.4)", "[.][litgp
   messages.print("LP3.4 debug views, validation");
   CHECK(messages.errors == 0);
   CHECK(messages.warnings == 0);
+}
+
+namespace
+{
+
+// LP6.4b (C68 (b), D172): every frame's budget pass, as its hook reported it
+struct BudgetPasses
+{
+  std::mutex mutex;
+  std::vector<BudgetPassReport> reports;
+
+  std::function<void(const BudgetPassReport&)> hook()
+  {
+    return [this](const BudgetPassReport& report) {
+      const auto lock = std::scoped_lock{mutex};
+      reports.push_back(report);
+    };
+  }
+
+  std::vector<BudgetPassReport> taken(const std::size_t from = 0)
+  {
+    const auto lock = std::scoped_lock{mutex};
+    return from < reports.size()
+             ? std::vector<
+                 BudgetPassReport>{reports.begin() + std::ptrdiff_t(from), reports.end()}
+             : std::vector<BudgetPassReport>{};
+  }
+
+  std::size_t size()
+  {
+    const auto lock = std::scoped_lock{mutex};
+    return reports.size();
+  }
+
+  BudgetPassReport last()
+  {
+    const auto lock = std::scoped_lock{mutex};
+    return reports.empty() ? BudgetPassReport{} : reports.back();
+  }
+};
+
+// a slot as the eviction cases read it: its bytes are its heap range's, or its texture's
+struct BudgetSlot
+{
+  std::string name;
+  ImageSlots::State state = ImageSlots::State::Pending;
+  bool intrinsic = false;
+  bool floored = false;
+  std::uint64_t bytes = 0;
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  std::uint32_t levels = 0;
+  bool boundIntrinsic = false;
+};
+
+std::map<ImageSlotId, BudgetSlot> budgetSlots(RenderFrameAccess& access)
+{
+  auto slots = std::map<ImageSlotId, BudgetSlot>{};
+  for (ImageSlotId id = 0; id < ImageSlotId(access.images.size()); ++id)
+  {
+    const auto* slot = access.images.slot(id);
+    auto seen = BudgetSlot{};
+    seen.name = slot->key.name;
+    seen.state = slot->state;
+    seen.intrinsic = slot->intrinsic == NoImageSlot;
+    seen.floored = slot->floored;
+    if (slot->texture)
+    {
+      const auto placement = access.heaps.placementOf(slot->texture.Get());
+      seen.bytes = placement ? placement->range.size : slot->textureBytes;
+      const auto& desc = slot->texture->getDesc();
+      seen.width = desc.width;
+      seen.height = desc.height;
+      seen.levels = desc.mipLevels;
+    }
+    seen.boundIntrinsic = access.images.binding(id).intrinsic;
+    slots.emplace(id, seen);
+  }
+  return slots;
+}
+
+GpuMemoryAccount accountOf(RenderFrameAccess& access)
+{
+  return accountGpuMemory(
+    access.frame,
+    access.arenas,
+    access.images,
+    access.passes,
+    access.tonemap,
+    access.heaps);
+}
+
+std::set<ImageSlotId> drawnOf(const BudgetPassReport& report)
+{
+  return {report.drawn.begin(), report.drawn.end()};
+}
+
+// (c): an evicted slot that carries its frame's stamp, or one bound within
+// EvictionIdleFrames frames
+std::size_t stampFaults(const std::vector<BudgetPassReport>& reports)
+{
+  auto faults = std::size_t{0};
+  for (const auto& report : reports)
+  {
+    const auto drawn = drawnOf(report);
+    for (const auto& [id, lastBound] : report.evicted)
+    {
+      faults +=
+        drawn.contains(id) || lastBound + EvictionIdleFrames > report.frame ? 1u : 0u;
+    }
+  }
+  return faults;
+}
+
+std::string slotNames(
+  const std::map<ImageSlotId, BudgetSlot>& slots, const std::vector<ImageSlotId>& ids)
+{
+  auto names = std::vector<std::string>{};
+  for (const auto id : ids)
+  {
+    const auto it = slots.find(id);
+    names.push_back(
+      it != slots.end() ? fmt::format(
+                            "{} {} ({} x {}, {} B)",
+                            id,
+                            it->second.name,
+                            it->second.width,
+                            it->second.height,
+                            it->second.bytes)
+                        : fmt::format("{}", id));
+  }
+  return fmt::format("{}", fmt::join(names, "; "));
+}
+
+bool containsSlot(const std::vector<ImageSlotId>& ids, const ImageSlotId id)
+{
+  return std::ranges::find(ids, id) != ids.end();
+}
+
+// a frame drawn now, waited for
+bool oneFrame(LitSession& session)
+{
+  const auto before = session.framesPresented();
+  session.requestFrame();
+  return waitFor([&] { return session.framesPresented() > before; }, 5000ms, false);
+}
+
+} // namespace
+
+// LP6.4b (C68 (b), D172, Q48, A54, A57, the director's readings (1)-(4), (7)): the
+// session's budget against the live figure (the arenas' and heaps' used bytes, the
+// dedicated slot textures, the targets, what was released); past it the Resident slots no
+// frame has bound for four frames go, least recently bound first, to the budget less a
+// sixteenth, Evicted (their intrinsics bound, not pending), asked again only when a frame
+// draws them; with no unbound one left and the budget passed, the bound ones' mip floor
+// through the Replacing path; an emptied heap released; at Stop nothing is left
+TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgpu]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  const auto view1 = litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0});
+  const auto view2 = litCamera({-100, 0, 64}, {-1, 0, 0}, {0, 0, 1});
+  const auto budgetText = std::string_view{"passes the device's budget"};
+
+  SECTION(
+    "(a) the second view's textures evicted and back, (c) never one bound, (e) Stop")
+  {
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = rootSession(instance, events, *service, root);
+      auto passes = BudgetPasses{};
+      session->setBudgetPassHookForTesting(passes.hook());
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+
+      // both views seen and settled, the second first: each settled frame's stamp says
+      // which slots it bound
+      REQUIRE(settledChain(*session, view2));
+      const auto seen2 = passes.last();
+      REQUIRE(settledChain(*session, view1));
+      const auto seen1 = passes.last();
+      // the first view for six settled frames (the pacer's)
+      for (auto i = 0; i < 6; ++i)
+      {
+        REQUIRE(oneFrame(*session));
+      }
+      REQUIRE(waitQuiet(*session));
+      REQUIRE(session->lastFrameSettledForTesting());
+      auto slots = std::map<ImageSlotId, BudgetSlot>{};
+      auto before = GpuMemoryAccount{};
+      auto frameBefore = std::uint64_t{0};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        slots = budgetSlots(access);
+        before = accountOf(access);
+        frameBefore = access.frameIndex;
+      }));
+      const auto drawn1 = drawnOf(seen1);
+      const auto drawn2 = drawnOf(seen2);
+      const auto own =
+        [&](const std::set<ImageSlotId>& mine, const std::set<ImageSlotId>& other) {
+          auto ids = std::vector<ImageSlotId>{};
+          auto bytes = std::uint64_t{0};
+          for (const auto id : mine)
+          {
+            const auto& slot = slots.at(id);
+            if (
+              !other.contains(id) && !slot.intrinsic
+              && slot.state == ImageSlots::State::Resident)
+            {
+              ids.push_back(id);
+              bytes += slot.bytes;
+            }
+          }
+          return std::pair{ids, bytes};
+        };
+      const auto [a, aBytes] = own(drawn1, drawn2);
+      const auto [b, bBytes] = own(drawn2, drawn1);
+      auto residentBytes = std::uint64_t{0};
+      for (const auto& [id, slot] : slots)
+      {
+        residentBytes += slot.state == ImageSlots::State::Resident ? slot.bytes : 0;
+      }
+      std::cout << fmt::format(
+        "LP6.4b (a) step 0 (f): the live figure {} = arenas used {} + heaps used {} + "
+        "dedicated {} + targets {} + released {} (capacity total {}); {} slots, the "
+        "Resident textures {} B; view 1 drew {} slots (frame {}), view 2 {} (frame {})\n"
+        "  A (view 1's own, {} B): {}\n  B (view 2's own, {} B): {}\n",
+        before.live(),
+        before.arenaUsedBytes,
+        before.heapUsedBytes,
+        before.dedicatedTextureBytes,
+        before.renderTargetBytes,
+        before.releasedBytes,
+        before.total(),
+        slots.size(),
+        residentBytes,
+        drawn1.size(),
+        seen1.frame,
+        drawn2.size(),
+        seen2.frame,
+        aBytes,
+        slotNames(slots, a),
+        bBytes,
+        slotNames(slots, b));
+      REQUIRE_FALSE(b.empty());
+
+      // the budget between the visible set and the live figure: live less half of B
+      const auto live = before.live();
+      const auto budget = live - bBytes / 2;
+      const auto from = passes.size();
+      session->setVramBudgetForTesting(budget);
+      REQUIRE(oneFrame(*session));
+      REQUIRE(waitQuiet(*session));
+      settle(*session);
+      REQUIRE(waitQuiet(*session));
+      const auto evicting = passes.taken(from);
+      auto evicted = std::vector<std::pair<ImageSlotId, std::uint64_t>>{};
+      auto reRequested = std::size_t{0};
+      auto ordered = true;
+      for (const auto& report : evicting)
+      {
+        for (std::size_t i = 0; i < report.evicted.size(); ++i)
+        {
+          evicted.push_back(report.evicted[i]);
+          ordered = ordered
+                    && (i == 0
+                        || std::tie(report.evicted[i - 1].second, report.evicted[i - 1].first)
+                             < std::tie(report.evicted[i].second, report.evicted[i].first));
+        }
+        reRequested += report.reRequested.size();
+      }
+      auto after = GpuMemoryAccount{};
+      auto slotsAfter = std::map<ImageSlotId, BudgetSlot>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        after = accountOf(access);
+        slotsAfter = budgetSlots(access);
+      }));
+      auto evictedBytes = std::uint64_t{0};
+      auto evictedIds = std::vector<ImageSlotId>{};
+      for (const auto& [id, lastBound] : evicted)
+      {
+        evictedBytes += slots.at(id).bytes;
+        evictedIds.push_back(id);
+      }
+      const auto status = session->status();
+      std::cout << fmt::format(
+        "LP6.4b (a): budget {} (live {} less half of B's {}): {} evicted in {} passes "
+        "from frame {} (id, last-bound): {}; the live figure {} -> {}; heaps used + "
+        "dedicated {} -> {} (the evicted {} B); textures_evicted {}; re-requests {}\n",
+        budget,
+        live,
+        bBytes,
+        evicted.size(),
+        evicting.size(),
+        frameBefore,
+        fmt::join(evicted, ", "),
+        live,
+        after.live(),
+        before.heapUsedBytes + before.dedicatedTextureBytes,
+        after.heapUsedBytes + after.dedicatedTextureBytes,
+        evictedBytes,
+        status.texturesEvicted,
+        reRequested);
+      // B's slots among the evicted, least recently bound first, none bound within four
+      // frames, none of the frame's own, no intrinsic; the live figure under the budget;
+      // the heaps' bytes down by their ranges; counted; no re-request: the session
+      // settles
+      CHECK(ordered);
+      for (const auto id : b)
+      {
+        CHECK(containsSlot(evictedIds, id));
+        CHECK(slotsAfter.at(id).state == ImageSlots::State::Evicted);
+        CHECK(slotsAfter.at(id).boundIntrinsic);
+      }
+      for (const auto id : evictedIds)
+      {
+        CHECK_FALSE(slots.at(id).intrinsic);
+        CHECK_FALSE(drawn1.contains(id));
+      }
+      CHECK(stampFaults(evicting) == 0u);
+      CHECK(after.live() < budget);
+      CHECK(
+        before.heapUsedBytes + before.dedicatedTextureBytes
+        == after.heapUsedBytes + after.dedicatedTextureBytes + evictedBytes);
+      CHECK(status.texturesEvicted == evicted.size());
+      CHECK(status.vramLiveBytes > 0u);
+      CHECK(reRequested == 0u);
+      CHECK(session->lastFrameSettledForTesting());
+      CHECK(events.countContaining(SessionEvent::Warning, budgetText) == 0u);
+
+      // the second view: B is asked again once each, converges back, and the first view's
+      // least recently bound go while the budget is passed again
+      const auto back = passes.size();
+      REQUIRE(settledChain(*session, view2));
+      REQUIRE(waitQuiet(*session));
+      const auto returning = passes.taken(back);
+      auto asked = std::map<ImageSlotId, std::size_t>{};
+      auto evictedAgain = std::vector<std::pair<ImageSlotId, std::uint64_t>>{};
+      for (const auto& report : returning)
+      {
+        for (const auto id : report.reRequested)
+        {
+          ++asked[id];
+        }
+        evictedAgain.insert(
+          evictedAgain.end(), report.evicted.begin(), report.evicted.end());
+      }
+      auto slotsBack = std::map<ImageSlotId, BudgetSlot>{};
+      REQUIRE(inFrame(
+        *session, [&](RenderFrameAccess& access) { slotsBack = budgetSlots(access); }));
+      std::cout << fmt::format(
+        "LP6.4b (a): view 2 again: re-requested (id, times) {}; then evicted (id, "
+        "last-bound) {}; textures_evicted {}\n",
+        fmt::join(asked, ", "),
+        fmt::join(evictedAgain, ", "),
+        session->status().texturesEvicted);
+      for (const auto id : b)
+      {
+        CHECK(asked[id] == 1u);
+        CHECK(slotsBack.at(id).state == ImageSlots::State::Resident);
+      }
+      for (const auto& [id, lastBound] : evictedAgain)
+      {
+        CHECK_FALSE(containsSlot(b, id));
+      }
+      CHECK(session->lastFrameSettledForTesting());
+      // (c) over the whole of (a)
+      CHECK(stampFaults(passes.taken()) == 0u);
+
+      session->setVramBudgetForTesting(0);
+      session->setBudgetPassHookForTesting({});
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      // (e) Stop: every allocation freed
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+    messages.print("LP6.4b (a), validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("(b) the mip floor of the bound slots through Replacing, then said once")
+  {
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = rootSession(instance, events, *service, root);
+      auto passes = BudgetPasses{};
+      session->setBudgetPassHookForTesting(passes.hook());
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+      REQUIRE(settledChain(*session, view1));
+      // the floor's image fed at 1024 x 1024: larger than its floor
+      REQUIRE(service
+                ->setImageOverride(
+                  "textures/lp1b/floor", constantOverride(1024, 1024, {200, 120, 60}))
+                .is_success());
+      REQUIRE(waitForFeed(*service));
+      REQUIRE(settledChain(*session, view1));
+      REQUIRE(waitQuiet(*session));
+      auto slots = std::map<ImageSlotId, BudgetSlot>{};
+      auto before = GpuMemoryAccount{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        slots = budgetSlots(access);
+        before = accountOf(access);
+      }));
+      auto floor = NoImageSlot;
+      for (const auto& [id, slot] : slots)
+      {
+        if (slot.name.find("lp1b/floor") != std::string::npos && slot.width == 1024)
+        {
+          floor = id;
+        }
+      }
+      REQUIRE(floor != NoImageSlot);
+      const auto floorBefore = slots.at(floor);
+      REQUIRE(floorBefore.levels >= 3u);
+      CHECK(drawnOf(passes.last()).contains(floor));
+
+      // every frame from here: what the floor's slot binds (never its intrinsic)
+      auto boundMutex = std::mutex{};
+      auto boundIntrinsic = std::size_t{0};
+      auto boundFrames = std::size_t{0};
+      session->setEveryFrameHookForTesting([&](RenderFrameAccess& access) {
+        const auto intrinsic = access.images.binding(floor).intrinsic;
+        const auto lock = std::scoped_lock{boundMutex};
+        ++boundFrames;
+        boundIntrinsic += intrinsic ? 1u : 0u;
+      });
+      // the budget below the visible set: live less half of the floor's texture
+      const auto budget = before.live() - floorBefore.bytes / 2;
+      const auto from = passes.size();
+      session->setVramBudgetForTesting(budget);
+      REQUIRE(oneFrame(*session));
+      REQUIRE(settledChain(*session, view1));
+      REQUIRE(waitQuiet(*session));
+      settle(*session);
+      REQUIRE(waitQuiet(*session));
+      session->setEveryFrameHookForTesting({});
+      const auto flooring = passes.taken(from);
+      auto floored = std::vector<ImageSlotId>{};
+      auto evicted = std::vector<std::pair<ImageSlotId, std::uint64_t>>{};
+      for (const auto& report : flooring)
+      {
+        floored.insert(floored.end(), report.floored.begin(), report.floored.end());
+        evicted.insert(evicted.end(), report.evicted.begin(), report.evicted.end());
+      }
+      auto after = GpuMemoryAccount{};
+      auto slotsAfter = std::map<ImageSlotId, BudgetSlot>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        after = accountOf(access);
+        slotsAfter = budgetSlots(access);
+      }));
+      const auto status = session->status();
+      std::cout << fmt::format(
+        "LP6.4b (b): budget {} (live {} less half of the floor's {} B, {} x {}, {} "
+        "levels): evicted first {}; floored {}; the floor's texture now {} x {}, {} "
+        "levels, {} B; the live figure {} -> {}; textures_floored {}; frames binding its "
+        "intrinsic {} of {}\n",
+        budget,
+        before.live(),
+        floorBefore.bytes,
+        floorBefore.width,
+        floorBefore.height,
+        floorBefore.levels,
+        fmt::join(evicted, ", "),
+        slotNames(slotsAfter, floored),
+        slotsAfter.at(floor).width,
+        slotsAfter.at(floor).height,
+        slotsAfter.at(floor).levels,
+        slotsAfter.at(floor).bytes,
+        before.live(),
+        after.live(),
+        status.texturesFloored,
+        boundIntrinsic,
+        boundFrames);
+      REQUIRE_FALSE(floored.empty());
+      CHECK(containsSlot(floored, floor));
+      CHECK(slotsAfter.at(floor).state == ImageSlots::State::Resident);
+      CHECK(slotsAfter.at(floor).floored);
+      CHECK(boundIntrinsic == 0u);
+      CHECK(boundFrames > 0u);
+      for (const auto id : floored)
+      {
+        CHECK(slotsAfter.at(id).width <= std::uint32_t(MipFloorExtent));
+        CHECK(slotsAfter.at(id).height <= std::uint32_t(MipFloorExtent));
+      }
+      CHECK(status.texturesFloored == floored.size());
+      CHECK(after.live() < before.live());
+      CHECK(session->lastFrameSettledForTesting());
+      CHECK(events.countContaining(SessionEvent::Warning, budgetText) == 0u);
+
+      // every bound slot at its floor and the budget still passed: said once, the session
+      // settles (D77 accepts the floor), no further pass
+      session->setVramBudgetForTesting(after.live() - std::uint64_t{1024} * 1024);
+      REQUIRE(oneFrame(*session));
+      REQUIRE(waitQuiet(*session));
+      REQUIRE(waitFor(
+        [&] { return events.countContaining(SessionEvent::Warning, budgetText) == 1u; },
+        10000ms,
+        false));
+      REQUIRE(settledChain(*session, view1));
+      REQUIRE(waitQuiet(*session));
+      const auto idle = passes.size();
+      REQUIRE(oneFrame(*session));
+      REQUIRE(waitQuiet(*session));
+      const auto quiet = passes.taken(idle);
+      auto moved = std::size_t{0};
+      for (const auto& report : quiet)
+      {
+        moved +=
+          report.evicted.size() + report.floored.size() + report.reRequested.size();
+        CHECK(report.over);
+      }
+      std::cout << fmt::format(
+        "LP6.4b (b): at the floor and still over: {} warning, {} passes after it with {} "
+        "evictions or floors, settled {}\n",
+        events.countContaining(SessionEvent::Warning, budgetText),
+        quiet.size(),
+        moved,
+        session->lastFrameSettledForTesting());
+      CHECK(moved == 0u);
+      CHECK(session->lastFrameSettledForTesting());
+      CHECK(events.countContaining(SessionEvent::Warning, budgetText) == 1u);
+
+      session->setVramBudgetForTesting(0);
+      session->setBudgetPassHookForTesting({});
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    messages.print("LP6.4b (b), validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("(d) an emptied heap is released: texture_heaps 2 -> 1, an allocation fewer")
+  {
+    namespace ei = engine_image;
+    // two 256 x 256 RGBA8 ranges a heap: the intrinsic-keyed pair (never evicted) in the
+    // first, the other pair in a second
+    const auto heapBytes = HeapBytesForTesting{std::uint64_t{2} * 351232};
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1);
+      auto passes = BudgetPasses{};
+      session->setBudgetPassHookForTesting(passes.hook());
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+      settle(*session);
+      auto ids = std::array<ImageSlotId, 4>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        ids[0] = access.images.provideForTesting(
+          intrinsicImageKey("_lp64b_kept_0"), syntheticImage(256, ei::FormatRgba8, 1));
+        ids[1] = access.images.provideForTesting(
+          intrinsicImageKey("_lp64b_kept_1"), syntheticImage(256, ei::FormatRgba8, 2));
+      }));
+      REQUIRE(waitForSlots(*session, {ids[0], ids[1]}));
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        ids[2] = access.images.provideForTesting(
+          testImageKey("textures/lp6/second_heap_0"),
+          syntheticImage(256, ei::FormatRgba8, 3));
+        ids[3] = access.images.provideForTesting(
+          testImageKey("textures/lp6/second_heap_1"),
+          syntheticImage(256, ei::FormatRgba8, 4));
+      }));
+      REQUIRE(waitForSlots(*session, {ids[2], ids[3]}));
+      for (auto i = 0; i < 6; ++i)
+      {
+        REQUIRE(oneFrame(*session));
+      }
+      settle(*session);
+      auto heapsOf = std::array<std::size_t, 4>{};
+      auto heapsBefore = std::size_t{0};
+      auto live = std::uint64_t{0};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        for (std::size_t i = 0; i < ids.size(); ++i)
+        {
+          const auto placement =
+            access.heaps.placementOf(access.images.slot(ids[i])->texture.Get());
+          heapsOf[i] = placement ? placement->heap : 99;
+        }
+        heapsBefore = access.heaps.heaps();
+        live = accountOf(access).live();
+      }));
+      const auto allocationsBefore = session->deviceMemoryAllocations();
+      REQUIRE(heapsOf == std::array<std::size_t, 4>{0, 0, 1, 1});
+      REQUIRE(heapsBefore == 2u);
+
+      // the budget a little over the live figure less the second pair: both go (the
+      // hysteresis asks for more than they hold), the kept pair stays (never a candidate)
+      const auto budget = live - std::uint64_t{2} * 351232 + 4096;
+      session->setVramBudgetForTesting(budget);
+      REQUIRE(oneFrame(*session));
+      settle(*session);
+      settle(*session);
+      auto heapsAfter = std::size_t{0};
+      auto states = std::array<ImageSlots::State, 4>{};
+      auto heapRows = std::uint64_t{0};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        heapsAfter = access.heaps.heaps();
+        heapRows = access.heaps.heapsReleased();
+        for (std::size_t i = 0; i < ids.size(); ++i)
+        {
+          states[i] = access.images.slot(ids[i])->state;
+        }
+      }));
+      const auto allocationsAfter = session->deviceMemoryAllocations();
+      std::cout << fmt::format(
+        "LP6.4b (d): a heap of {} B: the kept pair in heap {} and {}, the other in {} "
+        "and {}; budget {}: texture_heaps {} -> {} ({} released), allocations {} -> {}\n",
+        std::uint64_t{2} * 351232,
+        heapsOf[0],
+        heapsOf[1],
+        heapsOf[2],
+        heapsOf[3],
+        budget,
+        heapsBefore,
+        heapsAfter,
+        heapRows,
+        allocationsBefore,
+        allocationsAfter);
+      CHECK(states[0] == ImageSlots::State::Resident);
+      CHECK(states[1] == ImageSlots::State::Resident);
+      CHECK(states[2] == ImageSlots::State::Evicted);
+      CHECK(states[3] == ImageSlots::State::Evicted);
+      CHECK(heapsAfter == 1u);
+      CHECK(heapRows == 1u);
+      CHECK(allocationsAfter == allocationsBefore - 1);
+      CHECK(stampFaults(passes.taken()) == 0u);
+
+      session->setVramBudgetForTesting(0);
+      session->setBudgetPassHookForTesting({});
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+    }
+    CHECK(resetDispatcher());
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
 }
 
 } // namespace tb::lit

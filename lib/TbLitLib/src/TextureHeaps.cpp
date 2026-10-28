@@ -406,6 +406,10 @@ std::optional<HeapPlacement> TextureHeaps::place(
   const auto alignment = std::max(requirements.alignment, std::uint64_t{1});
   for (std::size_t i = 0; i < m_heaps.size(); ++i)
   {
+    if (!m_heaps[i].live)
+    {
+      continue;
+    }
     if (const auto range = m_heaps[i].ranges.allocate(requirements.size, alignment))
     {
       return remember(texture, HeapPlacement{i, *range});
@@ -418,6 +422,10 @@ std::optional<HeapPlacement> TextureHeaps::place(
     ++m_headroomRefusals;
     return std::nullopt;
   }
+  // LP6.4b (the director's reading (7)): a released heap's index is taken again
+  const auto released =
+    std::ranges::find_if(m_heaps, [](const Heap& h) { return !h.live; });
+  const auto index = std::size_t(released - m_heaps.begin());
   auto heap = nvrhi::HeapHandle{};
   if (m_device)
   {
@@ -425,21 +433,29 @@ std::optional<HeapPlacement> TextureHeaps::place(
       nvrhi::HeapDesc{}
         .setCapacity(m_heapBytes)
         .setType(nvrhi::HeapType::DeviceLocal)
-        .setDebugName(fmt::format("Lit preview texture heap {}", m_heaps.size())));
+        .setDebugName(fmt::format("Lit preview texture heap {}", index)));
     if (!heap)
     {
       m_lastRefusal = Refusal::NoHeap;
       return std::nullopt;
     }
   }
-  m_heaps.push_back(Heap{std::move(heap), RangeAllocator{m_heapBytes, HeapUnit}});
-  const auto range = m_heaps.back().ranges.allocate(requirements.size, alignment);
+  auto made = Heap{std::move(heap), RangeAllocator{m_heapBytes, HeapUnit}, true};
+  if (index < m_heaps.size())
+  {
+    m_heaps[index] = std::move(made);
+  }
+  else
+  {
+    m_heaps.push_back(std::move(made));
+  }
+  const auto range = m_heaps[index].ranges.allocate(requirements.size, alignment);
   if (!range)
   {
     m_lastRefusal = Refusal::TooLarge;
     return std::nullopt;
   }
-  return remember(texture, HeapPlacement{m_heaps.size() - 1, *range});
+  return remember(texture, HeapPlacement{index, *range});
 }
 
 TextureHeaps::Refusal TextureHeaps::lastRefusal() const
@@ -449,7 +465,8 @@ TextureHeaps::Refusal TextureHeaps::lastRefusal() const
 
 nvrhi::IHeap* TextureHeaps::heap(const std::size_t index) const
 {
-  return index < m_heaps.size() ? m_heaps[index].heap.Get() : nullptr;
+  return index < m_heaps.size() && m_heaps[index].live ? m_heaps[index].heap.Get()
+                                                       : nullptr;
 }
 
 bool TextureHeaps::retire(const nvrhi::ITexture* texture, const std::uint64_t frame)
@@ -477,21 +494,50 @@ bool TextureHeaps::placed(const nvrhi::ITexture* texture) const
   return m_placed.contains(texture);
 }
 
-std::optional<HeapPlacement> TextureHeaps::heapOfForTesting(
+std::optional<HeapPlacement> TextureHeaps::placementOf(
   const nvrhi::ITexture* texture) const
 {
   const auto it = m_placed.find(texture);
   return it != m_placed.end() ? std::optional{it->second} : std::nullopt;
 }
 
+std::optional<HeapPlacement> TextureHeaps::heapOfForTesting(
+  const nvrhi::ITexture* texture) const
+{
+  return placementOf(texture);
+}
+
+std::size_t TextureHeaps::releaseEmpty()
+{
+  auto released = std::size_t{0};
+  for (auto& heap : m_heaps)
+  {
+    if (heap.live && heap.ranges.usedBytes() == 0 && heap.ranges.pendingBytes() == 0)
+    {
+      heap.heap = nullptr;
+      heap.ranges = RangeAllocator{m_heapBytes, HeapUnit};
+      heap.live = false;
+      ++released;
+    }
+  }
+  m_heapsReleased += released;
+  return released;
+}
+
+std::uint64_t TextureHeaps::heapsReleased() const
+{
+  return m_heapsReleased;
+}
+
 std::size_t TextureHeaps::heaps() const
 {
-  return m_heaps.size();
+  return std::size_t(
+    std::ranges::count_if(m_heaps, [](const Heap& heap) { return heap.live; }));
 }
 
 std::uint64_t TextureHeaps::capacityBytes() const
 {
-  return std::uint64_t(m_heaps.size()) * m_heapBytes;
+  return std::uint64_t(heaps()) * m_heapBytes;
 }
 
 std::uint64_t TextureHeaps::usedBytes() const
@@ -519,7 +565,7 @@ std::size_t TextureHeaps::freeRanges() const
   auto ranges = std::size_t{0};
   for (const auto& heap : m_heaps)
   {
-    ranges += heap.ranges.freeRanges();
+    ranges += heap.live ? heap.ranges.freeRanges() : 0;
   }
   return ranges;
 }
@@ -529,7 +575,7 @@ std::uint64_t TextureHeaps::largestFree() const
   auto largest = std::uint64_t{0};
   for (const auto& heap : m_heaps)
   {
-    largest = std::max(largest, heap.ranges.largestFree());
+    largest = std::max(largest, heap.live ? heap.ranges.largestFree() : 0);
   }
   return largest;
 }

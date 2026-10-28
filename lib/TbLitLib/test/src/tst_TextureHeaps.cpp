@@ -283,6 +283,43 @@ TEST_CASE("TextureHeaps")
     heaps.releaseAll();
   }
 
+  SECTION("LP6.4b: an emptied heap is released after reclaim, its index taken again")
+  {
+    auto heaps = TextureHeaps{};
+    heaps.setCpuHeapsForTesting(128 * KiB);
+    const auto textures = fakeTextures(3);
+    const auto a = heaps.place(textures[0].Get(), requirements(128 * KiB, 4 * KiB));
+    const auto b = heaps.place(textures[1].Get(), requirements(64 * KiB, 4 * KiB));
+    REQUIRE(a);
+    REQUIRE(b);
+    CHECK(b->heap == 1u);
+    CHECK(heaps.releaseEmpty() == 0u);
+    // freed in frame 4: pending, never released while a range waits
+    CHECK(heaps.retire(textures[1].Get(), 4));
+    CHECK(heaps.releaseEmpty() == 0u);
+    heaps.reclaim(5);
+    CHECK(heaps.pendingBytes() == 0u);
+    CHECK(heaps.releaseEmpty() == 1u);
+    CHECK(heaps.heapsReleased() == 1u);
+    CHECK(heaps.heaps() == 1u);
+    CHECK(heaps.capacityBytes() == 128 * KiB);
+    CHECK(heaps.freeRanges() == 0u);
+    CHECK(heaps.largestFree() == 0u);
+    CHECK_FALSE(heaps.heap(1));
+    // the next heap made takes the released index; heap 0 is full
+    const auto c = heaps.place(textures[2].Get(), requirements(32 * KiB, 4 * KiB));
+    REQUIRE(c);
+    CHECK(*c == HeapPlacement{1, ArenaRange{0, 32 * KiB}});
+    CHECK(heaps.heaps() == 2u);
+    CHECK(heaps.placementOf(textures[2].Get()) == c);
+    CHECK(heaps.retire(textures[0].Get(), 6));
+    CHECK(heaps.retire(textures[2].Get(), 6));
+    heaps.reclaim(7);
+    CHECK(heaps.releaseEmpty() == 2u);
+    CHECK(heaps.heaps() == 0u);
+    heaps.releaseAll();
+  }
+
   SECTION("without a device or the test mode no heap is made")
   {
     auto heaps = TextureHeaps{};

@@ -757,6 +757,12 @@ void LitSession::setVramBudgetForTesting(const std::uint64_t bytes)
   m_renderThread->setVramBudget(bytes);
 }
 
+void LitSession::setBudgetPassHookForTesting(
+  std::function<void(const BudgetPassReport&)> hook)
+{
+  m_renderThread->setBudgetPassHook(std::move(hook));
+}
+
 void LitSession::skipInteractionsForTesting(const bool skip)
 {
   m_renderThread->setSkipInteractions(skip);

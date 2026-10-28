@@ -98,7 +98,7 @@ BindingSetCache::Entry* BindingSetCache::entryOf(
   const auto [it, inserted] = m_sets.emplace(key, Entry{std::move(set), frame, 0});
   for (const auto& slot : it->first.slots)
   {
-    m_bySlot[slot.slot].insert(&it->first);
+    m_bySlot[slot.slot].emplace(&it->first, &it->second);
   }
   return &it->second;
 }
@@ -116,8 +116,12 @@ std::size_t BindingSetCache::slotChanged(const ImageSlotId slot)
     return 0;
   }
   // copied: erase edits the reverse index
-  const auto keys =
-    std::vector<const BindingSetKey*>{dependent->second.begin(), dependent->second.end()};
+  auto keys = std::vector<const BindingSetKey*>{};
+  keys.reserve(dependent->second.size());
+  for (const auto& [key, entry] : dependent->second)
+  {
+    keys.push_back(key);
+  }
   for (const auto* key : keys)
   {
     erase(m_sets.find(*key));
@@ -183,6 +187,21 @@ std::size_t BindingSetCache::setsOf(const ImageSlotId slot) const
 {
   const auto it = m_bySlot.find(slot);
   return it != m_bySlot.end() ? it->second.size() : 0;
+}
+
+std::optional<std::uint64_t> BindingSetCache::lastBound(const ImageSlotId slot) const
+{
+  const auto it = m_bySlot.find(slot);
+  if (it == m_bySlot.end() || it->second.empty())
+  {
+    return std::nullopt;
+  }
+  auto last = std::uint64_t{0};
+  for (const auto& [key, entry] : it->second)
+  {
+    last = std::max(last, entry->lastUsed);
+  }
+  return last;
 }
 
 std::uint64_t BindingSetCache::made() const

@@ -84,6 +84,11 @@ struct SwapchainGeneration;
  * reading (2)): textureBytes is the texture heaps' capacity plus the slots' dedicated
  * textures, releasedBytes counts only dedicated textures (a heap's freed ranges are
  * inside its capacity); renderTargetBytes is FrameResources' and the passes' targets.
+ * LP6.4b (C68 (b), the director's reading (1)): the live figure the eviction compares
+ * with the budget, the bytes in use: the arenas' and the heaps' used bytes (a heap's
+ * freed ranges waiting for their frames included), the dedicated slot textures, the
+ * targets and what was released; total() (by capacity) stays the VRAM report's, since a
+ * heap's or an arena's capacity falls only when it empties.
  */
 struct GpuMemoryAccount
 {
@@ -93,11 +98,18 @@ struct GpuMemoryAccount
   std::uint64_t releasedBytes = 0;
   std::uint64_t volatileBufferBytes = 0;
   std::uint64_t uploadPoolBytes = 0;
+  // LP6.4b: the live figure's lines
+  std::uint64_t arenaUsedBytes = 0;
+  std::uint64_t heapUsedBytes = 0;
+  std::uint64_t dedicatedTextureBytes = 0;
 
   // the device-local estimate: arenas, textures, targets and what waits for its frames
   std::uint64_t total() const;
   // V2.6: the host-visible column, the volatile buffers and the upload pool
   std::uint64_t hostVisible() const;
+  // LP6.4b: arenaUsedBytes + heapUsedBytes + dedicatedTextureBytes + renderTargetBytes +
+  // releasedBytes
+  std::uint64_t live() const;
 };
 
 // render thread
@@ -211,6 +223,9 @@ struct FrameConvergence
   // LitFrameStats::shadowsPending. Not a re-trigger: the still timer, the pipeline's
   // onReady and the light triangles' job are the triggers
   bool shadowsPending = false;
+  // LP6.4b (C68 (b)): the frame's budget pass left evictions or floors for the next frame
+  // (EvictionsPerFrame); a re-trigger
+  bool budgetLeft = false;
 
   bool settled() const;
   // the frame triggers the next one itself (D77's unconverged pass)
@@ -438,12 +453,21 @@ private:
   std::uint64_t m_feedRecordsTaken = 0;
   // the materialsRevision of the table the frame's lit passes built their lists with
   std::uint64_t m_frameListsRevision = 0;
-  // C11 (U2.6): the account is compared with the device's budget at the session's first
-  // frame and at every settled frame; whether the session said once that it passed it,
-  // and the budget a test set instead of the device's (0: the device's)
+  // C11 (U2.6): VK_EXT_memory_budget's usage and budget are read at the session's first
+  // frame, after a settled frame and while they say over; whether the session said once
+  // that it passed a budget eviction could not bring it under. LP6.4b (C68 (b), Q48): the
+  // session's budget (SessionOptions::vramBudgetBytes, a test's), the extension's last
+  // reading and whether it said over, the live figure at which the pass found nothing
+  // more to let go (no further pass until it changes), and the frame's pass left work
   bool m_budgetChecked = false;
   bool m_budgetWarned = false;
-  std::atomic<std::uint64_t> m_vramBudgetForTesting = 0;
+  std::atomic<std::uint64_t> m_vramBudget = DefaultVramBudgetBytes;
+  std::optional<VramUsage> m_extensionVram;
+  bool m_extensionOver = false;
+  std::optional<std::uint64_t> m_budgetExhaustedLive;
+  bool m_budgetLeft = false;
+  // LP6.4b (C68 (b)) test hook: called after every frame's budget pass (m_mutex)
+  std::function<void(const BudgetPassReport&)> m_budgetPassHook;
   // C38 (LP4.2b): the interactions are not recorded (setSkipInteractions)
   std::atomic<bool> m_skipInteractionsForTesting = false;
   // LP5.0 (D118): r_skipAmbient's stand-in (setSkipShaderPasses), not read by a pass yet
@@ -696,9 +720,13 @@ public:
   // U2.3, any thread: the allocation limit the headroom counts from instead of the
   // device's maxMemoryAllocationCount (0: the device's)
   void setAllocationLimit(std::uint32_t limit);
-  // U2.6, any thread: the budget the account is compared with instead of the device's
-  // (VK_EXT_memory_budget); 0 for the device's
+  // LP6.4b (C68 (b), A57), any thread: the session's eviction budget from the next frame
+  // on (SessionOptions::vramBudgetBytes); 0 for the options' again
   void setVramBudget(std::uint64_t bytes);
+  std::uint64_t vramBudget() const;
+  // LP6.4b, any thread: hook runs on the render thread after every frame's budget pass
+  // until an empty function replaces it (no frame is triggered)
+  void setBudgetPassHook(std::function<void(const BudgetPassReport&)> hook);
   // C38 (LP4.2b), any thread: while set, the frames record no interactions
   // (LitPasses::setSkipInteractionsForTesting); a frame is triggered
   void setSkipInteractions(bool skip);
@@ -728,8 +756,22 @@ private:
   void applyHeadlessResize();
   // the frame's resources at its extent; false: failed
   bool prepareFrameResources(vk::Extent2D extent);
-  // C11, §3.10: at the first frame, the account against VK_EXT_memory_budget's budget
-  void checkVramBudget();
+  // C11, §3.10: says once that the session's GPU memory passes a budget (VK_EXT_memory_
+  // budget's or the session's) that eviction cannot bring it under
+  void warnVramBudget(std::uint64_t used, std::uint64_t budget);
+  /**
+   * LP6.4b (C68 (b), D172, D35, Q48, A54, the director's readings (1)-(4)): after the
+   * frame's passes are recorded (its stamps final), before its convergence: the Evicted
+   * slots a draw of the frame bound (a set of it used this frame) or asked for are asked
+   * again; then, when the live figure passes the session's budget or the extension's
+   * usage its budget, the Resident slots no frame has bound for EvictionIdleFrames
+   * frames, least recently bound first, are evicted until the live figure less what is
+   * let go already is under the budget less a sixteenth, then the bound ones floored,
+   * the largest first; at most EvictionsPerFrame a frame (budgetLeft: the next frame
+   * goes on); nothing left to let go and still over: said once, no further pass until
+   * the live figure changes
+   */
+  void budgetPass();
   // LP6.4a (P8.3): the Start probe of the format classes, its line, the heaps' table
   void probeFormatClassesAtStart();
   // LP6.4a (C68 (a)): the heaps for the status (the measurements)

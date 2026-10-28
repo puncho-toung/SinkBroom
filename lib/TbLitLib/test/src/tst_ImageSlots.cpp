@@ -91,6 +91,8 @@ struct FakeService
   MaterialTable table;
   std::map<std::string, std::shared_ptr<const ImageCacheSlot>> slots;
   int asked = 0;
+  // LP6.4b: the asks per image name
+  std::map<std::string, int> askedFor;
 
   void publish(
     const MaterialImageKey& key, const bool withImage, const std::string& why = {})
@@ -122,6 +124,7 @@ struct FakeService
   {
     return [this](const MaterialImageKey& key) {
       ++asked;
+      ++askedFor[key.name];
       const auto slot = table.findImage(key);
       if (!slot)
       {
@@ -543,6 +546,119 @@ TEST_CASE("ImageSlots")
     CHECK(slots.takeChangedSlots() == std::vector<ImageSlotId>{id});
   }
 
+  SECTION("LP6.4b (C68 (b), D172): Evicted binds its intrinsic, asked again when drawn")
+  {
+    auto service = FakeService{};
+    const auto key = keyOf("textures/e", UsageDiffuse);
+    service.publish(key, true);
+    auto slots = ImageSlots{};
+    slots.setRequest(service.request());
+    const auto id = slots.request(key);
+    slots.attachTexture(id, fakeTexture(), 3, 84);
+    slots.levelsWritten(id, 0);
+    slots.dropPixels(id);
+    REQUIRE(slots.slot(id)->state == ImageSlots::State::Resident);
+    static_cast<void>(slots.takeChangedSlots());
+    const auto version = slots.slot(id)->version;
+    const auto asked = service.askedFor[key.name];
+    const auto pending = slots.pending();
+    const auto states = slots.stateVersion();
+
+    // an intrinsic, and a slot without a complete texture, are never evicted
+    CHECK(slots.evict(slots.slot(id)->intrinsic, 5) == 0u);
+    const auto loadingKey = keyOf("textures/e_loading", UsageDiffuse);
+    service.publish(loadingKey, true);
+    const auto loading = slots.request(loadingKey);
+    CHECK(slots.evict(loading, 5) == 0u);
+    static_cast<void>(slots.takeChangedSlots());
+
+    // evicted in frame 5: its texture retired with the frame, its intrinsic bound, its
+    // version bumped, not pending, the image's facts kept
+    CHECK(slots.evict(id, 5) == 84u);
+    CHECK(slots.slot(id)->state == ImageSlots::State::Evicted);
+    CHECK_FALSE(slots.slot(id)->texture);
+    CHECK(slots.slot(id)->version == version + 1);
+    CHECK(slots.takeChangedSlots() == std::vector<ImageSlotId>{id});
+    CHECK(slots.binding(id).intrinsic);
+    CHECK(slots.pending() == pending);
+    CHECK(slots.resident() == 0u);
+    CHECK(slots.retiredBytes() == 84u);
+    CHECK(slots.stateVersion() > states);
+    CHECK(slots.evicted() == 1u);
+    CHECK(slots.evictedSlots() == std::vector<ImageSlotId>{id});
+    CHECK(slots.evictions() == 1u);
+    CHECK(slots.slot(id)->adoptedUsage);
+    CHECK(slots.evict(id, 6) == 0u);
+
+    // a new table, a changed file: never asked (the director's reading (3))
+    ++service.table.version;
+    slots.refresh(service.table, 6);
+    service.change(key);
+    service.publish(key, true);
+    slots.refresh(service.table, 7);
+    CHECK(service.askedFor[key.name] == asked);
+    CHECK(slots.slot(id)->state == ImageSlots::State::Evicted);
+
+    // a draw asked for it by its state: asked again at the frame's end, as a first
+    // request (Loading: the service has its image)
+    slots.want(loading);
+    CHECK_FALSE(slots.wanted(loading));
+    slots.want(id);
+    CHECK(slots.wanted(id));
+    slots.reRequestEvicted(id, 8);
+    CHECK(service.askedFor[key.name] == asked + 1);
+    CHECK(slots.slot(id)->state == ImageSlots::State::Loading);
+    CHECK(slots.slot(id)->pixels);
+    CHECK(slots.evicted() == 0u);
+    CHECK_FALSE(slots.wanted(id));
+    slots.reRequestEvicted(id, 8);
+    CHECK(service.askedFor[key.name] == asked + 1);
+    slots.collectRetired(6);
+    CHECK(slots.retiredBytes() == 0u);
+  }
+
+  SECTION("LP6.4b (C68 (b)): the mip floor through Replacing, the complete one bound")
+  {
+    auto service = FakeService{};
+    const auto key = keyOf("textures/f", UsageDiffuse);
+    service.publish(key, true);
+    auto slots = ImageSlots{};
+    slots.setRequest(service.request());
+    const auto id = slots.request(key);
+    slots.attachTexture(id, fakeTexture(), 3, 84);
+    slots.levelsWritten(id, 0);
+    slots.dropPixels(id);
+    static_cast<void>(slots.takeChangedSlots());
+    const auto version = slots.slot(id)->version;
+
+    CHECK(slots.floor(id, 4));
+    CHECK(slots.slot(id)->floored);
+    CHECK(slots.slot(id)->state == ImageSlots::State::Replacing);
+    CHECK(slots.slot(id)->version == version);
+    CHECK_FALSE(slots.binding(id).intrinsic);
+    CHECK(slots.binding(id).texture);
+    CHECK(slots.floored() == 1u);
+    CHECK(slots.floors() == 1u);
+    CHECK(slots.flooringBytes() == 84u);
+    CHECK_FALSE(slots.floor(id, 4));
+
+    // the floor texture written: the swap, the floor mark kept
+    slots.attachTexture(id, fakeTexture(), 1, 16);
+    slots.levelsWritten(id, 0);
+    slots.dropPixels(id);
+    CHECK(slots.slot(id)->state == ImageSlots::State::Resident);
+    CHECK(slots.slot(id)->floored);
+    CHECK(slots.slot(id)->version == version + 1);
+    CHECK(slots.flooringBytes() == 0u);
+    CHECK(slots.floored() == 1u);
+    CHECK_FALSE(slots.floor(id, 5));
+
+    // the eviction clears it: a later request makes the whole texture again
+    CHECK(slots.evict(id, 9) == 16u);
+    CHECK_FALSE(slots.slot(id)->floored);
+    CHECK(slots.floored() == 0u);
+  }
+
   SECTION("LP6.1 (C64, P8.1): an answer's adopted usage is reported, a request's not")
   {
     auto service = FakeService{};
@@ -679,6 +795,27 @@ TEST_CASE("BindingSetCache")
     made = 0;
     cache.get(keyOf({{0, 2}, {1, 1}}), 2, make);
     CHECK(made == 1);
+  }
+
+  SECTION("LP6.4b (D172, A54): a slot's last-bound frame is the max lastUsed of its sets")
+  {
+    auto cache = BindingSetCache{16};
+    CHECK_FALSE(cache.lastBound(0));
+    cache.get(keyOf({{0, 1}, {1, 1}}), 3, make);
+    cache.get(keyOf({{0, 1}}), 5, make);
+    CHECK(cache.lastBound(0) == 5u);
+    CHECK(cache.lastBound(1) == 3u);
+    // a record's per-frame stamp moves it through the entry it holds
+    auto* entry = cache.hold(keyOf({{1, 1}}), 4, make);
+    REQUIRE(entry);
+    CHECK(cache.lastBound(1) == 4u);
+    entry->lastUsed = 9;
+    CHECK(cache.lastBound(1) == 9u);
+    BindingSetCache::release(*entry);
+    // the slot's sets go with its bump: none holds it any more
+    cache.slotChanged(0);
+    CHECK_FALSE(cache.lastBound(0));
+    CHECK(cache.lastBound(1) == 9u);
   }
 
   SECTION("the render-target generation erases only the sets that bind a target")

@@ -133,7 +133,9 @@ void ImageSlots::refresh(const MaterialTable& table, const std::uint64_t frame)
     for (ImageSlotId id = 0; id < ImageSlotId(m_slots.size()); ++id)
     {
       const auto& slot = m_slots[id];
-      if (slot.state == State::Pending)
+      // LP6.4b (the director's reading (3)): an Evicted slot holds no image; the newest
+      // is answered when a frame draws it again
+      if (slot.state == State::Pending || slot.state == State::Evicted)
       {
         continue;
       }
@@ -254,6 +256,130 @@ void ImageSlots::dropTexture(const ImageSlotId id, const std::uint64_t frame)
 {
   m_frame = std::max(m_frame, frame);
   reRequest(id, frame, false);
+}
+
+std::uint64_t ImageSlots::evict(const ImageSlotId id, const std::uint64_t frame)
+{
+  if (id >= m_slots.size())
+  {
+    return 0;
+  }
+  auto& slot = m_slots[id];
+  const auto complete = slot.state == State::Resident && slot.texture
+                        && slot.firstWrittenMip == 0 && slot.mipLevels > 0;
+  if (!complete || slot.intrinsic == NoImageSlot)
+  {
+    return 0;
+  }
+  m_frame = std::max(m_frame, frame);
+  // D35: held until the frames that may bind it have finished; its heap range with it
+  const auto placement =
+    m_heaps ? m_heaps->placementOf(slot.texture.Get()) : std::nullopt;
+  const auto bytes = placement ? placement->range.size : slot.textureBytes;
+  retire(slot.texture, slot.textureBytes, frame);
+  slot.texture = nullptr;
+  slot.mipLevels = 0;
+  slot.firstWrittenMip = 0;
+  slot.textureBytes = 0;
+  slot.pixels.reset();
+  slot.waitsForRoom = false;
+  slot.floored = false;
+  slot.state = State::Evicted;
+  ++m_stateVersion;
+  ++m_evictions;
+  bump(id);
+  m_evicted.insert(id);
+  return bytes;
+}
+
+void ImageSlots::want(const ImageSlotId id)
+{
+  if (id < m_slots.size() && m_slots[id].state == State::Evicted)
+  {
+    m_wanted.insert(id);
+  }
+}
+
+bool ImageSlots::wanted(const ImageSlotId id) const
+{
+  return m_wanted.contains(id);
+}
+
+std::vector<ImageSlotId> ImageSlots::evictedSlots() const
+{
+  auto ids = std::vector<ImageSlotId>{m_evicted.begin(), m_evicted.end()};
+  std::ranges::sort(ids);
+  return ids;
+}
+
+std::size_t ImageSlots::evicted() const
+{
+  return m_evicted.size();
+}
+
+void ImageSlots::clearWanted()
+{
+  m_wanted.clear();
+}
+
+void ImageSlots::reRequestEvicted(const ImageSlotId id, const std::uint64_t frame)
+{
+  if (id < m_slots.size() && m_slots[id].state == State::Evicted)
+  {
+    m_frame = std::max(m_frame, frame);
+    reRequest(id, frame, false);
+  }
+}
+
+bool ImageSlots::floor(const ImageSlotId id, const std::uint64_t frame)
+{
+  if (id >= m_slots.size())
+  {
+    return false;
+  }
+  auto& slot = m_slots[id];
+  const auto complete = slot.state == State::Resident && slot.texture
+                        && slot.firstWrittenMip == 0 && slot.mipLevels > 0;
+  if (!complete || slot.floored || slot.intrinsic == NoImageSlot)
+  {
+    return false;
+  }
+  m_frame = std::max(m_frame, frame);
+  slot.floored = true;
+  ++m_floors;
+  reRequest(id, frame, true);
+  return true;
+}
+
+std::uint64_t ImageSlots::evictions() const
+{
+  return m_evictions;
+}
+
+std::uint64_t ImageSlots::floors() const
+{
+  return m_floors;
+}
+
+std::size_t ImageSlots::floored() const
+{
+  return std::size_t(std::ranges::count_if(m_slots, [](const Slot& slot) {
+    return slot.floored
+           && (slot.state == State::Resident || slot.state == State::Replacing);
+  }));
+}
+
+std::uint64_t ImageSlots::flooringBytes() const
+{
+  auto bytes = std::uint64_t{0};
+  for (const auto& slot : m_slots)
+  {
+    if (slot.floored && slot.state == State::Replacing && slot.replaced)
+    {
+      bytes += slot.replacedBytes;
+    }
+  }
+  return bytes;
 }
 
 ImageSlots::Binding ImageSlots::binding(const ImageSlotId id) const
@@ -457,6 +583,8 @@ void ImageSlots::releaseAll()
   m_pending.clear();
   m_changed.clear();
   m_usageChanged.clear();
+  m_evicted.clear();
+  m_wanted.clear();
 }
 
 std::uint64_t ImageSlots::stateVersion() const
@@ -543,6 +671,9 @@ void ImageSlots::reRequest(
   const ImageSlotId id, const std::uint64_t frame, const bool keepComplete)
 {
   auto& slot = m_slots[id];
+  // LP6.4b: an Evicted slot asked again is a first request's
+  m_evicted.erase(id);
+  m_wanted.erase(id);
   const auto complete = slot.state == State::Resident && slot.texture
                         && slot.firstWrittenMip == 0 && slot.mipLevels > 0;
   if (keepComplete && (complete || slot.state == State::Replacing))

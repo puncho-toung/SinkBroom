@@ -270,10 +270,18 @@ struct FrameLogRow
   // LP6.4a (C68 (a), C65), frame rows and the stop row: the texture heaps live, the bytes
   // their ranges hold (TextureHeaps::usedBytes: handed out, the freed ones waiting for
   // their frames included) and the slots' textures outside the heaps, live; empty in a
-  // start row, the last columns
+  // start row
   std::optional<std::uint64_t> textureHeaps;
   std::optional<std::uint64_t> heapBytes;
   std::optional<std::uint64_t> texturesDedicated;
+  // LP6.4b (C68 (b)-(d), C65), frame rows: the session's evictions so far, the slots at
+  // the mip floor now, the fed images written in place so far and the arena bytes the
+  // compactions moved so far (an event row's own figures where it has them); the last
+  // columns
+  std::optional<std::uint64_t> texturesEvicted;
+  std::optional<std::uint64_t> texturesFloored;
+  std::optional<std::uint64_t> feedsInPlace;
+  std::optional<std::uint64_t> arenaMovedBytes;
 };
 
 // the CSV header line, ending in a newline

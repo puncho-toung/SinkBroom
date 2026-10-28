@@ -21,6 +21,7 @@
 
 #include "base/Macros.h"
 #include "base/Result.h"
+#include "lit/LitConfig.h"
 #include "lit/VulkanInstance.h"
 
 #include "vm/vec.h"
@@ -44,6 +45,7 @@ enum class TextureDimension : std::uint8_t;
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace tb::lit
@@ -70,6 +72,10 @@ struct SessionOptions
   // (RenderBackend.cpp:1417, 1541, 3605), for a test about something else than shadows
   // whose scene has casting lights
   bool skipShadowsForTesting = false;
+  // LP6.4b (C68 (b), C11, A57, Q48): the eviction's budget for the session's GPU memory
+  // in use (the live figure); VK_EXT_memory_budget's own budget is the second trigger.
+  // C11's panel setting is this field (its control comes with LP6.6)
+  std::uint64_t vramBudgetBytes = DefaultVramBudgetBytes;
 };
 
 // D9: a program the compile thread was asked for, and whether the preview can draw with
@@ -157,6 +163,16 @@ struct SessionStatus
   std::uint64_t vramArenaBytes = 0;
   std::uint64_t vramRenderTargetBytes = 0;
   std::uint64_t vramReleasedBytes = 0;
+  // LP6.4b (C68 (b), the director's reading (1)): the live figure the eviction compares
+  // with the session's budget (vramBudgetBytes), its lines beside the ones above (the
+  // arenas' and the heaps' used bytes), the session's evictions so far and the slots at
+  // the mip floor now
+  std::uint64_t vramLiveBytes = 0;
+  std::uint64_t vramArenaUsedBytes = 0;
+  std::uint64_t vramHeapUsedBytes = 0;
+  std::uint64_t vramBudgetBytes = 0;
+  std::uint64_t texturesEvicted = 0;
+  std::size_t texturesFloored = 0;
   // LP6.4a: the slots' texture heaps
   TextureHeapStatus heaps;
   // LP4.1 (D90's first half, C32): the view's portal flow: the view's area (-1 outside
@@ -339,6 +355,25 @@ struct LdrImage
   std::uint32_t width = 0;
   std::uint32_t height = 0;
   std::vector<std::uint8_t> rgba;
+};
+
+/**
+ * LP6.4b (C68 (b), D172), tests: what a frame's budget pass did: the frame, the slots it
+ * evicted with their last-bound frames, those it floored and the Evicted ones it asked
+ * again, the slots a set of the frame bound (their last-bound frame is the frame: the
+ * stamp), and the live figure, the budget and whether either trigger was passed.
+ */
+struct BudgetPassReport
+{
+  std::uint64_t frame = 0;
+  std::vector<std::pair<std::uint32_t, std::uint64_t>> evicted;
+  std::vector<std::uint32_t> floored;
+  std::vector<std::uint32_t> reRequested;
+  std::vector<std::uint32_t> drawn;
+  std::uint64_t liveBytes = 0;
+  std::uint64_t budgetBytes = 0;
+  bool over = false;
+  bool left = false;
 };
 
 // The device-local heaps' VRAM, from VK_EXT_memory_budget.
@@ -781,10 +816,12 @@ public:
   // U2.3, any thread: the allocation limit the headroom (AllocationHeadroom) counts from
   // instead of the device's maxMemoryAllocationCount; 0 for the device's
   void setAllocationLimitForTesting(std::uint32_t limit);
-  // U2.6, any thread: the budget the session's GPU memory account is compared with, at
-  // the first frame and at every settled frame, instead of the device's
-  // (VK_EXT_memory_budget); 0 for the device's
+  // U2.6, LP6.4b (C68 (b)), any thread: the session's eviction budget
+  // (SessionOptions::vramBudgetBytes) from the next frame on; 0 for the options' again
   void setVramBudgetForTesting(std::uint64_t bytes);
+  // LP6.4b, any thread: hook runs on the render thread after every frame's budget pass
+  // (BudgetPassReport) until an empty function replaces it; no frame is triggered
+  void setBudgetPassHookForTesting(std::function<void(const BudgetPassReport&)> hook);
   /**
    * C38 (LP4.2b's ambient-only parity rows, mirror.json M-TEST-AMB-01), any thread: while
    * on, the frames do not record the interactions pass, as the engine's

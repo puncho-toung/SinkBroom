@@ -63,7 +63,16 @@ constexpr auto TextureArrivalInterval = std::chrono::milliseconds{100};
 constexpr auto BindingSetCacheSize = std::size_t{4096};
 
 // C11 (LP2.1): the texture budget's default (the panel setting comes later), which covers
-// the session's whole VRAM (§3.10)
+// the session's whole VRAM (§3.10); LP6.4b (C68 (b), A57):
+// SessionOptions::vramBudgetBytes, the eviction's budget
 constexpr auto DefaultVramBudgetBytes = std::uint64_t{1024} * 1024 * 1024;
+
+// LP6.4b (C68 (b), D172): a slot no frame has bound for this many frames may be evicted;
+// a frame evicts, or floors, at most EvictionsPerFrame slots (the rest wait for the next
+// frame, which it triggers); the mip floor keeps an image's levels from the first whose
+// width and height are both at most MipFloorExtent (at least its last level)
+constexpr auto EvictionIdleFrames = std::uint64_t{4};
+constexpr auto EvictionsPerFrame = std::size_t{64};
+constexpr auto MipFloorExtent = 256;
 
 } // namespace tb::lit

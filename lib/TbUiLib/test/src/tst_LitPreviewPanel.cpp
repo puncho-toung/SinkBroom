@@ -1762,8 +1762,9 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     // LP6.1 (C64): the draw records' two, 110; LP6.2 (C65): lists_ms's three parts, 113,
     // (C66, D169) the caster sets made and the tiles drawn again for an image, 115;
     // LP6.4a (C68 (a)): the texture heaps, their bytes and the dedicated slot textures,
-    // 118
-    REQUIRE(rows[0].size() == 118u);
+    // 118; LP6.4b (C68 (b)-(d)): the evictions, the floored slots, the in-place feeds and
+    // the arena bytes moved, 122
+    REQUIRE(rows[0].size() == 122u);
     CHECK(rows[0][70] == "shadow_draws");
     CHECK(rows[0][84] == "sm_draws_local");
     CHECK(rows[0][93] == "light_triangle_entries");
@@ -1800,7 +1801,7 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     auto presentMs = std::vector<double>{};
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 118u);
+      REQUIRE(rows[i].size() == 122u);
       sessions.insert(rows[i][0]);
       if (rows[i][1] == "start")
       {

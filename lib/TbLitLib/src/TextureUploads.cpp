@@ -144,6 +144,24 @@ Result<std::uint64_t> levelUploadBytes(
   return bytes;
 }
 
+int mipFloorLevel(const std::uint32_t width, const std::uint32_t height, const int levels)
+{
+  if (levels < 1)
+  {
+    return 0;
+  }
+  for (auto level = 0; level < levels; ++level)
+  {
+    const auto w = std::max(width >> std::uint32_t(level), 1u);
+    const auto h = std::max(height >> std::uint32_t(level), 1u);
+    if (w <= std::uint32_t(MipFloorExtent) && h <= std::uint32_t(MipFloorExtent))
+    {
+      return level;
+    }
+  }
+  return levels - 1;
+}
+
 TextureUploads::TextureUploads(const bool d24s8Supported)
   : m_d24s8Supported{d24s8Supported}
 {
@@ -178,6 +196,13 @@ bool TextureUploads::record(
       slots.refuse(id, "the image's bytes are gone before they were written");
       continue;
     }
+    // LP6.4b (the director's reading (4)): a floored slot's texture starts at the image's
+    // mip floor
+    const auto floorLevel = slot->floored ? mipFloorLevel(
+                                              std::uint32_t(std::max(image->width, 1)),
+                                              std::uint32_t(std::max(image->height, 1)),
+                                              image->numLevels)
+                                          : 0;
 
     if (!slot->texture)
     {
@@ -189,7 +214,10 @@ bool TextureUploads::record(
       {
         levelUploadBytes(*image, level)
           | kdl::transform([&](const std::uint64_t levelBytes) {
-              bytes += levelBytes;
+              if (level.level >= floorLevel)
+              {
+                bytes += levelBytes;
+              }
               if (level.level >= 0 && level.level < image->numLevels)
               {
                 perLevel[std::size_t(level.level)] += levelBytes;
@@ -203,7 +231,9 @@ bool TextureUploads::record(
       }
       // U3.16: a level larger than a frame's cap would be one writeTexture through one
       // upload chunk of its size (the engine writes it whole: mirror.json M-TEX-DIFF-02)
-      for (std::size_t level = 0; problem.empty() && level < perLevel.size(); ++level)
+      for (auto level = std::size_t(floorLevel);
+           problem.empty() && level < perLevel.size();
+           ++level)
       {
         if (perLevel[level] > UploadBytesPerFrame)
         {
@@ -221,6 +251,22 @@ bool TextureUploads::record(
         engineTextureDesc(*image, m_d24s8Supported, slot->key.name)
           | kdl::transform([&](nvrhi::TextureDesc made) { desc = std::move(made); })
           | kdl::if_error([&](const auto& e) { problem = e.msg; }) | kdl::ignore();
+      }
+      if (desc && floorLevel > 0)
+      {
+        // the floor's level as the texture's first, its size in whole blocks as the
+        // engine's (Image_NVRHI.cpp:473-477)
+        auto width =
+          std::max(std::uint32_t(image->width) >> std::uint32_t(floorLevel), 1u);
+        auto height =
+          std::max(std::uint32_t(image->height) >> std::uint32_t(floorLevel), 1u);
+        if (blockCompressed(image->format))
+        {
+          width = (width + 3) & ~3u;
+          height = (height + 3) & ~3u;
+        }
+        desc->setWidth(width).setHeight(height).setMipLevels(
+          std::uint32_t(image->numLevels - floorLevel));
       }
       auto texture = nvrhi::TextureHandle{};
       auto roomRefused = false;
@@ -333,7 +379,7 @@ bool TextureUploads::record(
         slots.refuse(id, problem);
         continue;
       }
-      slots.attachTexture(id, std::move(texture), image->numLevels, bytes);
+      slots.attachTexture(id, std::move(texture), image->numLevels - floorLevel, bytes);
       ++m_texturesMade;
     }
 
@@ -345,7 +391,8 @@ bool TextureUploads::record(
       auto levelBytes = std::uint64_t{0};
       for (const auto& record : image->levels)
       {
-        if (record.level == level)
+        // LP6.4b: a floored texture's level is the image's less the floor
+        if (record.level == level + floorLevel)
         {
           records.push_back(&record);
           levelBytes +=
@@ -364,7 +411,7 @@ bool TextureUploads::record(
         commandList.writeTexture(
           slot->texture,
           std::uint32_t(record->destZ),
-          std::uint32_t(record->level),
+          std::uint32_t(record->level - floorLevel),
           image->data.data() + record->offset,
           std::size_t(pitch));
       }

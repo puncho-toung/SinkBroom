@@ -152,9 +152,10 @@ struct HeapPlacement
  * new heap is an allocation; a texture that fits a heap makes none and is never refused
  * for the headroom). A texture let go frees its range stamped with the frame, handed out
  * again only once that frame has finished (reclaim; D35: its handle is held by
- * RetiredResources until the same frame). Heaps are not released before teardown (the
- * director's reading (5): LP6.4b compacts and releases); a heap outlives every texture
- * bound into it (NVRHI's Heap::~Heap frees the memory; a bound texture holds its heap).
+ * RetiredResources until the same frame). LP6.4b (the director's reading (7)): a heap
+ * that holds no range any more, none pending, is released after reclaim (releaseEmpty),
+ * its index kept; a heap outlives every texture bound into it (NVRHI's Heap::~Heap frees
+ * the memory; a bound texture, a retired one too, holds its heap).
  *
  * Threads: the render thread; releaseAll in teardown step 2 after the slots' textures.
  */
@@ -178,6 +179,9 @@ private:
   {
     nvrhi::HeapHandle heap;
     RangeAllocator ranges;
+    // LP6.4b (the director's reading (7)): false once released (its index kept, reused
+    // by the next heap made)
+    bool live = true;
   };
 
   nvrhi::IDevice* m_device = nullptr;
@@ -189,6 +193,7 @@ private:
   std::uint64_t m_headroomRefusals = 0;
   Refusal m_lastRefusal = Refusal::None;
   std::optional<FormatClassTable> m_classes;
+  std::uint64_t m_heapsReleased = 0;
   // the largest and smallest range placed so far, and the textures placed so far
   std::uint64_t m_largestPlaced = 0;
   std::uint64_t m_smallestPlaced = 0;
@@ -229,11 +234,23 @@ public:
   // the ranges freed in frames that have finished (frames 0 to completedFrames - 1)
   void reclaim(std::uint64_t completedFrames);
 
-  // whether texture is in a heap, and where (tests)
+  // whether texture is in a heap, and where (LP6.4b: the eviction's bytes; tests)
   bool placed(const nvrhi::ITexture* texture) const;
+  std::optional<HeapPlacement> placementOf(const nvrhi::ITexture* texture) const;
   std::optional<HeapPlacement> heapOfForTesting(const nvrhi::ITexture* texture) const;
 
-  // C11, C16: the heaps made, their bytes (heaps × HeapBytes), the bytes handed out
+  /**
+   * LP6.4b (C68 (b), the director's reading (7)), after reclaim: a heap with no range
+   * handed out (none placed, none pending) is released, its handle let go (its memory
+   * freed once no texture bound into it lives: a retired texture holds its heap); its
+   * index stays (a placement's heap) and the next heap made takes it. How many.
+   */
+  std::size_t releaseEmpty();
+  // the heaps released so far
+  std::uint64_t heapsReleased() const;
+
+  // C11, C16: the heaps made (LP6.4b: and not released), their bytes (heaps ×
+  // HeapBytes), the bytes handed out
   // (the ranges placed and those freed and waiting for their frames), the textures placed
   std::size_t heaps() const;
   std::uint64_t capacityBytes() const;

@@ -309,6 +309,13 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
     {
       return ProbeImageState::Pending;
     }
+    // LP6.4b (D172): an evicted probe image the view chose is asked again at the frame's
+    // end (its 2D stand-in is never a cube, so no set ever names it)
+    if (slot->state == ImageSlots::State::Evicted)
+    {
+      images.want(id);
+      return ProbeImageState::Pending;
+    }
     if (slot->state == ImageSlots::State::Default)
     {
       return ProbeImageState::Defaulted;
@@ -568,10 +575,11 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
       {
         const auto id = area.hasPoints ? inputs.images->find(area.atlas) : std::nullopt;
         const auto* slot = id ? inputs.images->slot(*id) : nullptr;
-        // LPF.1 (C40): a Replacing atlas binds its complete texture
+        // LPF.1 (C40): a Replacing atlas binds its complete texture; LP6.4b (D172): an
+        // Evicted one is asked again by the ambient draw that needs it
         const auto valid =
           slot
-          && (slot->state == ImageSlots::State::Resident || slot->state == ImageSlots::State::Loading || slot->state == ImageSlots::State::Replacing);
+          && (slot->state == ImageSlots::State::Resident || slot->state == ImageSlots::State::Loading || slot->state == ImageSlots::State::Replacing || slot->state == ImageSlots::State::Evicted);
         hash = (hash ^ (valid ? 2u : 1u)) * 1099511628211ull;
       }
       m_gridValidity = hash;
@@ -650,7 +658,7 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
       const auto id = inputs.images->find(grid->atlas);
       const auto* slot = id ? inputs.images->slot(*id) : nullptr;
       return slot
-             && (slot->state == ImageSlots::State::Resident || slot->state == ImageSlots::State::Loading || slot->state == ImageSlots::State::Replacing);
+             && (slot->state == ImageSlots::State::Resident || slot->state == ImageSlots::State::Loading || slot->state == ImageSlots::State::Replacing || slot->state == ImageSlots::State::Evicted);
     };
   }
   frontend.material = [&](const std::string& name) {
@@ -2143,7 +2151,11 @@ void LitPasses::recordAmbient(Frame& frame)
         // binds only its own written levels: Loading without one is not drawn yet
         if (!resolved)
         {
-          const auto binding = images.binding(askSlot(images, grid->atlas));
+          const auto atlasSlot = askSlot(images, grid->atlas);
+          // LP6.4b (D172): an Evicted atlas binds nothing here: asked again at the
+          // frame's end
+          images.want(atlasSlot);
+          const auto binding = images.binding(atlasSlot);
           if (!binding.texture || binding.intrinsic)
           {
             ++m_stats.skippedDraws;
@@ -3636,6 +3648,11 @@ std::optional<MaterialImageKey> LitPasses::stageImage(
   case ImageSlots::State::Pending:
     // not answered yet: the engine has its image loaded before it draws
     return std::nullopt;
+  case ImageSlots::State::Evicted:
+    // LP6.4b (D172): let go for the budget: asked again at the frame's end, not drawn
+    // until it is back (as Pending)
+    images.want(images.request(key));
+    return std::nullopt;
   case ImageSlots::State::Loading: {
     // its written levels, or none yet (the intrinsic would stand in)
     const auto binding = images.binding(images.request(key));
@@ -3669,6 +3686,10 @@ std::pair<MaterialImageKey, bool> LitPasses::cubeImage(
   case ImageSlots::State::Default:
     return {zeroCube, false};
   case ImageSlots::State::Pending:
+    return {zeroCube, true};
+  case ImageSlots::State::Evicted:
+    // LP6.4b (D172): asked again at the frame's end; the zero cube meanwhile
+    images.want(id);
     return {zeroCube, true};
   case ImageSlots::State::Loading: {
     const auto binding = images.binding(id);

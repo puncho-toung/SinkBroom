@@ -105,6 +105,21 @@ TEST_CASE("TextureUploads")
     CHECK(levelUploadBytes(unknown, unknown.levels[0]).is_error());
   }
 
+  SECTION("LP6.4b (C68 (b)): mipFloorLevel, the first level of at most 256 x 256")
+  {
+    CHECK(mipFloorLevel(256, 256, 9) == 0);
+    CHECK(mipFloorLevel(64, 32, 7) == 0);
+    CHECK(mipFloorLevel(512, 512, 10) == 1);
+    CHECK(mipFloorLevel(1024, 1024, 11) == 2);
+    CHECK(mipFloorLevel(1024, 64, 11) == 2);
+    CHECK(mipFloorLevel(64, 2048, 12) == 3);
+    CHECK(mipFloorLevel(300, 200, 9) == 1);
+    // at least the last level
+    CHECK(mipFloorLevel(1024, 1024, 2) == 1);
+    CHECK(mipFloorLevel(4096, 4096, 1) == 0);
+    CHECK(mipFloorLevel(1024, 1024, 0) == 0);
+  }
+
   SECTION("engineTextureDesc: AllocImage's texture")
   {
     // a BC image's size in whole blocks; RGB565 arrives as RGBA8
