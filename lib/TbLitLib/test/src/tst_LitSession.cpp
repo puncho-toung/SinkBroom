@@ -7994,6 +7994,43 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
   }
   const auto root = std::filesystem::path{rootValue};
   const auto out = std::filesystem::path{outValue};
+  // LP6.5a (D185, the director's reading (1)): the rows' sessions run with SSAO, so the
+  // 24 rows of litpreview_ambient.map (the one baked map, SC817) move on the preview's
+  // side and compare reports them (their thresholds and the engine's side are LP6.5c's).
+  // parity.py's BLOBS (TOOLS) has no gbuffer or SSAO blob until LP6.5c, so the sessions
+  // read their blobs from a copy in the temp folder: the preview root's renderprogs2
+  // tree (every other program as before) and the five blobs of passes 3 and 4 from the
+  // game folder (read only); the preview root and the game folder are never written
+  const auto* gameValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gameValue || !*gameValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the rows' SSAO blobs come from the game folder");
+  }
+  const auto blobRoot =
+    std::filesystem::temp_directory_path() / "TbLitLibTest-parity-blobs";
+  {
+    std::filesystem::remove_all(blobRoot);
+    const auto spirv = std::filesystem::path{"base"} / "renderprogs2";
+    std::filesystem::create_directories(blobRoot / spirv);
+    std::filesystem::copy(
+      root / spirv, blobRoot / spirv, std::filesystem::copy_options::recursive);
+    const auto game = std::filesystem::path{gameValue};
+    for (const auto& [name, stage] : std::vector<std::pair<std::string, ShaderStage>>{
+           {"builtin/gbuffer", ShaderStage::Vertex},
+           {"builtin/gbuffer", ShaderStage::Pixel},
+           {"builtin/SSAO/ssao_deinterleave", ShaderStage::Compute},
+           {"builtin/SSAO/ssao_compute", ShaderStage::Compute},
+           {"builtin/SSAO/ssao_blur", ShaderStage::Compute}})
+    {
+      const auto relative = std::filesystem::path{"base"} / shaderBlobPath(name, stage);
+      REQUIRE(std::filesystem::exists(game / relative));
+      std::filesystem::create_directories((blobRoot / relative).parent_path());
+      std::filesystem::copy_file(
+        game / relative,
+        blobRoot / relative,
+        std::filesystem::copy_options::overwrite_existing);
+    }
+  }
   const auto rowsText = readTextFile(root / "parity" / "rows.json");
   const auto record = JsonReader{rowsText}.value();
   REQUIRE(record);
@@ -8044,8 +8081,11 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
     auto height = std::uint32_t(record->numberOr("height", 720.0));
     auto options = SessionOptions{};
     options.validation = true;
-    options.gamePath = root;
+    // LP6.5a: the blobs' copy (above); every other file through the service, from root
+    options.gamePath = blobRoot;
     options.frameLogPath = frameLog;
+    // LP6.5a (D185, the director's reading (1)): SSAO on in the rows' sessions
+    options.ssaoForTesting = true;
     const auto created = std::chrono::steady_clock::now();
     auto session = LitSession::create(
                      instance.handles(),

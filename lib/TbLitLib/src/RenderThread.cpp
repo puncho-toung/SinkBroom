@@ -2800,6 +2800,8 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
                        + litStats.ambientDraws + litStats.interactionDraws
                        + litStats.stageDraws + litStats.fogDraws + litStats.blendDraws
                        + tonemap.draws;
+        status.gbufferDraws = litStats.gbufferDraws;
+        status.ssaoRan = litStats.ssaoRan;
         status.skippedDraws = litStats.skippedDraws;
         status.pendingPipelines = litStats.pendingPipelines + tonemap.pendingPipelines;
         const auto account = accountGpuMemory(

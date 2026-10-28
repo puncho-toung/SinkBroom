@@ -16030,7 +16030,7 @@
           "symbol": "LitPasses::recordStages, LitPasses::stageImage"
         }
       ],
-      "note": "LP2.2a (D52, D77): the engine has every material and its registers before it draws; the preview's arrive from the parse thread. A chunk whose material or registers are pending is drawn solid in the prepass (not when its known material is translucent) and lit through the bump _flat and the diffuse _default, and the frame is unconverged; until a new evaluation arrives a consumer (an entity or a light) keeps its last registers of the material, never the defaults, so a light-colour drag never flickers LP5.2a (D124, P6.6): pass 8 never draws a surface whose material or registers are pending (the engine never draws one): it is skipped, counted in stagePending, and the frame stays unconverged; kept registers (D52) are drawn; a stage image Pending, or Loading without a written level, skips its draw (unconverged), a Default slot binds _default as the engine binds it for an image not loaded or defaulted (M-STAGE-05) LP5.3 (D124, P6.6): pass 9 draws a fog or blend light from its kept registers (provisional, the frame unconverged) and never a first-seen one (the frontend skips it, D52); a blend light's stage or falloff image Pending, or Loading without a level, skips its draws (unconverged), Default binds _default; the fog intrinsics _fog and _fogEnter are asked for at the first fog light, and their draws skip (unconverged) until both are written; a fog portal whose light's registers are first-seen stays open (the frame unconverged, M-FOG-07)"
+      "note": "LP2.2a (D52, D77): the engine has every material and its registers before it draws; the preview's arrive from the parse thread. A chunk whose material or registers are pending is drawn solid in the prepass (not when its known material is translucent) and lit through the bump _flat and the diffuse _default, and the frame is unconverged; until a new evaluation arrives a consumer (an entity or a light) keeps its last registers of the material, never the defaults, so a light-colour drag never flickers LP5.2a (D124, P6.6): pass 8 never draws a surface whose material or registers are pending (the engine never draws one): it is skipped, counted in stagePending, and the frame stays unconverged; kept registers (D52) are drawn; a stage image Pending, or Loading without a written level, skips its draw (unconverged), a Default slot binds _default as the engine binds it for an image not loaded or defaulted (M-STAGE-05) LP5.3 (D124, P6.6): pass 9 draws a fog or blend light from its kept registers (provisional, the frame unconverged) and never a first-seen one (the frontend skips it, D52); a blend light's stage or falloff image Pending, or Loading without a level, skips its draws (unconverged), Default binds _default; the fog intrinsics _fog and _fogEnter are asked for at the first fog light, and their draws skip (unconverged) until both are written; a fog portal whose light's registers are first-seen stays open (the frame unconverged, M-FOG-07) LP6.5a (P8.12, C69, C70): passes 3 and 4 take the rule too: while gbuffer 12's pipeline or one of SSAO's three is pending (none is pending in the engine, which builds them at its start), the pending pass is skipped, the ambient pass binds _white at t4 (r_useSSAO 0's picture) and the frame stays unconverged (pending_pipelines counts them; the compile thread's onReady draws the next frame); a program the compile thread disabled (a missing blob, a reflection mismatch: its one warning names the blob) disables the pass, t4 _white, and the frame converges without SSAO"
     },
     {
       "id": "M-PASS-GUARD-01",
@@ -32969,6 +32969,115 @@
         }
       ],
       "note": "LP3.4 step 5 (D158, P3.25, Q40's default), no engine counterpart: the engine says nothing of the lights the atlas leaves without a tile (E-LIT-13); the Lit panel's one status line says ', N unshadowed (atlas full)' after its lights clause and its tooltip names them on a second line ('unshadowed: <names>', viewLights order), from LitFrameStats::lightsUnplaced and unplacedLights"
+    },
+    {
+      "id": "M-PASS-DIFF-06",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            6030,
+            6040
+          ],
+          "anchor": "DrawViewInternal: AmbientPass( drawSurfs, numDrawSurfs, true ) for every 3D view",
+          "sha256": "aedce88f45f8fe01cb7057ae5e77f4988fc4e5b378b3d4f2d08e294f1a31da86"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordFrame, LitPasses::recordGbuffer"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameResources.cpp",
+          "symbol": "FrameResources::makeTargets (_currentNormals, geometryBufferFBO)"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/LitSession.h",
+          "symbol": "SessionOptions::ssaoForTesting"
+        }
+      ],
+      "note": "LP6.5a (C69, D176, K55): the engine fills the G-buffer (AmbientPass( fillGbuffer true ): _currentNormals cleared to 0, GL_Clear's (0, 0, 0, 1), the ambient loop's stage groups with builtin/gbuffer, ONE / ZERO or ONE / ONE for a vertex-colour group, DEPTHMASK, DEPTHFUNC_EQUAL) in every 3D view; the preview runs pass 3 only when a consumer needs its normals: a session with SSAO (SessionOptions::ssaoForTesting, on in the host's sessions, off in TbLitLib tests) whose pass 4 is not disabled (LP6.5b adds the bumpyenvironment2 consumer). No picture differs: the engine's other readers of _currentNormals are off (filmic, the old SSAO: K2) or LP6.5b's (bumpyenvironment2's t2). Only such a session makes _currentNormals and geometryBufferFBO and asks for gbuffer's two pipelines at Start, so a session without SSAO is LP6.4b's. Its draws are records of their own (AmbientRecord::gbuffer, C64), drawn with the prepass's MVPs (EQUAL passes); the skinned program 13 is never selected (no skinned model)"
+    },
+    {
+      "id": "M-SSAO-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Passes/SsaoPass.cpp",
+          "lines": [
+            240,
+            248
+          ],
+          "anchor": "SsaoPass::Render: pixelOffset = backEnd.GetCurrentPixelOffset( viewDef->taaFrameCount )",
+          "sha256": "1174b529962654510b12dfcb0cf38c3c0f164fb05dd807ece78027aa47884933"
+        },
+        {
+          "file": "neo/renderer/Passes/TemporalAntiAliasingPass.cpp",
+          "lines": [
+            274,
+            309
+          ],
+          "anchor": "TemporalAntiAliasingPass::GetCurrentPixelOffset",
+          "sha256": "36fc9ee671d74cc8aaae75d567a48556813094e72ea9f154c697f15a640d55d3"
+        },
+        {
+          "file": "neo/renderer/Passes/SsaoPass.cpp",
+          "lines": [
+            73,
+            76
+          ],
+          "anchor": "SsaoPass::SsaoPass: FindShader( \"builtin/SSAO/ssao_deinterleave\", ... )",
+          "sha256": "5100448c2637d21e6df370c10a351151caf9b86f5a7a506408880b51de7633da"
+        },
+        {
+          "file": "neo/renderer/Passes/SsaoPass.cpp",
+          "lines": [
+            97,
+            104
+          ],
+          "anchor": "SsaoPass::SsaoPass: FindShader( \"builtin/SSAO/ssao_compute\", ... )",
+          "sha256": "29a42118081a4ce1319c489d38e8310cb596f4a4c8557e89eb0d06d348144023"
+        },
+        {
+          "file": "neo/renderer/Passes/SsaoPass.cpp",
+          "lines": [
+            126,
+            132
+          ],
+          "anchor": "SsaoPass::SsaoPass: FindShader( \"builtin/SSAO/ssao_blur\", ... )",
+          "sha256": "ede5a32777c80c8afc98d80461767b04d18e3c338df2578b60f5b0bb30cc3029"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            5634,
+            5677
+          ],
+          "anchor": "DrawScreenSpaceAmbientOcclusion2",
+          "sha256": "434d962a0fa0d5af2a3a97e071fa54aabfdd2cb43aef07c1b3eb7c2e77ecc45c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordSsao, engineSsaoConstants, engineSsaoDispatches"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineNamedPrograms, EngineNamedProgramBase, engineNamedProgram"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineBindingLayoutDescs (SsaoDeinterleave, SsaoCompute, SsaoBlur), engineSsaoBlock"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameResources.cpp",
+          "symbol": "FrameResources::makeTargets (_ao0, SSAO/DeinterleavedDepth, SSAO/DeinterleavedOcclusion)"
+        }
+      ],
+      "note": "LP6.5a (C70, D177, K54, P8.13, P8.20): the engine's SSAO samples its window with pixelOffset = GetCurrentPixelOffset( taaFrameCount ), which with r_taaJitter 1 (its default) is the MSAA pattern's offsets[ tr.frameCount % 8 ] even with TAA off, so its picture moves from frame to frame; the preview's pixelOffset is (0, 0), the r_taaJitter 0 picture, and its matClipToView the unjittered inverse projection (no TAA before LP6.6, then P8.20's rule). The parity shots (LP6.5c) run the engine with r_useSSAO 1 and r_taaJitter 0 (A55). The three compute shaders are found by name, not through the builtins table: the preview's named-program table (rows EngineNamedProgramBase + place, the FindShader defines in their order without USE_PUSH_CONSTANTS, the pass's own binding layouts after EngineBindingLayout::Num) goes through the compile thread as a builtin does (the blob by name, the permutation by the defines, D9's reflection against engineExpectedLayout); a missing blob or a mismatch disables the program with one warning naming the blob, and the pass with it (M-PASS-DIFF-05). The engine builds the layouts and pipelines in the pass's constructor and its sets with the pass; the preview's layouts and pipelines are the compile thread's (C20), its three sets the render thread's, made again on a new render-target generation and let go in teardown step 2 (not BindingSetCache's). _ao1 is not made (the new pass never reads it). The pass runs only in a session with SSAO (D177): the panel's switch is LP6.6's (C74)"
     }
   ],
   "retired": [

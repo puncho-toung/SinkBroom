@@ -1241,6 +1241,9 @@ constexpr auto TonemapCpuMs = std::size_t{101};
 constexpr auto UploadMs = std::size_t{102};
 constexpr auto SubmitMs = std::size_t{103};
 constexpr auto RecordOtherMs = std::size_t{104};
+// LP6.0 (C65): the reserved GPU columns LP6.5a fills (passes 3 and 4)
+constexpr auto GpuGbufferMs = std::size_t{105};
+constexpr auto GpuSsaoMs = std::size_t{106};
 // LP6.1 (C64): the draw records held and resolved, after LP6.0's reserved GPU columns
 constexpr auto RecordsHeld = std::size_t{108};
 constexpr auto RecordResolves = std::size_t{109};
@@ -3171,7 +3174,7 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       "{} vertex / {} index, {} / {}, {} / {}; compactions run {} / {} / {} ({} / {} / "
       "{} "
       "in an uploads-only idle submission), arena_moved_bytes {} / {} / {}; compaction "
-      "event rows {} / {} / {} | 0: one arena per kind | {} |\n\n",
+      "event rows {} / {} / {} | 0: one arena per kind | {} |\n",
       s1.vertexArenas,
       s1.indexArenas,
       s2.vertexArenas,
@@ -3193,6 +3196,105 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       pass(s1.compactions + s2.compactions + s3.compactions == 0));
     CHECK(s1.vramLiveBytes > 0u);
     CHECK(s1.vramBudgetBytes == lit::DefaultVramBudgetBytes);
+  }
+  // LP6.5a (C69, C70, C68 (e), P8.12): the G-buffer and SSAO at the three Starts' settled
+  // frames (the host's sessions run with SSAO, D177): the two GPU timers, pass 3's draws
+  // beside the ambient pass's, the render-target line with the new targets (at the
+  // surface's 1920 × 1080: _currentNormals RGBA16F, _ao0 R8, the deinterleaved R32F and
+  // R8 arrays of 480 × 270 × 16), the programs and the compile thread by the first lit
+  // frame
+  {
+    const auto statusAt = [](const StartMeasure& measure) {
+      const auto* settled = measure.record(measure.settledFrame);
+      return settled ? settled->status : lit::SessionStatus{};
+    };
+    const auto rowsOf = [&](const StartMeasure& measure) {
+      return sessionFrames(log, measure.generation);
+    };
+    const auto settledField =
+      [&](const StartMeasure& measure, const std::size_t c) -> std::string {
+      const auto rows = rowsOf(measure);
+      if (measure.settledFrame == 0 || measure.settledFrame > rows.size())
+      {
+        return "-";
+      }
+      const auto& text = rows[measure.settledFrame - 1].at(c);
+      return text.empty() ? std::string{"-"} : text;
+    };
+    const auto w = std::uint64_t(SurfaceWidth);
+    const auto h = std::uint64_t(SurfaceHeight);
+    const auto normalsBytes = w * h * 8;
+    const auto aoBytes = w * h;
+    const auto arrayTexels = ((w + 3) / 4) * ((h + 3) / 4) * 16;
+    const auto ssaoPrograms = [](const StartMeasure& measure) {
+      auto enabled = 0;
+      for (const auto& program : measure.programs)
+      {
+        enabled += program.name.starts_with("builtin/SSAO/") && program.enabled ? 1 : 0;
+      }
+      return enabled;
+    };
+    const auto s1 = statusAt(first);
+    const auto s2 = statusAt(second);
+    const auto s3 = statusAt(third);
+    const auto equalDraws = [&](const lit::SessionStatus& s, const StartMeasure& m) {
+      return fmt::format("{}", s.gbufferDraws) == settledField(m, column::AmbientDraws);
+    };
+    summary += fmt::format(
+      "| G-buffer and SSAO (LP6.5a, C69, C70) | at the settled frames (frames {} / {} / "
+      "{}): gpu_gbuffer_ms {} / {} / {}, gpu_ssao_ms {} / {} / {}, pass 4 ran {} / {} / "
+      "{}; pass 3's draws {} / {} / {} beside the ambient pass's {} / {} / {}; the "
+      "render "
+      "targets and buffers {} / {} / {} (LP6.4b's 303.6 MB) with _currentNormals {}, "
+      "_ao0 "
+      "{}, the deinterleaved arrays {} + {}; the SSAO programs enabled {} / {} / {} of "
+      "3; "
+      "the compile thread by the first lit frame {} / {} / {} jobs ({} / {} / {} "
+      "pipelines, {:.0f} / {:.0f} / {:.0f} ms busy) | pass 3's draws = the ambient "
+      "pass's, pass 4 ran | {} |\n\n",
+      first.settledFrame,
+      second.settledFrame,
+      third.settledFrame,
+      settledField(first, column::GpuGbufferMs),
+      settledField(second, column::GpuGbufferMs),
+      settledField(third, column::GpuGbufferMs),
+      settledField(first, column::GpuSsaoMs),
+      settledField(second, column::GpuSsaoMs),
+      settledField(third, column::GpuSsaoMs),
+      s1.ssaoRan,
+      s2.ssaoRan,
+      s3.ssaoRan,
+      s1.gbufferDraws,
+      s2.gbufferDraws,
+      s3.gbufferDraws,
+      settledField(first, column::AmbientDraws),
+      settledField(second, column::AmbientDraws),
+      settledField(third, column::AmbientDraws),
+      mb(double(s1.vramRenderTargetBytes)),
+      mb(double(s2.vramRenderTargetBytes)),
+      mb(double(s3.vramRenderTargetBytes)),
+      mb(double(normalsBytes)),
+      mb(double(aoBytes)),
+      mb(double(arrayTexels * 4)),
+      mb(double(arrayTexels)),
+      ssaoPrograms(first),
+      ssaoPrograms(second),
+      ssaoPrograms(third),
+      first.compileAtFirstLit.jobs,
+      second.compileAtFirstLit.jobs,
+      third.compileAtFirstLit.jobs,
+      first.compileAtFirstLit.pipelines,
+      second.compileAtFirstLit.pipelines,
+      third.compileAtFirstLit.pipelines,
+      first.compileAtFirstLit.jobMs,
+      second.compileAtFirstLit.jobMs,
+      third.compileAtFirstLit.jobMs,
+      pass(
+        s1.ssaoRan && s2.ssaoRan && s3.ssaoRan && equalDraws(s1, first)
+        && equalDraws(s2, second) && equalDraws(s3, third)));
+    CHECK(s1.ssaoRan);
+    CHECK(s1.gbufferDraws > 0u);
+    CHECK(ssaoPrograms(first) == 3);
   }
 
   summary += "Camera moving, per frame (median / p95 / max, count):\n\n";
@@ -3228,6 +3330,9 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
   // surfaces on the light grid
   line("ambient draws", column::AmbientDraws);
   line("GPU ambient ms", column::GpuAmbientMs);
+  // LP6.5a (C69, C70)
+  line("GPU gbuffer ms", column::GpuGbufferMs);
+  line("GPU ssao ms", column::GpuSsaoMs);
   const auto ambientWrites = line("set-9 volatile writes (D86)", column::AmbientWrites);
   line("surfaces on the light grid", column::GridSurfaces);
   line("textures resident", column::TexturesResident);

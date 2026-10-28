@@ -159,6 +159,9 @@ struct SessionStatus
   std::vector<std::string> unshadowedLights;
   // the lit and tonemap passes' draws, the draws skipped, the pipelines pending
   std::size_t draws = 0;
+  // LP6.5a (C69, C70): pass 3's draws among them (0 without SSAO) and whether pass 4 ran
+  std::size_t gbufferDraws = 0;
+  bool ssaoRan = false;
   std::size_t skippedDraws = 0;
   std::size_t pendingPipelines = 0;
   // the session's arenas, textures and targets (GpuMemoryAccount::total)
