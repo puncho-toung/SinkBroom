@@ -195,6 +195,14 @@ bool slotComplete(const ImageSlots::Slot& slot)
 
 LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
 {
+  recordFrame(inputs);
+  // LP6.1 (C64): the records held at the frame's end
+  m_stats.recordsHeld = m_records.records();
+  return m_stats;
+}
+
+void LitPasses::recordFrame(const LitFrameInputs& inputs)
+{
   m_stats = LitFrameStats{};
   m_stats.camera = inputs.camera;
   m_frameWrites.clear();
@@ -203,7 +211,24 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
     !inputs.device || !inputs.commandList || !inputs.frame || !inputs.arenas
     || !inputs.pipelines || !inputs.images || !inputs.bindingSets || !inputs.samplers)
   {
-    return m_stats;
+    return;
+  }
+  // LP6.1 (C64, P8.1, P8.11): the records follow the render-target and arena generations
+  // (a change clears them: the lists are linked again below), and the slots a test's hook
+  // changed after the uploads' erase release their records now (none in a session's own
+  // frames: eraseChangedSets took every change before the passes)
+  if (m_records.generations(
+        inputs.frame->renderTargetGeneration(), inputs.arenas->generation()))
+  {
+    m_linksStale = true;
+  }
+  for (const auto slot : inputs.images->changedSlots())
+  {
+    m_records.slotChanged(slot);
+  }
+  for (const auto slot : inputs.images->usageChangedSlots())
+  {
+    m_records.slotChanged(slot);
   }
 
   auto frame = Frame{};
@@ -229,6 +254,11 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
   {
     const auto start = FrameClock::now();
     rebuildLists(inputs, frame.view);
+    // LP6.1 (C64): links a clear outside a build left stale
+    if (m_linksStale)
+    {
+      linkRecords();
+    }
     m_stats.listsMs = recordMsSince(start);
   }
   m_stats.lightsVisible = m_lists.lights.size();
@@ -317,14 +347,14 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
                       | kdl::value_or(nullptr);
   if (!frame.framebuffer || (m_lists.drawSurfs.empty() && m_lists.lights.empty()))
   {
-    return m_stats;
+    return;
   }
 
   // a pass boundary
   if (inputs.stopRequested && inputs.stopRequested())
   {
     m_stats.stoppedEarly = true;
-    return m_stats;
+    return;
   }
   // LP6.0 (C65): each pass's CPU record time from its timer's begin to its end
   {
@@ -342,7 +372,7 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
   if (inputs.stopRequested && inputs.stopRequested())
   {
     m_stats.stoppedEarly = true;
-    return m_stats;
+    return;
   }
   // LP4.2a (C34): AmbientPass( false ) after the prepass, before the shadow atlas and the
   // interactions (RenderBackend.cpp:6057-6063); r_skipAmbient gates only
@@ -369,7 +399,7 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
   if (inputs.stopRequested && inputs.stopRequested())
   {
     m_stats.stoppedEarly = true;
-    return m_stats;
+    return;
   }
   // LP3.1 (C59, D142, SC714): pass 6, ShadowAtlasPass, after AmbientPass( false ) and
   // before DrawInteractions (RenderBackend.cpp:6062-6073), inside the shot's frame
@@ -387,7 +417,7 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
   if (inputs.stopRequested && inputs.stopRequested())
   {
     m_stats.stoppedEarly = true;
-    return m_stats;
+    return;
   }
   // C38 (LP4.2b): r_skipInteractions 1 records no interactions (RenderBackend.cpp:4181).
   // LP5.0 (P6.16, C46): it gates DrawInteractions alone, so it skips this pass and no
@@ -420,7 +450,7 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
   if (m_stats.stoppedEarly || (inputs.stopRequested && inputs.stopRequested()))
   {
     m_stats.stoppedEarly = true;
-    return m_stats;
+    return;
   }
   // LP5.2a (C46): after DrawInteractions, no SSR copy (r_useSSR 0, D19), the first
   // DrawShaderPasses call unless r_skipShaderPasses (RenderBackend.cpp:6107-6125); its
@@ -452,7 +482,7 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
   if (m_stats.stoppedEarly || (inputs.stopRequested && inputs.stopRequested()))
   {
     m_stats.stoppedEarly = true;
-    return m_stats;
+    return;
   }
   // LP5.3 (C49): fog and blend lights, drawn after emissive surfaces so they are properly
   // dimmed down (RenderBackend.cpp:6131-6136); r_skipAmbient does not gate them (SC530),
@@ -470,7 +500,7 @@ LitFrameStats LitPasses::record(const LitFrameInputs& inputs)
     m_stats.fogTimed = endTimer(frame, inputs.fogTimer);
     m_stats.fogRecordMs = recordMsSince(start);
   }
-  return m_stats;
+  return;
 }
 
 void LitPasses::beginTimer(Frame& frame, nvrhi::ITimerQuery* timer)
@@ -556,12 +586,33 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   m_listsKey = key;
   m_listsTableVersion = tableVersion;
   m_stats.listsRebuilt = true;
+  // LP6.1 (C64): what this build's key moved clears of the records (the camera alone:
+  // nothing)
+  {
+    auto lifetime = DrawRecordTable::Lifetime{};
+    lifetime.chunks = key.chunks;
+    lifetime.chunksVersion = key.chunksVersion;
+    lifetime.instances = key.instances;
+    lifetime.entities = key.entities;
+    lifetime.tree = key.tree;
+    lifetime.areas = key.areas;
+    lifetime.portalFog = key.portalFog;
+    lifetime.table = key.table;
+    lifetime.lights = key.lights;
+    lifetime.lightsVersion = key.lightsVersion;
+    lifetime.grid = key.grid;
+    lifetime.gridVersion = key.gridVersion;
+    lifetime.gridValidity = key.gridValidity;
+    m_records.beginBuild(lifetime);
+  }
 
   if (!table)
   {
     // no material service: nothing to draw, and nothing to wait for
     m_lists = FrontendLists{};
     m_stageOrder.clear();
+    linkRecords();
+    m_records.endBuild();
     return;
   }
 
@@ -637,6 +688,105 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   m_lightTriangles.endBuild(inputs.pool);
   // LP5.2a (D115): R_SortDrawSurfs' order of the new lists, kept with them
   m_stageOrder = stagePassOrder(m_lists.drawSurfs, m_lists.spaces);
+  // LP6.1 (C64): the new lists' links into the records, then the sweep
+  linkRecords();
+  m_records.endBuild();
+}
+
+namespace
+{
+
+// LP6.1 (C64): a light list's place in LightLink::lists
+std::size_t linkedList(const InteractionList list)
+{
+  switch (list)
+  {
+  case InteractionList::Local:
+    return 0;
+  case InteractionList::Global:
+    return 1;
+  case InteractionList::Translucent:
+    return 2;
+  }
+  return 1;
+}
+
+} // namespace
+
+void LitPasses::linkRecords()
+{
+  // LP6.1 (C64): each drawn surface to its records, and each (light stage, list, surface)
+  // of a light's lists to its records: one hash lookup a link, a record made here
+  // resolved at its first draw. The stages are those RenderInteractions draws, in the
+  // shader's order: the condition on, an image to bind (engineLightStageUnits); the
+  // surfaces in engineOrderInteractionSurfaces' order; every light has a link (fog and
+  // blend lights and lights without interactions an empty one), so that m_lightLinks
+  // follows m_lists.lights
+  m_linksStale = false;
+  m_surfaceLinks.clear();
+  for (const auto& surface : m_lists.drawSurfs)
+  {
+    auto made = false;
+    m_surfaceLinks.push_back(&m_records.surface(surface, made));
+  }
+  m_lightLinks.clear();
+  m_stageLinks.clear();
+  m_interactionLinks.clear();
+  for (const auto& light : m_lists.lights)
+  {
+    auto link = LightLink{};
+    if (
+      light.kind != ViewLightKind::Fog && light.kind != ViewLightKind::Blend
+      && !(
+        light.localInteractions.empty() && light.globalInteractions.empty()
+        && light.translucentInteractions.empty()))
+    {
+      const auto serial = m_records.lightSerial(light);
+      link.worstCaseWrites = worstCaseWrites(light);
+      const auto mathPath = engineLightUsesMathPath(light.record->light.parms);
+      for (const auto& [surfaces, list] :
+           {std::pair{&light.localInteractions, InteractionList::Local},
+            std::pair{&light.globalInteractions, InteractionList::Global},
+            std::pair{&light.translucentInteractions, InteractionList::Translucent}})
+      {
+        const auto first = m_stageLinks.size();
+        if (!surfaces->empty())
+        {
+          const auto ordered = engineOrderInteractionSurfaces(*surfaces);
+          for (std::size_t stage = 0; stage < light.shader->stages.size(); ++stage)
+          {
+            const auto& lightStage = light.shader->stages[stage];
+            if (
+              engineRegister(light.registers, lightStage.conditionRegister) == 0.0f
+              || !engineLightStageUnits(
+                mathPath, light.record->derived.shader.falloffImage, lightStage))
+            {
+              continue;
+            }
+            m_stageLinks.push_back(
+              StageLink{stage, m_interactionLinks.size(), ordered.size()});
+            for (const auto* surface : ordered)
+            {
+              const auto key = InteractionRecordKey{
+                serial,
+                stage,
+                list,
+                surface->chunk,
+                surface->instance,
+                surface->material.get(),
+                surface->registers.get(),
+                surface->provisional};
+              auto made = false;
+              m_interactionLinks.push_back(
+                InteractionLink{surface, &m_records.interaction(key, *surface, made)});
+            }
+          }
+        }
+        link.lists[linkedList(list)] = {first, m_stageLinks.size() - first};
+      }
+    }
+    m_lightLinks.push_back(link);
+  }
 }
 
 bool LitPasses::collectLightTriangles()
@@ -724,8 +874,14 @@ void LitPasses::recordPrepass(Frame& frame)
       }
     }
     setSpace(frame, surface.space);
-    const auto outcome =
-      draw(frame, EngineBuiltinDepth, *surface.chunk, gls::Default, 0.0f, 0.0f);
+    // LP6.1 (C64): the surface's prepass record
+    const auto outcome = drawRecorded(
+      frame,
+      m_surfaceLinks[i]->prepass,
+      EngineBuiltinDepth,
+      gls::Default,
+      *surface.chunk,
+      nullptr);
     if (outcome == DrawOutcome::Disabled)
     {
       m_stats.prepassDisabled = true;
@@ -1071,7 +1227,9 @@ void LitPasses::recordInteractions(Frame& frame)
       const auto layout = shadow ? EngineBindingLayout::DrawInteractionSm
                                  : EngineBindingLayout::DrawInteraction;
       const auto writes = m_frameWrites[layout];
-      if (counted(layout) && writes + worstCaseWrites(light) > budget)
+      // LP6.1 (C64): its links (worstCaseWrites of the lists, worked out with them)
+      const auto lightIndex = std::size_t(&light - m_lists.lights.data());
+      if (counted(layout) && writes + m_lightLinks[lightIndex].worstCaseWrites > budget)
       {
         overflowing = true;
         ++m_stats.lightsOverflowed;
@@ -1109,7 +1267,8 @@ void LitPasses::recordInteractions(Frame& frame)
         {
           continue;
         }
-        if (!renderInteractions(frame, light, shadow, *surfaces, list, depthFunc))
+        if (!renderInteractions(
+              frame, light, lightIndex, shadow, *surfaces, list, depthFunc))
         {
           m_stats.interactionsDisabled = true;
           return;
@@ -1125,6 +1284,7 @@ void LitPasses::recordInteractions(Frame& frame)
 bool LitPasses::renderInteractions(
   Frame& frame,
   const ViewLight& light,
+  const std::size_t lightIndex,
   const ShadowLightRecord* shadow,
   const std::vector<LitSurface>& surfaces,
   const InteractionList list,
@@ -1156,25 +1316,29 @@ bool LitPasses::renderInteractions(
   const auto noSpecular = record.light.parms.noSpecular;
   // LP5.1 (C45): R_LightUsesMathPath( vLight ) (RenderBackend.cpp:1914, 1937)
   const auto mathPath = engineLightUsesMathPath(record.light.parms);
-  const auto ordered = engineOrderInteractionSurfaces(surfaces);
   auto& images = *frame.inputs->images;
   const auto usage =
     ImageUsage{[&](const MaterialImageKey& key) { return imageUsage(images, key); }};
 
   // drawInteraction_t inter = {}: the images null; the matrices, which the engine leaves
-  // indeterminate, zero (mirror.json M-PASS-DIFF-02); din->vLight's ambientLight (LP5.1,
-  // SC513: its specular _black, its program interactionAmbient)
-  auto inter = InteractionState{};
-  inter.ambientLight = shader.ambientLight;
+  // indeterminate, zero (mirror.json M-PASS-DIFF-02), vertexColor SVC_IGNORE;
+  // din->vLight's ambientLight (LP5.1, SC513: its specular _black, its program
+  // interactionAmbient). LP6.1 (C64): carry holds what passes from surface to surface;
+  // each record's draw reads from it the fields its surface's stage loop had not set
+  // (InteractionDraw::inherited)
+  auto carry = InteractionCarry{};
+  const auto ambientLight = shader.ambientLight;
   const auto lightScale = EngineFrame.lightScale;
 
-  for (const auto& lightStage : shader.stages)
+  // LP6.1 (C64): the light stages whose condition is on and that have images to bind,
+  // each with the list's surfaces in engineOrderInteractionSurfaces' order, linked when
+  // the lists were built
+  const auto [firstStage, stageCount] = m_lightLinks[lightIndex].lists[linkedList(list)];
+  for (auto linkedStage = firstStage; linkedStage < firstStage + stageCount;
+       ++linkedStage)
   {
-    // ignore stages that fail the condition
-    if (engineRegister(lightRegs, lightStage.conditionRegister) == 0.0f)
-    {
-      continue;
-    }
+    const auto& stageLink = m_stageLinks[linkedStage];
+    const auto& lightStage = shader.stages[stageLink.stage];
 
     const auto& c = lightStage.colorRegisters;
     const auto lightColor = Vec4{
@@ -1201,12 +1365,12 @@ bool LitPasses::renderInteractions(
 
     // texture 3 the light falloff, texture 4 the light projection; LP5.1 (C45, D112):
     // _white at both for a math light, which never reads its stage image, so a stage
-    // without one is drawn there (RenderBackend.cpp:1906-1931)
+    // without one is drawn there (RenderBackend.cpp:1906-1931); a texture light's
+    // cinematic stage has no image to bind (mirror.json M-PASS-GUARD-01): not linked
     const auto lightUnits =
       engineLightStageUnits(mathPath, record.derived.shader.falloffImage, lightStage);
     if (!lightUnits)
     {
-      // a texture light's cinematic stage: no image to bind (mirror.json M-PASS-GUARD-01)
       continue;
     }
     setUnit(images, 3, (*lightUnits)[0]);
@@ -1239,57 +1403,83 @@ bool LitPasses::renderInteractions(
     // a different lightTextureMatrix baked in
     m_currentSpace.reset();
 
-    for (const auto* surface : ordered)
+    for (auto linked = stageLink.first; linked < stageLink.first + stageLink.count;
+         ++linked)
     {
-      if (m_currentSpace != surface->space)
+      const auto& link = m_interactionLinks[linked];
+      const auto& surface = *link.surface;
+      auto& records = *link.records;
+      if (m_currentSpace != surface.space)
       {
         setInteractionSpace(
-          frame, surface->space, light, shadow, lightStage, lightTextureMatrix);
+          frame, surface.space, light, shadow, lightStage, lightTextureMatrix);
+      }
+      // LP6.1 (C64): the stage loop's draws (engineSurfaceInteractions, or a pending
+      // surface's), made at the surface's first draw under this light stage
+      if (!records.filled)
+      {
+        fillInteractionRecords(
+          records, surface, diffuseColor, specularColor, noSpecular, ambientLight, usage);
       }
 
       auto disabled = false;
-      const auto drawOne = [&](const InteractionDraw& interaction) {
-        if (disabled)
-        {
-          return;
-        }
+      for (auto& recorded : records.draws)
+      {
+        const auto& interaction = recorded.draw;
+        const auto inherits = [&](const std::uint8_t field) {
+          return (interaction.inherited & field) != 0;
+        };
+        const auto& bumpMatrix =
+          inherits(CarriedBumpMatrix) ? carry.bumpMatrix : interaction.bumpMatrix;
+        const auto& diffuseMatrix = inherits(CarriedDiffuseMatrix)
+                                      ? carry.diffuseMatrix
+                                      : interaction.diffuseMatrix;
+        const auto& specularMatrix = inherits(CarriedSpecularMatrix)
+                                       ? carry.specularMatrix
+                                       : interaction.specularMatrix;
+        const auto vertexColor =
+          inherits(CarriedVertexColor) ? carry.vertexColor : interaction.vertexColor;
+
         // DrawSingleInteraction's parms
-        m_parms.set(RenderParm::BumpMatrixS, interaction.bumpMatrix[0]);
-        m_parms.set(RenderParm::BumpMatrixT, interaction.bumpMatrix[1]);
-        m_parms.set(RenderParm::DiffuseMatrixS, interaction.diffuseMatrix[0]);
-        m_parms.set(RenderParm::DiffuseMatrixT, interaction.diffuseMatrix[1]);
-        m_parms.set(RenderParm::SpecularMatrixS, interaction.specularMatrix[0]);
-        m_parms.set(RenderParm::SpecularMatrixT, interaction.specularMatrix[1]);
-        const auto vertexColor = engineVertexColorParms(interaction.vertexColor);
-        m_parms.set(RenderParm::VertexColorModulate, vertexColor[0]);
-        m_parms.set(RenderParm::VertexColorAdd, vertexColor[1]);
+        m_parms.set(RenderParm::BumpMatrixS, bumpMatrix[0]);
+        m_parms.set(RenderParm::BumpMatrixT, bumpMatrix[1]);
+        m_parms.set(RenderParm::DiffuseMatrixS, diffuseMatrix[0]);
+        m_parms.set(RenderParm::DiffuseMatrixT, diffuseMatrix[1]);
+        m_parms.set(RenderParm::SpecularMatrixS, specularMatrix[0]);
+        m_parms.set(RenderParm::SpecularMatrixT, specularMatrix[1]);
+        const auto vertexColorParms = engineVertexColorParms(vertexColor);
+        m_parms.set(RenderParm::VertexColorModulate, vertexColorParms[0]);
+        m_parms.set(RenderParm::VertexColorAdd, vertexColorParms[1]);
         m_parms.set(RenderParm::DiffuseModifier, interaction.diffuseColor);
         m_parms.set(RenderParm::SpecularModifier, interaction.specularColor);
-
-        // texture 0 the bump map, 1 the specular map, 2 the diffuse map
-        setUnit(images, 0, interaction.bumpImage);
-        setUnit(images, 1, interaction.specularImage);
-        setUnit(images, 2, interaction.diffuseImage);
 
         // LP3.1 (C60, SC726): a light placed in the atlas draws the shadow-atlas
         // interaction of its type (DrawSingleInteraction, RenderBackend.cpp:1417-1470,
         // 1541-1595: the ambientLight test first, then r_skipShadows, globalShadows and
-        // ImageAtlasPlaced); else the plain one (K26)
-        const auto program = engineInteractionProgram(interaction.program, shadow);
-        switch (draw(
-          frame,
-          program,
-          *surface->chunk,
-          stateBits,
-          0.0f,
-          0.0f,
-          surface->lightTriangles.get()))
+        // ImageAtlasPlaced); else the plain one (K26). LP6.1 (C64): its record (the
+        // shadowed flag of its key) holds the program, chosen at its resolution by the
+        // specular image's usage then; texture 0 the bump map, 1 the specular map, 2 the
+        // diffuse map
+        auto& drawn = recorded.variants[shadow ? 1 : 0];
+        auto program = drawn.key.program;
+        if (drawn.state != DrawRecord::State::Resolved)
+        {
+          program = engineInteractionProgram(
+            engineInteractionDrawProgram(
+              imageUsage(images, interaction.images[1]), ambientLight),
+            shadow);
+          setUnit(images, 0, interaction.images[0]);
+          setUnit(images, 1, interaction.images[1]);
+          setUnit(images, 2, interaction.images[2]);
+        }
+        switch (drawRecorded(
+          frame, drawn, program, stateBits, *surface.chunk, surface.lightTriangles.get()))
         {
         case DrawOutcome::Drawn:
           // LP3.2 (D157 extended): and its list's shadow-atlas draws
           countInteractionDraw(m_stats, list, program);
           log(
-            frame, LitDrawRecord::Pass::Interaction, *surface->chunk, program, stateBits);
+            frame, LitDrawRecord::Pass::Interaction, *surface.chunk, program, stateBits);
           break;
         case DrawOutcome::Disabled:
           disabled = true;
@@ -1300,33 +1490,76 @@ bool LitPasses::renderInteractions(
         case DrawOutcome::Skipped:
           break;
         }
-      };
-
-      if (surface->material && surface->registers)
-      {
-        engineSurfaceInteractions(
-          *surface->material,
-          surface->registers->registers,
-          diffuseColor,
-          specularColor,
-          noSpecular,
-          inter,
-          usage,
-          drawOne);
-      }
-      else if (
-        const auto pending =
-          pendingSurfaceInteraction(diffuseColor, usage, shader.ambientLight))
-      {
-        drawOne(*pending);
+        if (disabled)
+        {
+          break;
+        }
       }
       if (disabled)
       {
         return false;
       }
+      // what the surface's stage loop left of the carried fields
+      if ((records.written & CarriedBumpMatrix) != 0)
+      {
+        carry.bumpMatrix = records.carry.bumpMatrix;
+      }
+      if ((records.written & CarriedDiffuseMatrix) != 0)
+      {
+        carry.diffuseMatrix = records.carry.diffuseMatrix;
+      }
+      if ((records.written & CarriedSpecularMatrix) != 0)
+      {
+        carry.specularMatrix = records.carry.specularMatrix;
+      }
+      if ((records.written & CarriedVertexColor) != 0)
+      {
+        carry.vertexColor = records.carry.vertexColor;
+      }
     }
   }
   return true;
+}
+
+void LitPasses::fillInteractionRecords(
+  InteractionRecords& records,
+  const LitSurface& surface,
+  const Vec4& diffuseColor,
+  const Vec4& specularColor,
+  const bool noSpecular,
+  const bool ambientLight,
+  const ImageUsage& usage)
+{
+  // LP6.1 (C64): RenderInteractions' surface stage loop (RenderBackend.cpp:2141-2235)
+  // from a state of its own: its draws mark what they read of the surfaces before
+  // (InteractionDraw::inherited), what it sets is kept (written, carry); a surface whose
+  // material or registers are pending draws with a state of its own (D77, D52)
+  const auto add = [&](const InteractionDraw& draw) {
+    records.draws.push_back(InteractionRecord{RecordedInteraction::of(draw), {}});
+  };
+  if (surface.material && surface.registers)
+  {
+    auto state = InteractionState{};
+    state.ambientLight = ambientLight;
+    engineSurfaceInteractions(
+      *surface.material,
+      surface.registers->registers,
+      diffuseColor,
+      specularColor,
+      noSpecular,
+      state,
+      usage,
+      add);
+    records.written = state.written;
+    records.carry = InteractionCarry{
+      state.bumpMatrix, state.diffuseMatrix, state.specularMatrix, state.vertexColor};
+  }
+  else if (
+    const auto pending = pendingSurfaceInteraction(diffuseColor, usage, ambientLight))
+  {
+    add(*pending);
+  }
+  m_records.filled(records);
 }
 
 void LitPasses::setInteractionSpace(
@@ -1597,6 +1830,95 @@ std::span<const AmbientUnitBinding> ambientUnitBindings()
   return AmbientUnits;
 }
 
+void LitPasses::fillAmbientRecords(
+  SurfaceRecords& records, const LitSurface& surface, const ImageUsage& usage)
+{
+  // LP6.1 (C64): AmbientPass' surface stage loop (RenderBackend.cpp:2538-2703) for the
+  // surface: the light colour white x r_lightScale for diffuse and specular (:2401-2418)
+  if (surface.material && surface.registers)
+  {
+    const auto lightScale = EngineFrame.lightScale;
+    const auto lightColor = Vec4{lightScale, lightScale, lightScale, lightScale};
+    engineAmbientSurfaceInteractions(
+      *surface.material,
+      surface.registers->registers,
+      lightColor,
+      lightColor,
+      usage,
+      [&](const InteractionDraw& draw) {
+        records.ambient.push_back(AmbientRecord{RecordedInteraction::of(draw), {}, {}});
+      });
+  }
+  m_records.ambientFilled(records);
+}
+
+nvrhi::IBindingSet* LitPasses::ambientViewSet(
+  Frame& frame, const std::size_t index, const GridArea* grid)
+{
+  if (index >= m_ambientViewSets.size())
+  {
+    return nullptr;
+  }
+  auto& view = m_ambientViewSets[index];
+  if (view.asked)
+  {
+    return view.set;
+  }
+  view.asked = true;
+  // the view's images (RenderBackend.cpp:1361-1393): t3 the BRDF LUT, t4 _white (K31:
+  // r_useSSAO 0 until LP6), t7 the area's irradiance atlas on the grid path (:1270-1271)
+  // or _default on the probe path (D85), t8-t10 the radiance cubes, t12 the nearest's
+  // depth cube, t13 and t14 the next two's; a probe image that is not Ready is the
+  // default cube, never a slot's 2D stand-in (P4.28)
+  auto& images = *frame.inputs->images;
+  const auto& probes = m_viewProbes;
+  setUnit(images, UnitBrdfLut, Intrinsic::BrdfLut);
+  static_assert(!EngineFrame.useSsao, "K31: _ao0 is LP6's");
+  setUnit(images, UnitSsao, Intrinsic::White);
+  if (grid)
+  {
+    setUnit(images, UnitAmbientCube, grid->atlas);
+  }
+  else
+  {
+    setUnit(images, UnitAmbientCube, Intrinsic::Default);
+  }
+  const auto cubeUnit =
+    [&](const std::size_t unit, const std::optional<MaterialImageKey>& key) {
+      if (key)
+      {
+        setUnit(images, unit, *key);
+      }
+      else
+      {
+        setUnit(images, unit, Intrinsic::DefaultCube);
+      }
+    };
+  for (std::size_t i = 0; i < 3; ++i)
+  {
+    cubeUnit(UnitSpecularCube1 + i, probes.radiance[i]);
+  }
+  cubeUnit(UnitDepthCube, probes.depth);
+  cubeUnit(UnitDepthCube + 1, probes.probeDepth[0]);
+  cubeUnit(UnitDepthCube + 2, probes.probeDepth[1]);
+  auto sets = std::array<nvrhi::IBindingSet*, nvrhi::c_MaxBindingLayouts>{};
+  auto count = std::size_t{0};
+  auto request = SetRequest{};
+  request.sets = 1u << 2;
+  if (bindingSets(
+        frame,
+        EngineBindingLayout::AmbientLightingIbl,
+        m_ambientLayouts,
+        m_ambientPush,
+        sets,
+        count,
+        &request))
+  {
+    view.set = sets[2];
+  }
+  return view.set;
+}
+
 void LitPasses::setAmbientSpace(Frame& frame, const std::size_t index)
 {
   // RenderBackend.cpp:2480-2502: change the matrix if needed
@@ -1697,22 +2019,18 @@ void LitPasses::recordAmbient(Frame& frame)
   // the radiance cubes, t12 the nearest's depth cube, t13 and t14 the next two's; a probe
   // image that is not Ready is the default cube, never a slot's 2D stand-in (P4.28)
   auto& images = *frame.inputs->images;
-  const auto cubeUnit =
-    [&](const std::size_t unit, const std::optional<MaterialImageKey>& key) {
-      if (key)
-      {
-        setUnit(images, unit, *key);
-      }
-      else
-      {
-        setUnit(images, unit, Intrinsic::DefaultCube);
-      }
-    };
   const auto usage =
     ImageUsage{[&](const MaterialImageKey& key) { return imageUsage(images, key); }};
+  // LP6.1 (C64): set 2 of the frame, the view's: the probe path's and each grid area's,
+  // made at its first draw
+  m_ambientViewSets.assign(
+    (frame.inputs->grid ? frame.inputs->grid->areas.size() : 0) + 1, AmbientViewSet{});
+  // AMBIENT_LIGHTING_IBL's sets a record holds: 0, 1 and 3
+  constexpr auto RecordSets = std::uint32_t{(1u << 0) | (1u << 1) | (1u << 3)};
 
-  for (const auto& surface : surfaces)
+  for (std::size_t i = 0; i < surfaces.size(); ++i)
   {
+    const auto& surface = surfaces[i];
     // a pass boundary is not taken between surfaces: the pass is one GL state's draws
     // M-AMB-DIFF-02: a surface whose material or registers are pending gets no ambient
     // draw (the interactions draw it with _default until they arrive); the frame is
@@ -1758,13 +2076,17 @@ void LitPasses::recordAmbient(Frame& frame)
     }
 
     // :2538-2703: inter = {} (diffuse 1, specular 0), the fast path dead
-    // (r_skipInteractionFastPath 1, :2545), the stage loop and the final draw
+    // (r_skipInteractionFastPath 1, :2545), the stage loop and the final draw. LP6.1
+    // (C64): its draws are the surface's ambient records, made at its first draw
+    auto& records = *m_surfaceLinks[i];
+    if (!records.ambientFilled)
+    {
+      fillAmbientRecords(records, surface, usage);
+    }
     auto disabled = false;
-    const auto drawOne = [&](const InteractionDraw& interaction) {
-      if (disabled)
-      {
-        return;
-      }
+    for (auto& ambientDraw : records.ambient)
+    {
+      const auto& interaction = ambientDraw.draw;
       // :2603-2611 and alike: the group's blend, by the vertexColor its diffuse or
       // specular stage set (kept across a bump stage, P4.19)
       const auto stateBits = ambientStateBits(interaction.vertexColor);
@@ -1789,69 +2111,90 @@ void LitPasses::recordAmbient(Frame& frame)
       {
         m_parms.set(parm, value);
       }
-      auto program = 0;
+      // LP6.1 (C64): the record holds the program, chosen at its resolution by the
+      // specular image's usage then (:1248-1264, :1337-1359: no skinning), and on the
+      // grid path the area's parms by its atlas texture's size
+      auto& record = ambientDraw.record;
+      const auto resolved = record.state == DrawRecord::State::Resolved;
+      const auto pbr =
+        !resolved
+        && engineInteractionDrawProgram(imageUsage(images, interaction.images[1]), false)
+             == InteractionProgram::PbrInteraction;
+      auto program = record.key.program;
+      auto atlas = InlineVector<SlotVersion, 2>{};
       if (grid)
       {
         // the light-grid path (:1224-1276): the area's grid parms, the atlas texture's
         // size (GetUploadResolution); no SH (the grid shader reads none). The atlas
         // binds only its own written levels: Loading without one is not drawn yet
-        const auto binding = images.binding(images.request(grid->atlas));
-        if (!binding.texture || binding.intrinsic)
+        if (!resolved)
         {
-          ++m_stats.skippedDraws;
-          m_stats.unconverged = true;
-          m_stats.retrigger = true;
-          return;
+          const auto binding = images.binding(askSlot(images, grid->atlas));
+          if (!binding.texture || binding.intrinsic)
+          {
+            ++m_stats.skippedDraws;
+            m_stats.unconverged = true;
+            m_stats.retrigger = true;
+            continue;
+          }
+          const auto& desc = binding.texture->getDesc();
+          ambientDraw.grid = engineGridParms(*grid, int(desc.width), int(desc.height));
+          atlas = binding.versions;
+          program =
+            pbr ? EngineBuiltinAmbientLightgridIblPbr : EngineBuiltinAmbientLightgridIbl;
         }
-        const auto& desc = binding.texture->getDesc();
-        const auto gridParms = engineGridParms(*grid, int(desc.width), int(desc.height));
-        m_parms.set(RenderParm::GlobalLightOrigin, gridParms.globalLightOrigin);
-        m_parms.set(RenderParm::JitterTexScale, gridParms.jitterTexScale);
-        m_parms.set(RenderParm::JitterTexOffset, gridParms.jitterTexOffset);
-        m_parms.set(RenderParm::ScreenCorrectionFactor, gridParms.screenCorrectionFactor);
-        m_parms.set(RenderParm::CascadeDistances, gridParms.cascadeDistances);
-        // :1248-1264: the PBR program by the specular image's usage (no skinning)
-        program = interaction.program == InteractionProgram::PbrInteraction
-                    ? EngineBuiltinAmbientLightgridIblPbr
-                    : EngineBuiltinAmbientLightgridIbl;
+        m_parms.set(RenderParm::GlobalLightOrigin, ambientDraw.grid.globalLightOrigin);
+        m_parms.set(RenderParm::JitterTexScale, ambientDraw.grid.jitterTexScale);
+        m_parms.set(RenderParm::JitterTexOffset, ambientDraw.grid.jitterTexOffset);
+        m_parms.set(
+          RenderParm::ScreenCorrectionFactor, ambientDraw.grid.screenCorrectionFactor);
+        m_parms.set(RenderParm::CascadeDistances, ambientDraw.grid.cascadeDistances);
       }
       else
       {
         // the probe path (:1306-1335): the view's SH
         m_parms.set(RenderParm::ShIrradiance0, sh);
-        // :1337-1359: the PBR program by the specular image's usage (no skinning)
-        program = interaction.program == InteractionProgram::PbrInteraction
-                    ? EngineBuiltinAmbientLightingIblPbr
-                    : EngineBuiltinAmbientLightingIbl;
+        if (!resolved)
+        {
+          program =
+            pbr ? EngineBuiltinAmbientLightingIblPbr : EngineBuiltinAmbientLightingIbl;
+        }
       }
 
-      // the units: the interaction's three, then the view's (:1361-1393)
-      setUnit(images, UnitBump, interaction.bumpImage);
-      setUnit(images, UnitSpecular, interaction.specularImage);
-      setUnit(images, UnitBaseColor, interaction.diffuseImage);
-      setUnit(images, UnitBrdfLut, Intrinsic::BrdfLut);
-      static_assert(!EngineFrame.useSsao, "K31: _ao0 is LP6's");
-      setUnit(images, UnitSsao, Intrinsic::White);
-      // t7: the area's irradiance atlas on the grid path (:1270-1271), _default on the
-      // probe path (D85)
-      if (grid)
+      // the units: the interaction's three (its record's sets 0, 1 and 3), then the
+      // view's (set 2, the frame's view set: ambientViewSet); no polygon offset:
+      // :2504-2536 are commented out (P4.19)
+      auto outcome = DrawOutcome::Drawn;
+      if (!resolved)
       {
-        setUnit(images, UnitAmbientCube, grid->atlas);
+        setUnit(images, UnitBump, interaction.images[0]);
+        setUnit(images, UnitSpecular, interaction.images[1]);
+        setUnit(images, UnitBaseColor, interaction.images[2]);
+        if (
+          const auto failed = resolveRecord(
+            frame, record, program, stateBits, *surface.chunk, RecordSets, atlas))
+        {
+          outcome = *failed;
+        }
       }
-      else
+      if (record.state == DrawRecord::State::Resolved)
       {
-        setUnit(images, UnitAmbientCube, Intrinsic::Default);
+        auto* view = ambientViewSet(
+          frame, grid ? 1 + std::size_t(*surface.gridArea) : std::size_t{0}, grid);
+        if (!view)
+        {
+          // D77: a texture with no written level yet (neither the slot nor its intrinsic)
+          ++m_stats.skippedDraws;
+          m_stats.unconverged = true;
+          m_stats.retrigger = true;
+          outcome = DrawOutcome::Skipped;
+        }
+        else
+        {
+          outcome = drawRecord(frame, record, view, nullptr);
+        }
       }
-      for (std::size_t i = 0; i < 3; ++i)
-      {
-        cubeUnit(UnitSpecularCube1 + i, probes.radiance[i]);
-      }
-      cubeUnit(UnitDepthCube, probes.depth);
-      cubeUnit(UnitDepthCube + 1, probes.probeDepth[0]);
-      cubeUnit(UnitDepthCube + 2, probes.probeDepth[1]);
-
-      // no polygon offset: :2504-2536 are commented out (P4.19)
-      switch (draw(frame, program, *surface.chunk, stateBits, 0.0f, 0.0f))
+      switch (outcome)
       {
       case DrawOutcome::Drawn:
         ++m_stats.ambientDraws;
@@ -1868,9 +2211,11 @@ void LitPasses::recordAmbient(Frame& frame)
       case DrawOutcome::Skipped:
         break;
       }
-    };
-    engineAmbientSurfaceInteractions(
-      material, registers, diffuseColor, specularColor, usage, drawOne);
+      if (disabled)
+      {
+        break;
+      }
+    }
     if (disabled)
     {
       // D9: the pass is disabled; programReport() says why
@@ -4176,7 +4521,8 @@ bool LitPasses::bindingSets(
   const std::vector<nvrhi::BindingLayoutHandle>& layouts,
   const bool pushConstants,
   std::array<nvrhi::IBindingSet*, nvrhi::c_MaxBindingLayouts>& sets,
-  std::size_t& count)
+  std::size_t& count,
+  SetRequest* request)
 {
   using Item = nvrhi::BindingSetItem;
   const auto& inputs = *frame.inputs;
@@ -4201,6 +4547,29 @@ bool LitPasses::bindingSets(
     return false;
   }
   count = layouts.size();
+  // LP6.1 (C64): the sets asked for (all without a request), each got from the cache or,
+  // for a record, held with the slot versions it was made with
+  const auto want = [&](const std::size_t set) {
+    return !request || (request->sets & (1u << set)) != 0;
+  };
+  const auto acquire =
+    [&](
+      const std::size_t set,
+      const BindingSetKey& key,
+      const std::function<nvrhi::BindingSetHandle()>& make) -> nvrhi::IBindingSet* {
+    if (!request || !request->hold)
+    {
+      return cache.get(key, frameIndex, make).Get();
+    }
+    auto* entry = cache.hold(key, frameIndex, make);
+    if (!entry)
+    {
+      return nullptr;
+    }
+    request->entries[set] = entry;
+    request->slots.append(key.slots.begin(), key.slots.end());
+    return entry->set.Get();
+  };
 
   // a unit's binding: its slot's written levels or its intrinsic's (C28)
   auto& images = *inputs.images;
@@ -4235,23 +4604,18 @@ bool LitPasses::bindingSets(
       key.slots.append(binding->versions.begin(), binding->versions.end());
       bindings.push_back(*binding);
     }
-    sets[set] = cache
-                  .get(
-                    key,
-                    frameIndex,
-                    [&] {
-                      auto desc = nvrhi::BindingSetDesc{};
-                      for (std::size_t i = 0; i < bindings.size(); ++i)
-                      {
-                        desc.addItem(Item::Texture_SRV(
-                          unitSlots[i].second,
-                          bindings[i].texture,
-                          nvrhi::Format::UNKNOWN,
-                          bindings[i].subresources));
-                      }
-                      return device.createBindingSet(desc, layouts[set]);
-                    })
-                  .Get();
+    sets[set] = acquire(set, key, [&] {
+      auto desc = nvrhi::BindingSetDesc{};
+      for (std::size_t i = 0; i < bindings.size(); ++i)
+      {
+        desc.addItem(Item::Texture_SRV(
+          unitSlots[i].second,
+          bindings[i].texture,
+          nvrhi::Format::UNKNOWN,
+          bindings[i].subresources));
+      }
+      return device.createBindingSet(desc, layouts[set]);
+    });
     return sets[set] != nullptr;
   };
   // consecutive units from firstSlot on
@@ -4271,6 +4635,7 @@ bool LitPasses::bindingSets(
   // set 0: the renderparms, pushed or a volatile constant buffer
   // (GetCurrentBindingLayout, RenderBackend_NVRHI.cpp:576-584); LP5.2a (C47):
   // POST_PROCESS_INGAME's also holds the units 0-2 at t0-t2 (:1464-1512)
+  if (want(0))
   {
     auto key = BindingSetKey{};
     key.layout = layouts[0].Get();
@@ -4299,26 +4664,20 @@ bool LitPasses::bindingSets(
       }
     }
     const auto bytes = parmSetBytes(layout);
-    sets[0] = cache
-                .get(
-                  key,
-                  frameIndex,
-                  [&] {
-                    auto desc = nvrhi::BindingSetDesc{};
-                    desc.addItem(
-                      pushConstants ? Item::PushConstants(0, bytes)
-                                    : Item::ConstantBuffer(0, buffer));
-                    for (std::size_t unit = 0; unit < units.size(); ++unit)
-                    {
-                      desc.addItem(Item::Texture_SRV(
-                        std::uint32_t(unit),
-                        units[unit].texture,
-                        nvrhi::Format::UNKNOWN,
-                        units[unit].subresources));
-                    }
-                    return device.createBindingSet(desc, layouts[0]);
-                  })
-                .Get();
+    sets[0] = acquire(0, key, [&] {
+      auto desc = nvrhi::BindingSetDesc{};
+      desc.addItem(
+        pushConstants ? Item::PushConstants(0, bytes) : Item::ConstantBuffer(0, buffer));
+      for (std::size_t unit = 0; unit < units.size(); ++unit)
+      {
+        desc.addItem(Item::Texture_SRV(
+          std::uint32_t(unit),
+          units[unit].texture,
+          nvrhi::Format::UNKNOWN,
+          units[unit].subresources));
+      }
+      return device.createBindingSet(desc, layouts[0]);
+    });
     if (!sets[0])
     {
       return false;
@@ -4350,31 +4709,19 @@ bool LitPasses::bindingSets(
       auto atlasKey = BindingSetKey{};
       atlasKey.layout = layouts[1].Get();
       atlasKey.resources = {atlas};
-      sets[1] =
-        cache
-          .get(
-            atlasKey,
-            frameIndex,
-            [&] {
-              return device.createBindingSet(
-                nvrhi::BindingSetDesc{}.addItem(Item::Texture_SRV(0, atlas)), layouts[1]);
-            })
-          .Get();
+      sets[1] = acquire(1, atlasKey, [&] {
+        return device.createBindingSet(
+          nvrhi::BindingSetDesc{}.addItem(Item::Texture_SRV(0, atlas)), layouts[1]);
+      });
       auto samplerKey = BindingSetKey{};
       samplerKey.layout = layouts[2].Get();
       samplerKey.samplers = 2;
       samplerKey.resources = {common->linearClamp.Get()};
-      sets[2] =
-        cache
-          .get(
-            samplerKey,
-            frameIndex,
-            [&] {
-              return device.createBindingSet(
-                nvrhi::BindingSetDesc{}.addItem(Item::Sampler(0, common->linearClamp)),
-                layouts[2]);
-            })
-          .Get();
+      sets[2] = acquire(2, samplerKey, [&] {
+        return device.createBindingSet(
+          nvrhi::BindingSetDesc{}.addItem(Item::Sampler(0, common->linearClamp)),
+          layouts[2]);
+      });
       return sets[1] != nullptr && sets[2] != nullptr;
     }
     // TEXTURE: t0 the unit 0 image, s0 its own sampler (SC238, SC269); LP5.2a: TEXGEN
@@ -4405,16 +4752,10 @@ bool LitPasses::bindingSets(
     samplerKey.layout = layouts[2].Get();
     samplerKey.samplers = 2;
     samplerKey.resources = {sampler};
-    sets[2] =
-      cache
-        .get(
-          samplerKey,
-          frameIndex,
-          [&] {
-            return device.createBindingSet(
-              nvrhi::BindingSetDesc{}.addItem(Item::Sampler(0, sampler)), layouts[2]);
-          })
-        .Get();
+    sets[2] = acquire(2, samplerKey, [&] {
+      return device.createBindingSet(
+        nvrhi::BindingSetDesc{}.addItem(Item::Sampler(0, sampler)), layouts[2]);
+    });
     return sets[2] != nullptr;
   }
   case EngineBindingLayout::DrawInteraction: {
@@ -4433,18 +4774,13 @@ bool LitPasses::bindingSets(
     auto samplerKey = BindingSetKey{};
     samplerKey.layout = layouts[3].Get();
     samplerKey.samplers = 1;
-    sets[3] = cache
-                .get(
-                  samplerKey,
-                  frameIndex,
-                  [&] {
-                    return device.createBindingSet(
-                      nvrhi::BindingSetDesc{}
-                        .addItem(Item::Sampler(0, common->anisotropicWrap))
-                        .addItem(Item::Sampler(1, common->linearBorder)),
-                      layouts[3]);
-                  })
-                .Get();
+    sets[3] = acquire(3, samplerKey, [&] {
+      return device.createBindingSet(
+        nvrhi::BindingSetDesc{}
+          .addItem(Item::Sampler(0, common->anisotropicWrap))
+          .addItem(Item::Sampler(1, common->linearBorder)),
+        layouts[3]);
+    });
     return sets[3] != nullptr;
   }
   case EngineBindingLayout::DrawInteractionSm: {
@@ -4473,32 +4809,20 @@ bool LitPasses::bindingSets(
       }
       auto* atlas = m_atlas.Get();
       key.resources = {atlas};
-      sets[2] =
-        cache
-          .get(
-            key,
-            frameIndex,
-            [&] {
-              auto desc = nvrhi::BindingSetDesc{};
-              desc.addItem(Item::Texture_SRV(
-                3,
-                bindings[0].texture,
-                nvrhi::Format::UNKNOWN,
-                bindings[0].subresources));
-              desc.addItem(Item::Texture_SRV(
-                4,
-                bindings[1].texture,
-                nvrhi::Format::UNKNOWN,
-                bindings[1].subresources));
-              desc.addItem(Item::Texture_SRV(std::uint32_t(UnitShadowMaps), atlas));
-              desc.addItem(Item::Texture_SRV(
-                std::uint32_t(UnitJitter),
-                bindings[2].texture,
-                nvrhi::Format::UNKNOWN,
-                bindings[2].subresources));
-              return device.createBindingSet(desc, layouts[2]);
-            })
-          .Get();
+      sets[2] = acquire(2, key, [&] {
+        auto desc = nvrhi::BindingSetDesc{};
+        desc.addItem(Item::Texture_SRV(
+          3, bindings[0].texture, nvrhi::Format::UNKNOWN, bindings[0].subresources));
+        desc.addItem(Item::Texture_SRV(
+          4, bindings[1].texture, nvrhi::Format::UNKNOWN, bindings[1].subresources));
+        desc.addItem(Item::Texture_SRV(std::uint32_t(UnitShadowMaps), atlas));
+        desc.addItem(Item::Texture_SRV(
+          std::uint32_t(UnitJitter),
+          bindings[2].texture,
+          nvrhi::Format::UNKNOWN,
+          bindings[2].subresources));
+        return device.createBindingSet(desc, layouts[2]);
+      });
       if (!sets[2])
       {
         return false;
@@ -4518,20 +4842,15 @@ bool LitPasses::bindingSets(
       common->linearBorder.Get(),
       common->linearClampCompare.Get(),
       common->pointWrap.Get()};
-    sets[3] = cache
-                .get(
-                  samplerKey,
-                  frameIndex,
-                  [&] {
-                    return device.createBindingSet(
-                      nvrhi::BindingSetDesc{}
-                        .addItem(Item::Sampler(0, common->anisotropicWrap))
-                        .addItem(Item::Sampler(1, common->linearBorder))
-                        .addItem(Item::Sampler(2, common->linearClampCompare))
-                        .addItem(Item::Sampler(3, common->pointWrap)),
-                      layouts[3]);
-                  })
-                .Get();
+    sets[3] = acquire(3, samplerKey, [&] {
+      return device.createBindingSet(
+        nvrhi::BindingSetDesc{}
+          .addItem(Item::Sampler(0, common->anisotropicWrap))
+          .addItem(Item::Sampler(1, common->linearBorder))
+          .addItem(Item::Sampler(2, common->linearClampCompare))
+          .addItem(Item::Sampler(3, common->pointWrap)),
+        layouts[3]);
+    });
     return sets[3] != nullptr;
   }
   case EngineBindingLayout::AmbientLightingIbl: {
@@ -4541,6 +4860,10 @@ bool LitPasses::bindingSets(
     // s1 LinearClamp
     for (const auto set : {std::size_t{1}, std::size_t{2}})
     {
+      if (!want(set))
+      {
+        continue;
+      }
       auto unitSlots = UnitSlots{};
       for (const auto& binding : AmbientUnits)
       {
@@ -4554,6 +4877,10 @@ bool LitPasses::bindingSets(
         return false;
       }
     }
+    if (!want(3))
+    {
+      return true;
+    }
     const auto* common = inputs.samplers->common(device)
                          | kdl::value_or(static_cast<const SamplerSet::Common*>(nullptr));
     if (!common)
@@ -4564,18 +4891,13 @@ bool LitPasses::bindingSets(
     samplerKey.layout = layouts[3].Get();
     samplerKey.samplers = 3;
     samplerKey.resources = {common->anisotropicWrap.Get(), common->linearClamp.Get()};
-    sets[3] = cache
-                .get(
-                  samplerKey,
-                  frameIndex,
-                  [&] {
-                    return device.createBindingSet(
-                      nvrhi::BindingSetDesc{}
-                        .addItem(Item::Sampler(0, common->anisotropicWrap))
-                        .addItem(Item::Sampler(1, common->linearClamp)),
-                      layouts[3]);
-                  })
-                .Get();
+    sets[3] = acquire(3, samplerKey, [&] {
+      return device.createBindingSet(
+        nvrhi::BindingSetDesc{}
+          .addItem(Item::Sampler(0, common->anisotropicWrap))
+          .addItem(Item::Sampler(1, common->linearClamp)),
+        layouts[3]);
+    });
     return sets[3] != nullptr;
   }
   case EngineBindingLayout::NormalCube: {
@@ -4597,17 +4919,11 @@ bool LitPasses::bindingSets(
     samplerKey.layout = layouts[2].Get();
     samplerKey.samplers = 5;
     samplerKey.resources = {common->linearWrap.Get()};
-    sets[2] =
-      cache
-        .get(
-          samplerKey,
-          frameIndex,
-          [&] {
-            return device.createBindingSet(
-              nvrhi::BindingSetDesc{}.addItem(Item::Sampler(0, common->linearWrap)),
-              layouts[2]);
-          })
-        .Get();
+    sets[2] = acquire(2, samplerKey, [&] {
+      return device.createBindingSet(
+        nvrhi::BindingSetDesc{}.addItem(Item::Sampler(0, common->linearWrap)),
+        layouts[2]);
+    });
     return sets[2] != nullptr;
   }
   case EngineBindingLayout::Fog:
@@ -4630,24 +4946,19 @@ bool LitPasses::bindingSets(
     samplerKey.layout = layouts[2].Get();
     samplerKey.samplers = fog ? 6 : 7;
     samplerKey.resources = {fog ? common->linearClamp.Get() : common->linearBorder.Get()};
-    sets[2] = cache
-                .get(
-                  samplerKey,
-                  frameIndex,
-                  [&] {
-                    auto desc = nvrhi::BindingSetDesc{};
-                    if (fog)
-                    {
-                      desc.addItem(Item::Sampler(0, common->linearClamp))
-                        .addItem(Item::Sampler(1, common->linearClamp));
-                    }
-                    else
-                    {
-                      desc.addItem(Item::Sampler(0, common->linearBorder));
-                    }
-                    return device.createBindingSet(desc, layouts[2]);
-                  })
-                .Get();
+    sets[2] = acquire(2, samplerKey, [&] {
+      auto desc = nvrhi::BindingSetDesc{};
+      if (fog)
+      {
+        desc.addItem(Item::Sampler(0, common->linearClamp))
+          .addItem(Item::Sampler(1, common->linearClamp));
+      }
+      else
+      {
+        desc.addItem(Item::Sampler(0, common->linearBorder));
+      }
+      return device.createBindingSet(desc, layouts[2]);
+    });
     return sets[2] != nullptr;
   }
   case EngineBindingLayout::PostProcessIngame: {
@@ -4663,17 +4974,11 @@ bool LitPasses::bindingSets(
     samplerKey.layout = layouts[1].Get();
     samplerKey.samplers = 4;
     samplerKey.resources = {common->linearClamp.Get()};
-    sets[1] =
-      cache
-        .get(
-          samplerKey,
-          frameIndex,
-          [&] {
-            return device.createBindingSet(
-              nvrhi::BindingSetDesc{}.addItem(Item::Sampler(0, common->linearClamp)),
-              layouts[1]);
-          })
-        .Get();
+    sets[1] = acquire(1, samplerKey, [&] {
+      return device.createBindingSet(
+        nvrhi::BindingSetDesc{}.addItem(Item::Sampler(0, common->linearClamp)),
+        layouts[1]);
+    });
     return sets[1] != nullptr;
   }
   default:
@@ -4747,8 +5052,6 @@ LitPasses::DrawOutcome LitPasses::drawGeometry(
     return DrawOutcome::Disabled;
   }
   const auto layout = builtin->bindingLayout;
-  auto* vertexBuffer = geometry.vertexBuffer;
-  auto* indexBuffer = geometry.indexBuffer;
 
   // the pipeline (RenderBackend_NVRHI.cpp:459-461): the key's bias only with
   // GLS_POLYGON_OFFSET, the only state GetRenderState reads it in (M-PASS-DIFF-01)
@@ -4799,6 +5102,29 @@ LitPasses::DrawOutcome LitPasses::drawGeometry(
     return DrawOutcome::Skipped;
   }
 
+  auto submit = DrawSubmit{};
+  submit.pipeline = pipeline;
+  submit.layout = layout;
+  submit.pushConstants = pushConstants;
+  submit.sets = sets;
+  submit.setCount = setCount;
+  submit.geometry = geometry;
+  return submitDraw(frame, submit, lightTriangles);
+}
+
+LitPasses::DrawOutcome LitPasses::submitDraw(
+  Frame& frame, const DrawSubmit& submit, const LightTriangles* lightTriangles)
+{
+  const auto& inputs = *frame.inputs;
+  const auto layout = submit.layout;
+  auto* pipeline = submit.pipeline;
+  const auto pushConstants = submit.pushConstants;
+  const auto& sets = submit.sets;
+  const auto setCount = submit.setCount;
+  const auto& geometry = submit.geometry;
+  auto* vertexBuffer = geometry.vertexBuffer;
+  auto* indexBuffer = geometry.indexBuffer;
+
   // LP3.1: pass 6's tile viewport, else the view's
   const auto viewport = frame.viewport ? *frame.viewport : engineViewport(frame.view);
   auto changeState = !m_state.valid || m_state.pipeline != pipeline
@@ -4822,7 +5148,9 @@ LitPasses::DrawOutcome LitPasses::drawGeometry(
   }
   else if (m_parms.changed(layout) || layoutChanged)
   {
-    auto* buffer = constantBuffer(frame, layout);
+    // LP6.1 (C64): a record's buffer, resolved with it
+    auto* buffer =
+      submit.constantBuffer ? submit.constantBuffer : constantBuffer(frame, layout);
     auto& writes = m_frameWrites[layout];
     if (!buffer || writes >= writeBudget())
     {
@@ -4905,6 +5233,178 @@ LitPasses::DrawOutcome LitPasses::drawGeometry(
 
   m_state.layout = layout;
   return DrawOutcome::Drawn;
+}
+
+std::optional<LitPasses::DrawOutcome> LitPasses::resolveRecord(
+  Frame& frame,
+  DrawRecord& record,
+  const int program,
+  const std::uint64_t stateBits,
+  const Chunk& chunk,
+  const std::uint32_t sets,
+  const std::span<const SlotVersion> extraSlots)
+{
+  // LP6.1 (C64): every resolution counted, those that stop too (the next draw asks again)
+  ++m_stats.recordResolves;
+  m_records.release(record);
+  const auto& inputs = *frame.inputs;
+
+  // draw's order (DrawElementsWithCounters, RenderBackend_NVRHI.cpp:315-565): the
+  // program, then the chunk's arena ranges (SC220), copied once into the record
+  const auto* builtin = engineProgram(program);
+  if (!builtin)
+  {
+    return DrawOutcome::Disabled;
+  }
+  const auto placement = inputs.arenas->placement(chunk.key);
+  auto* vertexBuffer =
+    placement ? inputs.arenas->vertexBuffer(placement->vertexArena) : nullptr;
+  auto* indexBuffer =
+    placement ? inputs.arenas->indexBuffer(placement->indexArena) : nullptr;
+  if (!placement || !vertexBuffer || !indexBuffer || placement->indexCount == 0)
+  {
+    ++m_stats.skippedDraws;
+    m_stats.unconverged = true;
+    m_stats.retrigger = true;
+    return DrawOutcome::Skipped;
+  }
+
+  // drawGeometry's: the pipeline (a recorded draw has no polygon offset, so the key's
+  // biases are 0, M-PASS-DIFF-01), D77's pending skip and D9's failure, then the binding
+  // sets the units name, held
+  const auto layout = builtin->bindingLayout;
+  const auto key =
+    PipelineKey{PipelineRecipe::Draw, program, stateBits, 0, 0.0f, frame.formats};
+  if (m_logDraws)
+  {
+    m_requestedKeys.insert(key);
+  }
+  const auto& lookup = inputs.pipelines->graphics(key);
+  if (lookup.state == GraphicsPipelineLookup::State::Pending)
+  {
+    ++m_stats.pendingPipelines;
+    ++m_stats.skippedDraws;
+    m_stats.unconverged = true;
+    return DrawOutcome::Skipped;
+  }
+  if (lookup.state == GraphicsPipelineLookup::State::Failed || !lookup.pipeline)
+  {
+    if (m_stats.disabledReason.empty())
+    {
+      m_stats.disabledReason = lookup.error;
+    }
+    return DrawOutcome::Disabled;
+  }
+  const auto pushConstants = pushesConstants(lookup.bindingLayouts);
+  auto made = std::array<nvrhi::IBindingSet*, nvrhi::c_MaxBindingLayouts>{};
+  auto count = std::size_t{0};
+  auto request = SetRequest{};
+  request.sets = sets;
+  request.hold = true;
+  if (!bindingSets(
+        frame, layout, lookup.bindingLayouts, pushConstants, made, count, &request))
+  {
+    for (auto* entry : request.entries)
+    {
+      if (entry)
+      {
+        BindingSetCache::release(*entry);
+      }
+    }
+    // D77: a texture with no written level yet (neither the slot nor its intrinsic)
+    ++m_stats.skippedDraws;
+    m_stats.unconverged = true;
+    m_stats.retrigger = true;
+    return DrawOutcome::Skipped;
+  }
+  // the ambient pass's view sets are made against its layouts (every ambient program's)
+  if (layout == EngineBindingLayout::AmbientLightingIbl && m_ambientLayouts.empty())
+  {
+    m_ambientLayouts = lookup.bindingLayouts;
+    m_ambientPush = pushConstants;
+  }
+
+  record.key = key;
+  record.pipeline = lookup.pipeline.Get();
+  record.layout = layout;
+  record.pushConstants = pushConstants;
+  record.constantBuffer = pushConstants ? nullptr : constantBuffer(frame, layout);
+  record.setCount = count;
+  record.sets = made;
+  record.entries = request.entries;
+  record.vertexBuffer = vertexBuffer;
+  record.indexBuffer = indexBuffer;
+  record.indexCount = placement->indexCount;
+  record.firstIndex = std::uint32_t(placement->indexes.offset / 2);
+  record.baseVertex = std::uint32_t(placement->vertices.offset / 32);
+  record.shared = placement->shared;
+  record.slots = request.slots;
+  record.slots.append(extraSlots.begin(), extraSlots.end());
+  record.renderTargetGeneration = m_records.renderTargetGeneration();
+  record.arenaGeneration = m_records.arenaGeneration();
+  record.state = DrawRecord::State::Resolved;
+  m_records.resolved(record);
+  return std::nullopt;
+}
+
+LitPasses::DrawOutcome LitPasses::drawRecord(
+  Frame& frame,
+  DrawRecord& record,
+  nvrhi::IBindingSet* viewSet,
+  const LightTriangles* lightTriangles)
+{
+  // LP6.1 (C64): the keys the draws asked for while the log is on (tests)
+  if (m_logDraws)
+  {
+    m_requestedKeys.insert(record.key);
+  }
+  // D172's hook (P8.1): the sets it draws with are used in this frame, stamped through
+  // the entries it holds
+  DrawRecordTable::stamp(record, frame.inputs->frameIndex);
+  auto submit = DrawSubmit{};
+  submit.pipeline = record.pipeline;
+  submit.layout = record.layout;
+  submit.pushConstants = record.pushConstants;
+  submit.constantBuffer = record.constantBuffer;
+  submit.sets = record.sets;
+  submit.setCount = record.setCount;
+  if (viewSet)
+  {
+    submit.sets[2] = viewSet;
+  }
+  submit.geometry = DrawGeometry{
+    record.vertexBuffer,
+    record.indexBuffer,
+    record.indexCount,
+    record.firstIndex,
+    record.baseVertex};
+  const auto outcome = submitDraw(frame, submit, lightTriangles);
+  // LP7.2 (D129): an instance's draw reads its shared placement
+  if (outcome == DrawOutcome::Drawn && record.shared)
+  {
+    ++m_stats.modelDraws;
+  }
+  return outcome;
+}
+
+LitPasses::DrawOutcome LitPasses::drawRecorded(
+  Frame& frame,
+  DrawRecord& record,
+  const int program,
+  const std::uint64_t stateBits,
+  const Chunk& chunk,
+  const LightTriangles* lightTriangles)
+{
+  if (record.state != DrawRecord::State::Resolved)
+  {
+    if (
+      const auto failed =
+        resolveRecord(frame, record, program, stateBits, chunk, ~std::uint32_t{0}, {}))
+    {
+      return *failed;
+    }
+  }
+  return drawRecord(frame, record, nullptr, lightTriangles);
 }
 
 void LitPasses::log(
@@ -5002,8 +5502,37 @@ const RenderParms& LitPasses::parms() const
   return m_parms;
 }
 
+std::size_t LitPasses::recordsSlotChanged(const ImageSlotId slot)
+{
+  return m_records.slotChanged(slot);
+}
+
+void LitPasses::renderTargetsChanged(const std::uint64_t generation)
+{
+  if (m_records.generations(generation, m_records.arenaGeneration()))
+  {
+    m_linksStale = true;
+  }
+}
+
+const DrawRecordTable& LitPasses::recordsForTesting() const
+{
+  return m_records;
+}
+
 void LitPasses::releaseAll()
 {
+  // LP6.1 (C64): the records let go of their sets before the cache is cleared (teardown
+  // step 2's order), and the links go with the lists
+  m_records.clear();
+  m_surfaceLinks.clear();
+  m_lightLinks.clear();
+  m_stageLinks.clear();
+  m_interactionLinks.clear();
+  m_linksStale = false;
+  m_ambientViewSets.clear();
+  m_ambientLayouts.clear();
+  m_ambientPush = false;
   // LP3.1 (C59): the shadow atlas goes with the session's device objects (teardown step
   // 2), so that the stop row's allocations are back to the start's
   m_atlasFramebuffer = nullptr;
@@ -5044,6 +5573,10 @@ void LitPasses::releaseAll()
 void LitPasses::setConstantBufferVersionsForTesting(const std::uint32_t versions)
 {
   m_constantBufferVersions = std::max(versions, 1u);
+  // LP6.1 (C64): the records' set 0 and buffer are the old buffers': cleared, the lists
+  // linked again at the next frame
+  m_records.clear();
+  m_linksStale = true;
 }
 
 void LitPasses::setLightTriangleCullForTesting(const bool on)

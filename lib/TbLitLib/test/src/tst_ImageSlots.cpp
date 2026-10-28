@@ -543,6 +543,34 @@ TEST_CASE("ImageSlots")
     CHECK(slots.takeChangedSlots() == std::vector<ImageSlotId>{id});
   }
 
+  SECTION("LP6.1 (C64, P8.1): an answer's adopted usage is reported, a request's not")
+  {
+    auto service = FakeService{};
+    auto slots = ImageSlots{};
+    slots.setRequest(service.request());
+    // answered at its request: not a change (nothing has drawn the slot yet)
+    const auto readyKey = keyOf("textures/u_ready", UsageSpecular);
+    service.publish(readyKey, true);
+    const auto ready = slots.request(readyKey);
+    CHECK(slots.slot(ready)->adoptedUsage);
+    // pending at its request, answered by a later table: a change without a version bump,
+    // which the draw records read (the program follows the usage) and the cache does not
+    const auto laterKey = keyOf("textures/u_later", UsageSpecular);
+    const auto later = slots.request(laterKey);
+    CHECK_FALSE(slots.slot(later)->adoptedUsage);
+    static_cast<void>(slots.takeChangedSlots());
+    CHECK(slots.takeUsageChangedSlots().empty());
+    const auto version = slots.slot(later)->version;
+    service.publish(laterKey, true);
+    slots.refresh(service.table, 1);
+    CHECK(slots.slot(later)->adoptedUsage);
+    CHECK(slots.slot(later)->version == version);
+    CHECK(slots.usageChangedSlots() == std::vector<ImageSlotId>{later});
+    CHECK(slots.takeUsageChangedSlots() == std::vector<ImageSlotId>{later});
+    CHECK(slots.takeUsageChangedSlots().empty());
+    CHECK(slots.takeChangedSlots().empty());
+  }
+
   SECTION("LP4.3 (D79, P4.6): the state version moves on every state change, only then")
   {
     auto service = FakeService{};
@@ -743,6 +771,8 @@ TEST_CASE("ImageSlots and BindingSetCache: 100 cycles on the debug heap (U2.4)")
         slots.dropTexture(*slots.find(key), frame);
       }
       static_cast<void>(slots.takeChangedSlots());
+      // LP6.1 (C64): and the adopted usages' changes, which the render thread takes too
+      static_cast<void>(slots.takeUsageChangedSlots());
       ++service.table.version;
       slots.refresh(service.table, frame);
       slots.collectRetired(frame + 1);

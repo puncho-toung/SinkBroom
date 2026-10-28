@@ -110,7 +110,7 @@ ImageSlotId ImageSlots::request(const MaterialImageKey& key)
   {
     if (const auto lookup = m_request(key); lookup.state != ImageLookup::State::Pending)
     {
-      adopt(id, lookup, m_seenChanges);
+      adopt(id, lookup, m_seenChanges, false);
     }
   }
   return id;
@@ -379,6 +379,25 @@ std::vector<ImageSlotId> ImageSlots::takeChangedSlots()
   return changed;
 }
 
+std::vector<ImageSlotId> ImageSlots::takeUsageChangedSlots()
+{
+  auto changed = std::exchange(m_usageChanged, {});
+  std::ranges::sort(changed);
+  const auto [first, last] = std::ranges::unique(changed);
+  changed.erase(first, last);
+  return changed;
+}
+
+const std::vector<ImageSlotId>& ImageSlots::changedSlots() const
+{
+  return m_changed;
+}
+
+const std::vector<ImageSlotId>& ImageSlots::usageChangedSlots() const
+{
+  return m_usageChanged;
+}
+
 void ImageSlots::collectRetired(const std::uint64_t completedFrames)
 {
   m_retired.collect(completedFrames);
@@ -391,6 +410,7 @@ void ImageSlots::releaseAll()
   m_ids.clear();
   m_pending.clear();
   m_changed.clear();
+  m_usageChanged.clear();
 }
 
 std::uint64_t ImageSlots::stateVersion() const
@@ -399,9 +419,21 @@ std::uint64_t ImageSlots::stateVersion() const
 }
 
 void ImageSlots::adopt(
-  const ImageSlotId id, const ImageLookup& lookup, const std::uint64_t change)
+  const ImageSlotId id,
+  const ImageLookup& lookup,
+  const std::uint64_t change,
+  const bool reported)
 {
   auto& slot = m_slots[id];
+  // LP6.1 (C64, P8.1): the draws' program reads the adopted usage, which an answer sets
+  // without a bump
+  const auto usageBefore = slot.adoptedUsage;
+  const auto reportUsage = [&] {
+    if (reported && slot.adoptedUsage != usageBefore)
+    {
+      m_usageChanged.push_back(id);
+    }
+  };
   m_pending.erase(id);
   ++m_stateVersion;
   // U2.1: the facts, never the service's slot (it owns the image's bytes)
@@ -427,12 +459,14 @@ void ImageSlots::adopt(
       slot.adoptedUsage = usage;
       slot.adoptedFormat = format;
       slot.state = State::Loading;
+      reportUsage();
     }
     slot.reason.clear();
     return;
   }
   slot.adoptedUsage = usage;
   slot.adoptedFormat = format;
+  reportUsage();
   if (slot.state == State::Replacing)
   {
     // the image has gone (no file, a refusal): the replaced texture goes too, as when the

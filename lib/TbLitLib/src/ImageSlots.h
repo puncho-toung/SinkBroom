@@ -180,6 +180,8 @@ private:
   std::unordered_map<MaterialImageKey, ImageSlotId, MaterialImageKeyHash> m_ids;
   std::unordered_set<ImageSlotId> m_pending;
   std::vector<ImageSlotId> m_changed;
+  // LP6.1 (C64, P8.1): the slots whose adopted usage changed without a version bump
+  std::vector<ImageSlotId> m_usageChanged;
   std::uint64_t m_tableVersion = 0;
   std::uint64_t m_seenChanges = 0;
   // LP4.3 (D79, P4.6): bumped on every change of a slot's state
@@ -254,6 +256,18 @@ public:
 
   // the slots whose version changed since the last call, each once
   std::vector<ImageSlotId> takeChangedSlots();
+  /**
+   * LP6.1 (C64, P8.1): the slots whose adopted usage (the PBR rename, which can change a
+   * draw's program) changed since the last call without a version bump (an answer:
+   * Pending to Loading or Default), each once; a slot's first answer at its request is
+   * not one (nothing has drawn it yet). The binding-set cache does not read them (what a
+   * slot binds has not changed); the draw records do.
+   */
+  std::vector<ImageSlotId> takeUsageChangedSlots();
+  // LP6.1 (C64): the changes not taken yet, as they are (a frame's passes look at what a
+  // test's hook changed after the uploads' erase; nothing in a session's own frames)
+  const std::vector<ImageSlotId>& changedSlots() const;
+  const std::vector<ImageSlotId>& usageChangedSlots() const;
 
   /**
    * LP4.3 (D79, P4.6): a counter bumped whenever a slot's state changes (an answer:
@@ -269,7 +283,13 @@ public:
   void releaseAll();
 
 private:
-  void adopt(ImageSlotId id, const ImageLookup& lookup, std::uint64_t change);
+  // reported: an adopted usage's change is reported (takeUsageChangedSlots); not at the
+  // slot's request
+  void adopt(
+    ImageSlotId id,
+    const ImageLookup& lookup,
+    std::uint64_t change,
+    bool reported = true);
   void bump(ImageSlotId id);
   // asks for a slot's image again; keepComplete (a change, LPF.1): a slot holding a
   // complete texture keeps it bound and is Replacing

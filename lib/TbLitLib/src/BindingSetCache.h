@@ -74,22 +74,33 @@ struct BindingSetKeyHash
  * generation erases exactly the sets that bind a render target; an LRU over the last
  * frame each set was used bounds the cache (BindingSetCacheSize). A set erased here may
  * still be in a frame in flight: its command list holds it until NVRHI collects it.
+ *
+ * LP6.1 (C64, P8.1, D172): a draw record holds the entries of the sets it draws with
+ * (hold): it stamps each one's lastUsed once per frame through the entry (no hash; the
+ * map's nodes do not move), and trim never erases a held entry, so a record's set stays
+ * in the map and in the reverse index, where slotChanged finds it. The records let go of
+ * their holds before the cache erases a set they hold (the slot's change, the render
+ * targets' generation, teardown); an erased held entry is counted (heldErased, 0).
  * Render thread only; clear in teardown step 2.
  */
 class BindingSetCache
 {
-private:
+public:
+  // a set and the last frame it was used in; the records holding it (LP6.1)
   struct Entry
   {
     nvrhi::BindingSetHandle set;
     std::uint64_t lastUsed = 0;
+    std::uint32_t holds = 0;
   };
 
+private:
   std::size_t m_capacity;
   std::unordered_map<BindingSetKey, Entry, BindingSetKeyHash> m_sets;
   // the keys (owned by m_sets, whose nodes do not move) that hold each slot
   std::unordered_map<ImageSlotId, std::unordered_set<const BindingSetKey*>> m_bySlot;
   std::uint64_t m_made = 0;
+  std::uint64_t m_heldErased = 0;
 
 public:
   explicit BindingSetCache(std::size_t capacity);
@@ -102,14 +113,24 @@ public:
     const BindingSetKey& key,
     std::uint64_t frame,
     const std::function<nvrhi::BindingSetHandle()>& make);
+  /**
+   * LP6.1 (C64): get's entry, held by the caller (a draw record) until it lets go
+   * (release); null when make returns null. The entry lives while it is held.
+   */
+  Entry* hold(
+    const BindingSetKey& key,
+    std::uint64_t frame,
+    const std::function<nvrhi::BindingSetHandle()>& make);
+  // LP6.1 (C64): a hold let go
+  static void release(Entry& entry);
 
   // a slot's version changed: the sets that hold it go; how many
   std::size_t slotChanged(ImageSlotId slot);
   // C28: the render targets were made again (generation): the sets that bind one of an
   // older generation go, and no other; how many
   std::size_t renderTargetsChanged(std::uint64_t generation);
-  // D37: beyond the capacity the least recently used sets go, never one used in frame;
-  // how many
+  // D37: beyond the capacity the least recently used sets go, never one used in frame
+  // nor (LP6.1) one a record holds; how many
   std::size_t trim(std::uint64_t frame);
 
   std::size_t size() const;
@@ -118,10 +139,17 @@ public:
   std::size_t setsOf(ImageSlotId slot) const;
   // the sets made so far
   std::uint64_t made() const;
+  // LP6.1 (C64): the held entries erased so far (a record outliving its set: 0)
+  std::uint64_t heldErased() const;
   // teardown step 2
   void clear();
 
 private:
+  // get's and hold's: the entry of key, made by make on a miss
+  Entry* entryOf(
+    const BindingSetKey& key,
+    std::uint64_t frame,
+    const std::function<nvrhi::BindingSetHandle()>& make);
   void erase(std::unordered_map<BindingSetKey, Entry, BindingSetKeyHash>::iterator it);
 
   deleteCopyAndMove(BindingSetCache);

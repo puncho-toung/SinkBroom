@@ -768,18 +768,26 @@ std::optional<InteractionDraw> engineSingleInteraction(
   draw.diffuseColor = state.diffuseColor;
   draw.specularColor = state.specularColor;
   draw.vertexColor = state.vertexColor;
+  // LP6.1 (C64): what it read of the state the surfaces before left
+  draw.inherited = std::uint8_t(CarriedFields & ~state.written);
 
-  // the program by the specular image's usage; K26: the unshadowed one. LP5.1 (D114):
-  // an ambient light's specular is _black, TD_DEFAULT, so it takes the legacy branch's
-  // BindShader_InteractionAmbient (RenderBackend.cpp:1528-1537); the PBR branch's
-  // BindShader_PBR_InteractionAmbient (:1404-1413) is never reached
-  const auto specUsage = usage ? usage(draw.specularImage) : draw.specularImage.usage;
-  const auto pbr = specUsage == engine_image::UsageSpecularPbrRmao
-                   || specUsage == engine_image::UsageSpecularPbrRmao + 1;
-  draw.program = state.ambientLight ? InteractionProgram::InteractionAmbient
-                 : pbr              ? InteractionProgram::PbrInteraction
-                                    : InteractionProgram::Interaction;
+  // the program by the specular image's usage; K26: the unshadowed one
+  draw.program = engineInteractionDrawProgram(
+    usage ? usage(draw.specularImage) : draw.specularImage.usage, state.ambientLight);
   return draw;
+}
+
+InteractionProgram engineInteractionDrawProgram(
+  const int specularUsage, const bool ambientLight)
+{
+  // LP5.1 (D114): an ambient light's specular is _black, TD_DEFAULT, so it takes the
+  // legacy branch's BindShader_InteractionAmbient (RenderBackend.cpp:1528-1537); the PBR
+  // branch's BindShader_PBR_InteractionAmbient (:1404-1413) is never reached
+  const auto pbr = specularUsage == engine_image::UsageSpecularPbrRmao
+                   || specularUsage == engine_image::UsageSpecularPbrRmao + 1;
+  return ambientLight ? InteractionProgram::InteractionAmbient
+         : pbr        ? InteractionProgram::PbrInteraction
+                      : InteractionProgram::Interaction;
 }
 
 namespace
@@ -831,6 +839,7 @@ void surfaceStageLoop(
       state.diffuseImage.reset();
       state.specularImage.reset();
       engineSetupInteractionStage(stage, registers, nullptr, state.bumpMatrix, nullptr);
+      state.written |= CarriedBumpMatrix;
       break;
     case em::LightingDiffuse:
       if (engineRegister(registers, stage.conditionRegister) == 0.0f)
@@ -845,6 +854,7 @@ void surfaceStageLoop(
       state.vertexColor = stage.vertexColor;
       engineSetupInteractionStage(
         stage, registers, &diffuseColor, state.diffuseMatrix, &state.diffuseColor);
+      state.written |= CarriedDiffuseMatrix | CarriedVertexColor;
       break;
     case em::LightingSpecular:
       if (engineRegister(registers, stage.conditionRegister) == 0.0f || noSpecular)
@@ -859,6 +869,7 @@ void surfaceStageLoop(
       state.vertexColor = stage.vertexColor;
       engineSetupInteractionStage(
         stage, registers, &specularColor, state.specularMatrix, &state.specularColor);
+      state.written |= CarriedSpecularMatrix | CarriedVertexColor;
       break;
     default:
       break;
@@ -887,6 +898,8 @@ void engineSurfaceInteractions(
   state.diffuseImage.reset();
   state.diffuseColor = Vec4{0.0f, 0.0f, 0.0f, 0.0f};
   state.specularColor = Vec4{0.0f, 0.0f, 0.0f, 0.0f};
+  // LP6.1 (C64): nothing of this surface's set yet
+  state.written = 0;
   surfaceStageLoop(
     material, registers, diffuseColor, specularColor, noSpecular, state, usage, draw);
 }
@@ -920,6 +933,8 @@ std::optional<InteractionDraw> pendingSurfaceInteraction(
   state.diffuseMatrix = state.bumpMatrix;
   state.specularMatrix = state.bumpMatrix;
   state.diffuseColor = diffuseColor;
+  // LP6.1 (C64): a state of its own: it reads nothing of another surface's
+  state.written = CarriedFields;
   return engineSingleInteraction(state, usage);
 }
 

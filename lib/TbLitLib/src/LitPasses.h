@@ -32,6 +32,7 @@
 #pragma once
 
 #include "BindingSetCache.h"
+#include "DrawRecords.h"
 #include "FrameResources.h"
 #include "GeometryArenas.h"
 #include "ImageSlots.h"
@@ -389,6 +390,12 @@ struct LitFrameStats
   double interactionRecordMs = 0.0;
   double stageRecordMs = 0.0;
   double fogRecordMs = 0.0;
+  // ----- LP6.1 (C64): the draw records of passes 1, 5 and 7 (DrawRecordTable) -----
+  // the records the table holds at the frame's end, and the resolutions this frame (a
+  // record's first draw, its draw after a release, and each draw of a record whose
+  // pipeline is pending, whose chunk is not placed or whose binding failed)
+  std::size_t recordsHeld = 0;
+  std::size_t recordResolves = 0;
 };
 
 // a recorded draw (setDrawLogForTesting)
@@ -562,6 +569,14 @@ inline constexpr std::size_t LitTextureUnits = 15;
  * and AreaData changed, or when the last build was waiting for a material or an
  * evaluation and the material table has a new version (D52, D77).
  *
+ * LP6.1 (C64, D167): passes 1, 5 and 7 draw through draw records (DrawRecords.h): the
+ * lists build links each drawn surface, and each (light stage, list, surface) of a
+ * light's lists, to its records with one hash lookup; a record resolves at its first draw
+ * what DrawElementsWithCounters looked up per draw (the placement, the pipeline, the
+ * binding sets held in the cache), and its later draws make the state compare, the parms'
+ * write and the draw alone. The table's lifetime and invalidation rules are
+ * DrawRecordTable's; passes 6, 8, 9 and the tonemap keep the per-draw path.
+ *
  * D76: DRAW_INTERACTION's renderparms are a volatile constant buffer (push constants
  * where the device's limit allows, the layout says which); its writes are counted while
  * recording and a frame writes at most maxVersions / (FramesInFlight + 1), since the
@@ -614,6 +629,43 @@ private:
     bool operator==(const ListsKey&) const = default;
   };
 
+  // LP6.1 (C64): a light's links into its records for the lists built: per list (local,
+  // global, translucent) the run of its stages' links (each a run of (surface, records)
+  // in engineOrderInteractionSurfaces' order), and its D76 worst case (worstCaseWrites)
+  struct InteractionLink
+  {
+    const LitSurface* surface = nullptr;
+    InteractionRecords* records = nullptr;
+  };
+  struct StageLink
+  {
+    std::size_t stage = 0;
+    std::size_t first = 0;
+    std::size_t count = 0;
+  };
+  struct LightLink
+  {
+    std::array<std::pair<std::size_t, std::size_t>, 3> lists = {};
+    std::uint64_t worstCaseWrites = 0;
+  };
+  // LP6.1 (C64): the ambient pass's set 2 of a frame, the view's units (3, 4, 7-14): the
+  // probe path's (0) and a grid area's (1 + area), made at its first draw
+  struct AmbientViewSet
+  {
+    nvrhi::IBindingSet* set = nullptr;
+    bool asked = false;
+  };
+  // LP6.1 (C64): what bindingSets is asked: the sets to make (a bit per set; the ambient
+  // pass's records leave set 2, the view's, to AmbientViewSet) and, for a record, whether
+  // it holds them: then their entries and the slot versions they were made with
+  struct SetRequest
+  {
+    std::uint32_t sets = ~std::uint32_t{0};
+    bool hold = false;
+    std::array<BindingSetCache::Entry*, nvrhi::c_MaxBindingLayouts> entries = {};
+    InlineVector<SlotVersion, DrawRecordSlots> slots;
+  };
+
   // DrawElementsWithCounters' state between draws
   struct DrawState
   {
@@ -650,6 +702,20 @@ private:
     Disabled,
     // the volatile constant buffer's frame budget is spent (D76)
     Overflowed,
+  };
+
+  // LP6.1 (C64): what drawGeometry and a record's draw hand DrawElementsWithCounters'
+  // last part: the pipeline, the layout, the sets, the buffers and ranges
+  // (constantBuffer: the layout's volatile buffer, null to look it up)
+  struct DrawSubmit
+  {
+    nvrhi::IGraphicsPipeline* pipeline = nullptr;
+    EngineBindingLayout layout = EngineBindingLayout::Num;
+    bool pushConstants = false;
+    nvrhi::IBuffer* constantBuffer = nullptr;
+    std::array<nvrhi::IBindingSet*, nvrhi::c_MaxBindingLayouts> sets = {};
+    std::size_t setCount = 0;
+    DrawGeometry geometry;
   };
 
   // what the frame's draws use, set per frame
@@ -734,6 +800,22 @@ private:
   // LP5.2a (C46, D115): the drawn surfaces in the stage pass's order (stagePassOrder),
   // made when the lists are built; pointers into m_lists.drawSurfs
   std::vector<const LitSurface*> m_stageOrder;
+  // LP6.1 (C64): the draw records of passes 1, 5 and 7, and the lists' links into them:
+  // the drawn surfaces' (m_lists.drawSurfs' order) and the lights' (m_lists.lights'
+  // order, fog and blend lights and lights without interactions empty); stale after a
+  // clear outside a lists build (a generation, the volatile buffers' size): linked again
+  // before the next frame's passes
+  DrawRecordTable m_records;
+  std::vector<SurfaceRecords*> m_surfaceLinks;
+  std::vector<LightLink> m_lightLinks;
+  std::vector<StageLink> m_stageLinks;
+  std::vector<InteractionLink> m_interactionLinks;
+  bool m_linksStale = false;
+  // LP6.1 (C64): the frame's ambient view sets, and AMBIENT_LIGHTING_IBL's layouts (every
+  // ambient program's, kept at the first ambient record's resolution) they are made for
+  std::vector<AmbientViewSet> m_ambientViewSets;
+  std::vector<nvrhi::BindingLayoutHandle> m_ambientLayouts;
+  bool m_ambientPush = false;
   // LP5.2a (C47, D9): a newStage program's row by its name, or none (not in the table, or
   // a blob missing), looked up once; the names already warned about
   std::map<std::string, std::optional<EngineMaterialProgram>> m_materialPrograms;
@@ -863,6 +945,16 @@ public:
   // teardown step 2: every handle
   void releaseAll();
 
+  // LP6.1 (C64, P8.1), render thread: a slot's version or adopted usage changed: the
+  // records resolved with it released, before the binding-set cache erases its sets
+  // (RenderThread::eraseChangedSets); how many
+  std::size_t recordsSlotChanged(ImageSlotId slot);
+  // LP6.1 (C64), render thread: the render targets were made again: every record cleared
+  // before the binding-set cache erases the old targets' sets
+  void renderTargetsChanged(std::uint64_t generation);
+  // LP6.1 (C64), render thread: the draw records (tests)
+  const DrawRecordTable& recordsForTesting() const;
+
   // Test hooks (render thread).
 
   // the volatile constant buffers' maxVersions (D76); made again at the next draw
@@ -900,7 +992,29 @@ public:
   const std::set<PipelineKey, PipelineKeyLess>& requestedKeysForTesting() const;
 
 private:
+  // record's frame (record sets the held records after it)
+  void recordFrame(const LitFrameInputs& inputs);
   void rebuildLists(const LitFrameInputs& inputs, const LitView& view);
+  // LP6.1 (C64): the lists linked to their records, one hash lookup per link (after a
+  // build, or after a clear outside one)
+  void linkRecords();
+  // LP6.1 (C64): a surface's ambient records: engineAmbientSurfaceInteractions' draws,
+  // made at the ambient pass's first draw of it (its usage asks for the specular images
+  // then, as the stage loop did every frame before)
+  void fillAmbientRecords(
+    SurfaceRecords& records, const LitSurface& surface, const ImageUsage& usage);
+  // LP6.1 (C64): a (light stage, list, surface)'s interaction records: the stage loop's
+  // draws from a state of their own (InteractionDraw::inherited marks what they read of
+  // the surfaces before) and what the loop leaves of the carried fields, made at its
+  // first draw
+  void fillInteractionRecords(
+    InteractionRecords& records,
+    const LitSurface& surface,
+    const Vec4& diffuseColor,
+    const Vec4& specularColor,
+    bool noSpecular,
+    bool ambientLight,
+    const ImageUsage& usage);
   // C16: a pass's timer query, begun and ended around it; endTimer says whether it ran
   void beginTimer(Frame& frame, nvrhi::ITimerQuery* timer);
   bool endTimer(Frame& frame, nvrhi::ITimerQuery* timer);
@@ -1124,10 +1238,12 @@ private:
   // C47, D9: a newStage stage's program row, looked up once per name (null: missing)
   const EngineMaterialProgram* materialProgram(Frame& frame, const MaterialStage& stage);
   // RenderInteractions for one list; false when the pass is disabled. LP3.1 (C60):
-  // shadow is the light's record when pass 6 placed it in the atlas (shadowRecordOf)
+  // shadow is the light's record when pass 6 placed it in the atlas (shadowRecordOf).
+  // LP6.1 (C64): its draws are the list's links' records (m_lightLinks[lightIndex])
   bool renderInteractions(
     Frame& frame,
     const ViewLight& light,
+    std::size_t lightIndex,
     const ShadowLightRecord* shadow,
     const std::vector<LitSurface>& surfaces,
     InteractionList list,
@@ -1161,6 +1277,47 @@ private:
     const MaterialStage& lightStage,
     const std::optional<EngineGlMatrix>& lightTextureMatrix);
 
+  /**
+   * LP6.1 (C64): DrawElementsWithCounters' lookups into record, in draw's and
+   * drawGeometry's order (the program, the placement, the pipeline, the binding sets the
+   * units name, held; the request's sets only), each failure counted as they count it
+   * (the record left unresolved, so the next draw asks again: a pending pipeline every
+   * frame until it is made, D77); extraSlots join the record's slots (an ambient draw's
+   * grid atlas). nullopt once resolved.
+   */
+  std::optional<DrawOutcome> resolveRecord(
+    Frame& frame,
+    DrawRecord& record,
+    int program,
+    std::uint64_t stateBits,
+    const Chunk& chunk,
+    std::uint32_t sets,
+    std::span<const SlotVersion> extraSlots);
+  // LP6.1 (C64): a resolved record's draw: its sets stamped (once per frame), then
+  // DrawElementsWithCounters' state compare, parms and draw; viewSet is set 2 when set
+  // (the ambient pass's view set)
+  DrawOutcome drawRecord(
+    Frame& frame,
+    DrawRecord& record,
+    nvrhi::IBindingSet* viewSet,
+    const LightTriangles* lightTriangles);
+  // LP6.1 (C64): a record's draw, resolved first when it is not
+  DrawOutcome drawRecorded(
+    Frame& frame,
+    DrawRecord& record,
+    int program,
+    std::uint64_t stateBits,
+    const Chunk& chunk,
+    const LightTriangles* lightTriangles);
+  // LP6.1 (C64): the ambient pass's set 2 of the frame for index (0 the probe path's, 1 +
+  // area a grid area's: its atlas at unit 7), made at its first draw; null when a unit
+  // has no written level
+  nvrhi::IBindingSet* ambientViewSet(
+    Frame& frame, std::size_t index, const GridArea* grid);
+  // DrawElementsWithCounters' state compare, parms and draw (drawGeometry's last part)
+  DrawOutcome submitDraw(
+    Frame& frame, const DrawSubmit& submit, const LightTriangles* lightTriangles);
+
   // DrawElementsWithCounters
   DrawOutcome draw(
     Frame& frame,
@@ -1179,14 +1336,16 @@ private:
     float slopeBias,
     float depthBias,
     const LightTriangles* lightTriangles);
-  // the binding sets of a layout for the units; false when a texture has no level yet
+  // the binding sets of a layout for the units; false when a texture has no level yet.
+  // LP6.1 (C64): request's sets only, held for a record when it says so
   bool bindingSets(
     Frame& frame,
     EngineBindingLayout layout,
     const std::vector<nvrhi::BindingLayoutHandle>& layouts,
     bool pushConstants,
     std::array<nvrhi::IBindingSet*, nvrhi::c_MaxBindingLayouts>& sets,
-    std::size_t& count);
+    std::size_t& count,
+    SetRequest* request = nullptr);
   nvrhi::IBuffer* constantBuffer(Frame& frame, EngineBindingLayout layout);
   // the textureUsage_t a slot's image has once loaded (the PBR rename)
   int imageUsage(ImageSlots& images, const MaterialImageKey& key) const;

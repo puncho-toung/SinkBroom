@@ -18,6 +18,8 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/CpuPool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DecalProjectors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/DeviceChoice.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/DrawRecords.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/DrawRecords.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EditorImageSize.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EngineTables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/EntityState.cpp

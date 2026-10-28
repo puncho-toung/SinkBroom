@@ -124,6 +124,8 @@ private:
   std::function<bool()> m_allocationRoom;
   std::uint64_t m_headroomRefusals = 0;
   bool m_refusedForHeadroom = false;
+  // LP6.1 (C64, P8.11): bumped by every freed placement and by releaseAll
+  std::uint64_t m_generation = 0;
 
 public:
   GeometryArenas() = default;
@@ -209,6 +211,15 @@ public:
 
   // teardown step 2: every buffer and range
   void releaseAll();
+
+  /**
+   * LP6.1 (C64, P8.11), render thread: the arena generation, bumped whenever a placement
+   * is freed (a chunk that went or changed, a shared surface no instance names; LP6.4b's
+   * compaction will bump it too) and by releaseAll: the draw records that copied a
+   * placement are cleared when it moves. A new placement does not bump it (no record
+   * holds a placement it has not found).
+   */
+  std::uint64_t generation() const;
 
 private:
   void freePlacement(const ChunkPlacement& placement, std::uint64_t frame);

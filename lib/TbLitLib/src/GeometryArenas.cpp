@@ -470,8 +470,14 @@ std::uint64_t GeometryArenas::uploadedChunks() const
   return m_uploadedChunks;
 }
 
+std::uint64_t GeometryArenas::generation() const
+{
+  return m_generation;
+}
+
 void GeometryArenas::releaseAll()
 {
+  ++m_generation;
   m_placed.clear();
   m_queued.clear();
   m_shared.clear();
@@ -485,6 +491,7 @@ void GeometryArenas::releaseAll()
 void GeometryArenas::freePlacement(
   const ChunkPlacement& placement, const std::uint64_t frame)
 {
+  ++m_generation;
   if (placement.vertexArena < m_vertexArenas.size())
   {
     m_vertexArenas[placement.vertexArena].ranges.free(placement.vertices, frame);

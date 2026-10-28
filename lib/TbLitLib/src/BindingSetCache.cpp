@@ -62,23 +62,50 @@ nvrhi::BindingSetHandle BindingSetCache::get(
   const std::uint64_t frame,
   const std::function<nvrhi::BindingSetHandle()>& make)
 {
+  const auto* entry = entryOf(key, frame, make);
+  return entry ? entry->set : nvrhi::BindingSetHandle{};
+}
+
+BindingSetCache::Entry* BindingSetCache::hold(
+  const BindingSetKey& key,
+  const std::uint64_t frame,
+  const std::function<nvrhi::BindingSetHandle()>& make)
+{
+  auto* entry = entryOf(key, frame, make);
+  if (entry)
+  {
+    ++entry->holds;
+  }
+  return entry;
+}
+
+BindingSetCache::Entry* BindingSetCache::entryOf(
+  const BindingSetKey& key,
+  const std::uint64_t frame,
+  const std::function<nvrhi::BindingSetHandle()>& make)
+{
   if (const auto it = m_sets.find(key); it != m_sets.end())
   {
     it->second.lastUsed = frame;
-    return it->second.set;
+    return &it->second;
   }
   auto set = make();
   if (!set)
   {
-    return set;
+    return nullptr;
   }
   ++m_made;
-  const auto [it, inserted] = m_sets.emplace(key, Entry{set, frame});
+  const auto [it, inserted] = m_sets.emplace(key, Entry{std::move(set), frame, 0});
   for (const auto& slot : it->first.slots)
   {
     m_bySlot[slot.slot].insert(&it->first);
   }
-  return set;
+  return &it->second;
+}
+
+void BindingSetCache::release(Entry& entry)
+{
+  entry.holds -= std::min(entry.holds, 1u);
 }
 
 std::size_t BindingSetCache::slotChanged(const ImageSlotId slot)
@@ -122,12 +149,13 @@ std::size_t BindingSetCache::trim(const std::uint64_t frame)
   {
     return 0;
   }
-  // the oldest first; a set of this frame is in its command list and stays
+  // the oldest first; a set of this frame is in its command list and stays, and so does
+  // (LP6.1) a set a record holds
   auto byAge = std::vector<std::pair<std::uint64_t, const BindingSetKey*>>{};
   byAge.reserve(m_sets.size());
   for (const auto& [key, entry] : m_sets)
   {
-    if (entry.lastUsed < frame)
+    if (entry.lastUsed < frame && entry.holds == 0)
     {
       byAge.emplace_back(entry.lastUsed, &key);
     }
@@ -162,6 +190,11 @@ std::uint64_t BindingSetCache::made() const
   return m_made;
 }
 
+std::uint64_t BindingSetCache::heldErased() const
+{
+  return m_heldErased;
+}
+
 void BindingSetCache::clear()
 {
   m_bySlot.clear();
@@ -174,6 +207,11 @@ void BindingSetCache::erase(
   if (it == m_sets.end())
   {
     return;
+  }
+  // LP6.1 (C64): a record still holding it would draw an erased set
+  if (it->second.holds > 0)
+  {
+    ++m_heldErased;
   }
   for (const auto& slot : it->first.slots)
   {

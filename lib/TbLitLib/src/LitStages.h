@@ -306,6 +306,14 @@ enum class InteractionProgram
 // choice); the key's own usage when not known yet
 using ImageUsage = std::function<int(const MaterialImageKey&)>;
 
+// LP6.1 (C64): the fields of InteractionState that carry from surface to surface
+// (InteractionState::written, InteractionDraw::inherited)
+inline constexpr std::uint8_t CarriedBumpMatrix = 1;
+inline constexpr std::uint8_t CarriedDiffuseMatrix = 2;
+inline constexpr std::uint8_t CarriedSpecularMatrix = 4;
+inline constexpr std::uint8_t CarriedVertexColor = 8;
+inline constexpr std::uint8_t CarriedFields = 15;
+
 /**
  * drawInteraction_t (RenderBackend.cpp:1749-1750 `inter = {}`): what RenderInteractions
  * carries from stage to stage and from surface to surface within one call. The images
@@ -327,6 +335,9 @@ struct InteractionState
   // LP5.1 (C45, SC513): din->vLight->lightShader->IsAmbientLight(); false in the ambient
   // pass (no vLight); the caller sets it for the light, the stage loop never changes it
   bool ambientLight = false;
+  // LP6.1 (C64): the carried fields (Carried*) the current surface's stage loop has set,
+  // cleared with its images at the surface's start (engineSurfaceInteractions)
+  std::uint8_t written = 0;
 };
 
 // one draw of DrawSingleInteraction: the units 0-2 images and the parms it sets
@@ -342,7 +353,18 @@ struct InteractionDraw
   Vec4 specularColor = {0.0f, 0.0f, 0.0f, 0.0f};
   int vertexColor = engine_material::VertexColorIgnore;
   InteractionProgram program = InteractionProgram::Interaction;
+  // LP6.1 (C64): the carried fields (Carried*) this draw read from the state an earlier
+  // surface (or the call's start) left: none the surface's own stage loop had set by then
+  std::uint8_t inherited = 0;
 };
+
+/**
+ * LP6.1 (C64): DrawSingleInteraction's program (RenderBackend.cpp:1395-1648) by the
+ * specular image's usage once loaded: an ambientLight light's InteractionAmbient, else
+ * PbrInteraction for TD_SPECULAR_PBR_RMAO and _RMAOD, else Interaction (K26: the
+ * unshadowed ones; engineInteractionProgram picks the shadow-atlas forms). Pure.
+ */
+InteractionProgram engineInteractionDrawProgram(int specularUsage, bool ambientLight);
 
 /**
  * DrawSingleInteraction (RenderBackend.cpp:1131-1191, the program at :1395-1648) with

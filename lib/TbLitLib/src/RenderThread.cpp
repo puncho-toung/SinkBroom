@@ -1125,6 +1125,9 @@ bool RenderThread::prepareFrameResources(const vk::Extent2D extent)
              m_renderTargetGeneration = m_frameResources.renderTargetGeneration();
              if (changed)
              {
+               // LP6.1 (C64): the draw records are cleared before the old targets' sets
+               // go
+               m_passes.renderTargetsChanged(m_renderTargetGeneration);
                m_bindingSets.renderTargetsChanged(m_renderTargetGeneration);
              }
              return true;
@@ -2495,9 +2498,17 @@ void RenderThread::requestGridImages()
 
 void RenderThread::eraseChangedSets()
 {
-  // C28: exactly the sets that hold a bumped slot
+  // LP6.1 (C64, P8.1): the draw records resolved with a slot whose adopted usage changed
+  // (their program can change) or whose version was bumped are released first, so that no
+  // record holds a set the cache erases; C28: then exactly the sets that hold a bumped
+  // slot
+  for (const auto slot : m_images.takeUsageChangedSlots())
+  {
+    m_passes.recordsSlotChanged(slot);
+  }
   for (const auto slot : m_images.takeChangedSlots())
   {
+    m_passes.recordsSlotChanged(slot);
     m_bindingSets.slotChanged(slot);
   }
 }
