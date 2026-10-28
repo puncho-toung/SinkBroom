@@ -75,4 +75,9 @@ constexpr auto EvictionIdleFrames = std::uint64_t{4};
 constexpr auto EvictionsPerFrame = std::size_t{64};
 constexpr auto MipFloorExtent = 256;
 
+// LP6.4b (C68 (d), D174, A60): a compaction a settled frame marked runs in the next frame
+// drawn for another reason, or, when none comes within this, as an uploads-only idle
+// submission
+constexpr auto CompactionIdleDelay = std::chrono::milliseconds{1000};
+
 } // namespace tb::lit

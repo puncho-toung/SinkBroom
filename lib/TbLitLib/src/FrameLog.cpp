@@ -297,6 +297,8 @@ std::string_view eventName(const FrameLogEvent event)
     return "frame";
   case FrameLogEvent::Stop:
     return "stop";
+  case FrameLogEvent::Compaction:
+    return "compaction";
   }
   return "";
 }

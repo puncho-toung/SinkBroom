@@ -19601,6 +19601,35 @@ std::string slotNames(
   return fmt::format("{}", fmt::join(names, "; "));
 }
 
+// LP6.4b (C68 (d)): frames drawn one after another, each well within
+// CompactionIdleDelay, until three settled ones leave the compactions where they were (a
+// settled frame marks one, the next frame takes it): every compaction marked taken by a
+// drawn frame
+bool drainCompactions(LitSession& session)
+{
+  if (!waitQuiet(session))
+  {
+    return false;
+  }
+  auto last = session.status().compactions;
+  auto unchanged = 0;
+  for (auto i = 0; i < 80 && unchanged < 3; ++i)
+  {
+    const auto before = session.framesPresented();
+    session.requestFrame();
+    if (!waitFor([&] { return session.framesPresented() > before; }, 5000ms, false))
+    {
+      return false;
+    }
+    // the frame's status is written just after its count
+    std::this_thread::sleep_for(20ms);
+    const auto status = session.status();
+    unchanged = status.compactions == last && status.settled ? unchanged + 1 : 0;
+    last = status.compactions;
+  }
+  return unchanged >= 3;
+}
+
 bool containsSlot(const std::vector<ImageSlotId>& ids, const ImageSlotId id)
 {
   return std::ranges::find(ids, id) != ids.end();
@@ -20148,6 +20177,351 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
       CHECK(events.count(SessionEvent::Error) == 0u);
     }
     CHECK(resetDispatcher());
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+}
+
+namespace
+{
+
+// LP6.4b (C68 (d)): the arenas' test size for the sessions of a section
+struct GeometryArenaBytesForTesting
+{
+  explicit GeometryArenaBytesForTesting(const std::uint64_t bytes)
+  {
+    LitSession::setGeometryArenaBytesForTesting(bytes);
+  }
+  ~GeometryArenaBytesForTesting() { LitSession::setGeometryArenaBytesForTesting(0); }
+
+  deleteCopyAndMove(GeometryArenaBytesForTesting);
+};
+
+// what a compaction case reads of the arenas in a frame
+struct ArenasSeen
+{
+  std::size_t vertexArenas = 0;
+  std::size_t indexArenas = 0;
+  std::uint64_t capacity = 0;
+  std::uint64_t generation = 0;
+  std::uint64_t recordsGeneration = 0;
+  std::uint64_t compactions = 0;
+  std::uint64_t moved = 0;
+  // each chunk's vertex arena and range
+  std::map<ChunkKey, std::pair<std::size_t, ArenaRange>> vertices;
+};
+
+ArenasSeen arenasSeen(RenderFrameAccess& access)
+{
+  auto seen = ArenasSeen{};
+  seen.vertexArenas = access.arenas.vertexArenas();
+  seen.indexArenas = access.arenas.indexArenas();
+  seen.capacity = access.arenas.capacityBytes();
+  seen.generation = access.arenas.generation();
+  seen.recordsGeneration = access.passes.recordsForTesting().arenaGeneration();
+  seen.compactions = access.arenas.compactions();
+  seen.moved = access.arenas.movedBytes();
+  for (const auto& [key, chunk] : access.chunks)
+  {
+    if (const auto placement = access.arenas.placement(key);
+        placement && !placement->shared)
+    {
+      seen.vertices.emplace(key, std::pair{placement->vertexArena, placement->vertices});
+    }
+  }
+  return seen;
+}
+
+/**
+ * The fixture's chunks less those that leave the arena of its smallest chunk holding that
+ * one alone, with room for it in another (one more chunk taken from a full one when none
+ * has it): the least-used arena, whose range fits the others
+ */
+std::shared_ptr<const std::map<ChunkKey, Chunk>> sparseChunks(
+  const std::map<ChunkKey, Chunk>& all,
+  const ArenasSeen& seen,
+  const std::uint64_t arenaBytes)
+{
+  auto used = std::map<std::size_t, std::uint64_t>{};
+  for (const auto& [key, placed] : seen.vertices)
+  {
+    used[placed.first] += placed.second.size;
+  }
+  auto smallest =
+    std::optional<std::pair<ChunkKey, std::pair<std::size_t, ArenaRange>>>{};
+  for (const auto& entry : seen.vertices)
+  {
+    if (
+      used[entry.second.first] <= arenaBytes
+      && (!smallest || entry.second.second.size < smallest->second.second.size))
+    {
+      smallest = entry;
+    }
+  }
+  auto kept = std::make_shared<std::map<ChunkKey, Chunk>>(all);
+  if (!smallest)
+  {
+    return kept;
+  }
+  const auto source = smallest->second.first;
+  const auto size = smallest->second.second.size;
+  for (const auto& [key, placed] : seen.vertices)
+  {
+    if (placed.first == source && !(key == smallest->first))
+    {
+      kept->erase(key);
+    }
+  }
+  const auto room = std::ranges::any_of(used, [&](const auto& entry) {
+    return entry.first != source && entry.second <= arenaBytes
+           && arenaBytes - entry.second >= size;
+  });
+  if (!room)
+  {
+    // another regular arena's largest chunk goes
+    for (const auto& [arena, bytes] : used)
+    {
+      if (arena == source || bytes > arenaBytes)
+      {
+        continue;
+      }
+      auto largest = std::optional<std::pair<ChunkKey, std::uint64_t>>{};
+      auto count = 0;
+      for (const auto& [key, placed] : seen.vertices)
+      {
+        if (placed.first == arena)
+        {
+          ++count;
+          if (!largest || placed.second.size > largest->second)
+          {
+            largest = std::pair{key, placed.second.size};
+          }
+        }
+      }
+      if (largest && count >= 2)
+      {
+        kept->erase(largest->first);
+        break;
+      }
+    }
+  }
+  return kept;
+}
+
+} // namespace
+
+// LP6.4b (C68 (d), D174, A60, U2.9, P8.11, the director's readings (6), (7)): small test
+// arenas spread the fixture's chunks over several; a chunk set that leaves one arena
+// nearly empty: the settled frame marks it, the next frame drawn for another reason (a
+// camera nudge) or an uploads-only idle submission copies its ranges into the others,
+// bumps the generation once (the records cleared and resolved again), and the emptied
+// arena goes after the frames in flight; the picture unchanged; at Stop nothing is left
+TEST_CASE("LitSession arena compaction on a GPU (LP6.4b)", "[.][litgpu3]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  constexpr auto TestArenaBytes = std::uint64_t{4096};
+  const auto arenaBytes = GeometryArenaBytesForTesting{TestArenaBytes};
+  const auto view = litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0});
+  const auto nudged = litCamera({60.5f, 0, 80}, {0, 0, -1}, {1, 0, 0});
+
+  for (const auto idle : {false, true})
+  {
+    CAPTURE(idle);
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    const auto logPath =
+      std::filesystem::temp_directory_path()
+      / (idle ? "TbLitLibTest-lp64b-compaction-idle.csv" : "TbLitLibTest-lp64b-compaction.csv");
+    std::filesystem::remove(logPath);
+    auto movedBytes = std::uint64_t{0};
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = loggedRootSession(instance, events, *service, root, logPath);
+      // no compaction until the case lets it plan one
+      session->holdCompactionForTesting(true);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+      REQUIRE(settledChain(*session, view));
+      REQUIRE(waitQuiet(*session));
+
+      // the scene's chunks as a test's; what its batches left in the arenas (a chunk
+      // rebuilt leaves its old range) compacted by drawn frames until nothing more is
+      // marked, then the set that leaves one arena nearly empty
+      auto all = std::shared_ptr<const std::map<ChunkKey, Chunk>>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        all = std::make_shared<const std::map<ChunkKey, Chunk>>(access.chunks);
+      }));
+      session->setChunksForTesting(all);
+      REQUIRE(settledChain(*session, view));
+      session->holdCompactionForTesting(false);
+      REQUIRE(drainCompactions(*session));
+      session->holdCompactionForTesting(true);
+      settle(*session);
+      REQUIRE(waitQuiet(*session));
+      auto full = ArenasSeen{};
+      REQUIRE(
+        inFrame(*session, [&](RenderFrameAccess& access) { full = arenasSeen(access); }));
+      REQUIRE(full.vertexArenas >= 3u);
+      const auto kept = sparseChunks(*all, full, TestArenaBytes);
+      session->setChunksForTesting(kept);
+      REQUIRE(settledChain(*session, view));
+      REQUIRE(waitQuiet(*session));
+      // the picture before; the frees' frames finished (the idle pass), their ranges free
+      // for the dry run
+      const auto before = session->readbackLdrForTesting();
+      REQUIRE(before);
+      settle(*session);
+      REQUIRE(waitQuiet(*session));
+      const auto start = session->status();
+      session->holdCompactionForTesting(false);
+      if (!idle)
+      {
+        // (a) the settled frame of a nudge marks it, the frames drawn after it (for
+        // another reason) compact, until nothing more is marked
+        REQUIRE(settledChain(*session, nudged));
+        REQUIRE(settledChain(*session, view));
+        REQUIRE(drainCompactions(*session));
+      }
+      else
+      {
+        // (b) a settled frame marks it and no frame comes: an uploads-only idle
+        // submission within about a second, no frame presented
+        REQUIRE(oneFrame(*session));
+        REQUIRE(waitQuiet(*session));
+        const auto presented = session->framesPresented();
+        std::this_thread::sleep_for(CompactionIdleDelay + 1500ms);
+        CHECK(session->framesPresented() == presented);
+      }
+      session->holdCompactionForTesting(true);
+      REQUIRE(waitQuiet(*session));
+      const auto after = session->readbackLdrForTesting();
+      REQUIRE(after);
+      settle(*session);
+      REQUIRE(waitQuiet(*session));
+      auto compacted = ArenasSeen{};
+      REQUIRE(inFrame(
+        *session, [&](RenderFrameAccess& access) { compacted = arenasSeen(access); }));
+      REQUIRE(waitQuiet(*session));
+      const auto status = session->status();
+      auto movedChunks = std::vector<std::string>{};
+      for (const auto& [key, placed] : compacted.vertices)
+      {
+        const auto was = full.vertices.find(key);
+        if (was != full.vertices.end() && was->second.first != placed.first)
+        {
+          movedChunks.push_back(fmt::format(
+            "{} cell ({}, {}, {}): arena {} -> {} ({} B)",
+            key.material,
+            key.cell[0],
+            key.cell[1],
+            key.cell[2],
+            was->second.first,
+            placed.first,
+            placed.second.size));
+        }
+      }
+      movedBytes = compacted.moved - full.moved;
+      std::cout << fmt::format(
+        "LP6.4b compaction ({}): {} B arenas, {} chunks over {} vertex and {} index "
+        "arenas, {} kept; then {} compaction(s), {} submission(s), {} B moved ({}), the "
+        "generation {} -> {} (the records' {}), vertex arenas {} -> {}, arena_bytes {} "
+        "-> "
+        "{}; the pictures {}\n",
+        idle ? "(b) idle" : "(a) a nudge",
+        TestArenaBytes,
+        all->size(),
+        full.vertexArenas,
+        full.indexArenas,
+        kept->size(),
+        status.compactions - start.compactions,
+        status.compactionSubmissions - start.compactionSubmissions,
+        movedBytes,
+        fmt::join(movedChunks, "; "),
+        full.generation,
+        compacted.generation,
+        compacted.recordsGeneration,
+        full.vertexArenas,
+        compacted.vertexArenas,
+        full.capacity,
+        compacted.capacity,
+        before->rgba == after->rgba ? "equal" : "DIFFERENT");
+      const auto runs = status.compactions - start.compactions;
+      const auto submissions = status.compactionSubmissions - start.compactionSubmissions;
+      CHECK(runs >= 1u);
+      CHECK(submissions == (idle ? std::uint64_t{1} : std::uint64_t{0}));
+      if (idle)
+      {
+        CHECK(runs == 1u);
+      }
+      CHECK(movedBytes > 0u);
+      CHECK(status.arenaMovedBytes == compacted.moved);
+      CHECK(movedChunks.size() >= 1u);
+      CHECK(compacted.vertexArenas < full.vertexArenas);
+      CHECK(compacted.capacity < full.capacity);
+      CHECK(compacted.recordsGeneration == compacted.generation);
+      CHECK(compacted.generation > full.generation);
+      CHECK(before->rgba == after->rgba);
+      CHECK(session->lastFrameSettledForTesting());
+
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      // (e) Stop: every allocation freed
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+    // the frame log: (b)'s compaction an event row, no frame row of its own
+    const auto rows = readCsv(logPath);
+    REQUIRE(rows.size() > 1u);
+    auto compactionRows = std::vector<std::string>{};
+    for (std::size_t i = 1; i < rows.size(); ++i)
+    {
+      REQUIRE(rows[i].size() == FrameLogFields);
+      if (rows[i][1] == "compaction")
+      {
+        compactionRows.push_back(rows[i][FrameLogFields - 1]);
+      }
+    }
+    std::cout << fmt::format(
+      "LP6.4b compaction ({}): the log's compaction rows (arena_moved_bytes) {}\n",
+      idle ? "(b) idle" : "(a) a nudge",
+      fmt::join(compactionRows, ", "));
+    if (idle)
+    {
+      CHECK(compactionRows.size() >= 1u);
+      auto rowBytes = std::uint64_t{0};
+      for (const auto& bytes : compactionRows)
+      {
+        rowBytes += bytes.empty() ? 0u : std::stoull(bytes);
+      }
+      CHECK(rowBytes == movedBytes);
+    }
+    else
+    {
+      CHECK(compactionRows.empty());
+    }
+    std::filesystem::remove(logPath);
+    messages.print(
+      idle ? "LP6.4b compaction (b), validation" : "LP6.4b compaction (a), validation");
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }

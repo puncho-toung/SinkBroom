@@ -173,6 +173,13 @@ struct SessionStatus
   std::uint64_t vramBudgetBytes = 0;
   std::uint64_t texturesEvicted = 0;
   std::size_t texturesFloored = 0;
+  // LP6.4b (C68 (d), D174): the geometry arenas per kind, the compactions run (those in
+  // an uploads-only idle submission among them) and the bytes they moved
+  std::size_t vertexArenas = 0;
+  std::size_t indexArenas = 0;
+  std::uint64_t compactions = 0;
+  std::uint64_t compactionSubmissions = 0;
+  std::uint64_t arenaMovedBytes = 0;
   // LP6.4a: the slots' texture heaps
   TextureHeapStatus heaps;
   // LP4.1 (D90's first half, C32): the view's portal flow: the view's area (-1 outside
@@ -822,6 +829,9 @@ public:
   // LP6.4b, any thread: hook runs on the render thread after every frame's budget pass
   // (BudgetPassReport) until an empty function replaces it; no frame is triggered
   void setBudgetPassHookForTesting(std::function<void(const BudgetPassReport&)> hook);
+  // LP6.4b (C68 (d)), any thread: while held, no settled frame marks an arena
+  // compaction; tests only
+  void holdCompactionForTesting(bool hold);
   /**
    * C38 (LP4.2b's ambient-only parity rows, mirror.json M-TEST-AMB-01), any thread: while
    * on, the frames do not record the interactions pass, as the engine's
@@ -903,6 +913,9 @@ public:
    * Process-wide; tests only.
    */
   static void setTextureHeapBytesForTesting(std::uint64_t bytes);
+  // LP6.4b, any thread (tests): the geometry arenas' size of the next sessions (0:
+  // ArenaBytes); process-wide like the texture heaps' size
+  static void setGeometryArenaBytesForTesting(std::uint64_t bytes);
   /**
    * LP2.4 (C30, D72), any thread: the device memory allocations the counter of the last
    * session counts now; after a Stop, what that session's teardown left (0 expected).

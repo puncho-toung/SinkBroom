@@ -19,9 +19,12 @@
 
 #include "GeometryArenas.h"
 
+#include "lit/LitConfig.h"
+
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <atomic>
 #include <string_view>
 
 namespace tb::lit
@@ -50,7 +53,21 @@ nvrhi::BufferDesc arenaDesc(const std::uint64_t bytes, const bool vertices)
   return desc;
 }
 
+// LP6.4b: the arenas' test size (0: ArenaBytes)
+auto s_arenaBytesForTesting = std::atomic<std::uint64_t>{0};
+
 } // namespace
+
+void setGeometryArenaBytesForTesting(const std::uint64_t bytes)
+{
+  s_arenaBytesForTesting = bytes;
+}
+
+std::uint64_t geometryArenaBytes()
+{
+  const auto bytes = s_arenaBytesForTesting.load();
+  return bytes != 0 ? bytes : ArenaBytes;
+}
 
 void GeometryArenas::setDevice(nvrhi::IDevice& device, const std::uint64_t arenaBytes)
 {
@@ -403,22 +420,28 @@ std::uint64_t GeometryArenas::placedSharedBytes() const
 
 nvrhi::IBuffer* GeometryArenas::vertexBuffer(const std::size_t arena) const
 {
-  return arena < m_vertexArenas.size() ? m_vertexArenas[arena].buffer.Get() : nullptr;
+  return arena < m_vertexArenas.size() && m_vertexArenas[arena].live
+           ? m_vertexArenas[arena].buffer.Get()
+           : nullptr;
 }
 
 nvrhi::IBuffer* GeometryArenas::indexBuffer(const std::size_t arena) const
 {
-  return arena < m_indexArenas.size() ? m_indexArenas[arena].buffer.Get() : nullptr;
+  return arena < m_indexArenas.size() && m_indexArenas[arena].live
+           ? m_indexArenas[arena].buffer.Get()
+           : nullptr;
 }
 
 std::size_t GeometryArenas::vertexArenas() const
 {
-  return m_vertexArenas.size();
+  return std::size_t(
+    std::ranges::count_if(m_vertexArenas, [](const Arena& arena) { return arena.live; }));
 }
 
 std::size_t GeometryArenas::indexArenas() const
 {
-  return m_indexArenas.size();
+  return std::size_t(
+    std::ranges::count_if(m_indexArenas, [](const Arena& arena) { return arena.live; }));
 }
 
 std::uint64_t GeometryArenas::capacityBytes() const
@@ -428,7 +451,7 @@ std::uint64_t GeometryArenas::capacityBytes() const
   {
     for (const auto& arena : *arenas)
     {
-      bytes += arena.ranges.capacity();
+      bytes += arena.live ? arena.ranges.capacity() : 0;
     }
   }
   return bytes;
@@ -441,7 +464,7 @@ std::uint64_t GeometryArenas::usedBytes() const
   {
     for (const auto& arena : *arenas)
     {
-      bytes += arena.ranges.usedBytes();
+      bytes += arena.live ? arena.ranges.usedBytes() : 0;
     }
   }
   return bytes;
@@ -454,7 +477,7 @@ std::uint64_t GeometryArenas::pendingFreeBytes() const
   {
     for (const auto& arena : *arenas)
     {
-      bytes += arena.ranges.pendingBytes();
+      bytes += arena.live ? arena.ranges.pendingBytes() : 0;
     }
   }
   return bytes;
@@ -507,6 +530,10 @@ std::optional<std::pair<std::size_t, ArenaRange>> GeometryArenas::allocate(
 {
   for (std::size_t i = 0; i < arenas.size(); ++i)
   {
+    if (!arenas[i].live)
+    {
+      continue;
+    }
     if (const auto range = arenas[i].ranges.allocate(bytes))
     {
       return std::pair{i, *range};
@@ -533,9 +560,219 @@ std::optional<std::pair<std::size_t, ArenaRange>> GeometryArenas::allocate(
   {
     return std::nullopt;
   }
-  arenas.push_back(Arena{std::move(buffer), RangeAllocator{size, alignment}});
-  const auto range = arenas.back().ranges.allocate(bytes);
-  return range ? std::optional{std::pair{arenas.size() - 1, *range}} : std::nullopt;
+  // LP6.4b (the director's reading (7)): a released arena's index is taken again
+  const auto released =
+    std::ranges::find_if(arenas, [](const Arena& arena) { return !arena.live; });
+  const auto index = std::size_t(released - arenas.begin());
+  auto made = Arena{std::move(buffer), RangeAllocator{size, alignment}, true};
+  if (index < arenas.size())
+  {
+    arenas[index] = std::move(made);
+  }
+  else
+  {
+    arenas.push_back(std::move(made));
+  }
+  const auto range = arenas[index].ranges.allocate(bytes);
+  return range ? std::optional{std::pair{index, *range}} : std::nullopt;
+}
+
+std::optional<GeometryArenas::Compaction> GeometryArenas::planCompaction() const
+{
+  for (const auto vertices : {true, false})
+  {
+    const auto& arenas = vertices ? m_vertexArenas : m_indexArenas;
+    auto live = std::vector<std::size_t>{};
+    for (std::size_t i = 0; i < arenas.size(); ++i)
+    {
+      if (arenas[i].live)
+      {
+        live.push_back(i);
+      }
+    }
+    if (live.size() < 2)
+    {
+      continue;
+    }
+    // the least used, the last of equals (the newest)
+    auto source = live.front();
+    for (const auto i : live)
+    {
+      if (arenas[i].ranges.usedBytes() <= arenas[source].ranges.usedBytes())
+      {
+        source = i;
+      }
+    }
+    // the ranges placed in it, the largest first
+    auto sizes = std::vector<std::uint64_t>{};
+    const auto gather = [&](const ChunkPlacement& placement) {
+      if (vertices && placement.vertexArena == source)
+      {
+        sizes.push_back(placement.vertices.size);
+      }
+      else if (!vertices && placement.indexArena == source)
+      {
+        sizes.push_back(placement.indexes.size);
+      }
+    };
+    for (const auto& [key, placement] : m_placed)
+    {
+      gather(placement);
+    }
+    for (const auto& [key, shared] : m_shared)
+    {
+      if (shared.placement)
+      {
+        gather(*shared.placement);
+      }
+    }
+    std::ranges::sort(sizes, std::greater{});
+    // the dry run on copies of the others' allocators
+    auto others = std::vector<RangeAllocator>{};
+    for (const auto i : live)
+    {
+      if (i != source)
+      {
+        others.push_back(arenas[i].ranges);
+      }
+    }
+    const auto fits = std::ranges::all_of(sizes, [&](const std::uint64_t size) {
+      return std::ranges::any_of(others, [&](RangeAllocator& ranges) {
+        return ranges.allocate(size).has_value();
+      });
+    });
+    if (fits)
+    {
+      return Compaction{vertices, source};
+    }
+  }
+  return std::nullopt;
+}
+
+GeometryArenas::CompactionResult GeometryArenas::compact(
+  nvrhi::ICommandList* commandList,
+  const Compaction& compaction,
+  const std::uint64_t frame)
+{
+  auto result = CompactionResult{};
+  auto& arenas = compaction.vertices ? m_vertexArenas : m_indexArenas;
+  if (compaction.source >= arenas.size() || !arenas[compaction.source].live)
+  {
+    result.stopped = true;
+    return result;
+  }
+  // the placements in the source, chunks' and shared ones alike, the largest first
+  auto moves = std::vector<ChunkPlacement*>{};
+  const auto gather = [&](ChunkPlacement& placement) {
+    if (
+      (compaction.vertices && placement.vertexArena == compaction.source)
+      || (!compaction.vertices && placement.indexArena == compaction.source))
+    {
+      moves.push_back(&placement);
+    }
+  };
+  for (auto& [key, placement] : m_placed)
+  {
+    gather(placement);
+  }
+  for (auto& [key, shared] : m_shared)
+  {
+    if (shared.placement)
+    {
+      gather(*shared.placement);
+    }
+  }
+  const auto rangeOf = [&](ChunkPlacement& placement) -> ArenaRange& {
+    return compaction.vertices ? placement.vertices : placement.indexes;
+  };
+  const auto arenaOf = [&](ChunkPlacement& placement) -> std::size_t& {
+    return compaction.vertices ? placement.vertexArena : placement.indexArena;
+  };
+  std::ranges::stable_sort(moves, [&](ChunkPlacement* a, ChunkPlacement* b) {
+    return rangeOf(*a).size > rangeOf(*b).size;
+  });
+  auto* const sourceBuffer = arenas[compaction.source].buffer.Get();
+  for (auto* placement : moves)
+  {
+    auto& range = rangeOf(*placement);
+    auto target = std::optional<std::pair<std::size_t, ArenaRange>>{};
+    if (m_moveLimitForTesting == 0 || result.moves < m_moveLimitForTesting)
+    {
+      for (std::size_t i = 0; i < arenas.size() && !target; ++i)
+      {
+        if (i == compaction.source || !arenas[i].live)
+        {
+          continue;
+        }
+        if (const auto allocated = arenas[i].ranges.allocate(range.size))
+        {
+          target = std::pair{i, *allocated};
+        }
+      }
+    }
+    if (!target)
+    {
+      // no range holds it: what moved stays moved, the source is kept
+      result.stopped = true;
+      break;
+    }
+    // the bytes copied before the frame's passes read them (D78; NVRHI's barriers take
+    // the source arena to CopySource, the target to CopyDest, and both back to their
+    // vertex or index buffer state, keepInitialState)
+    if (commandList)
+    {
+      commandList->copyBuffer(
+        arenas[target->first].buffer,
+        target->second.offset,
+        sourceBuffer,
+        range.offset,
+        range.size);
+    }
+    // D35: the old range is free once the frame has finished
+    arenas[compaction.source].ranges.free(range, frame);
+    arenaOf(*placement) = target->first;
+    range = target->second;
+    result.movedBytes += target->second.size;
+    ++result.moves;
+  }
+  if (result.moves > 0)
+  {
+    // the records that copied a placement are cleared once (C64, P8.11)
+    ++m_generation;
+  }
+  ++m_compactions;
+  m_movedBytes += result.movedBytes;
+  auto& source = arenas[compaction.source];
+  if (!result.stopped && source.ranges.usedBytes() == 0)
+  {
+    // its pending ranges were freed in this frame or before: they complete with it
+    result.released = std::move(source.buffer);
+    result.releasedBytes = source.ranges.capacity();
+    source.ranges = RangeAllocator{source.ranges.capacity(), source.ranges.alignment()};
+    source.live = false;
+    ++m_arenasReleased;
+  }
+  return result;
+}
+
+std::uint64_t GeometryArenas::compactions() const
+{
+  return m_compactions;
+}
+
+std::uint64_t GeometryArenas::movedBytes() const
+{
+  return m_movedBytes;
+}
+
+std::uint64_t GeometryArenas::arenasReleased() const
+{
+  return m_arenasReleased;
+}
+
+void GeometryArenas::setCompactionMoveLimitForTesting(const std::size_t moves)
+{
+  m_moveLimitForTesting = moves;
 }
 
 } // namespace tb::lit

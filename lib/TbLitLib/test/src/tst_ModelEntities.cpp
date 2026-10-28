@@ -693,6 +693,185 @@ TEST_CASE("GeometryArenas: model instances share their placements (LP7.2, D129)"
   }
 }
 
+// LP6.4b (C68 (d), D174, U2.9, the director's readings (6), (7)): the compaction's dry
+// run and its move on CPU arenas: the least-used arena whose ranges fit the others,
+// chunks and shared placements alike, the generation bumped once, the emptied arena
+// released
+TEST_CASE("GeometryArenas: compaction moves chunks and shared placements (LP6.4b)")
+{
+  auto arenas = GeometryArenas{};
+  // four 256-byte vertex ranges (8 vertices) fill an arena
+  arenas.setCpuArenasForTesting(1024);
+  const auto chunkOf = [](const int cell) {
+    auto chunk = Chunk{};
+    chunk.key.material = "textures/lp6/compact";
+    chunk.key.cell = {cell, 0, 0};
+    chunk.verts.resize(8);
+    chunk.indexes = {0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7};
+    chunk.casterVersion = 1;
+    chunk.appearanceVersion = 1;
+    return chunk;
+  };
+  const auto chunksOf = [&](const std::vector<int>& cells) {
+    auto chunks = std::map<ChunkKey, Chunk>{};
+    for (const auto cell : cells)
+    {
+      auto chunk = chunkOf(cell);
+      const auto key = chunk.key;
+      chunks.emplace(key, std::move(chunk));
+    }
+    return chunks;
+  };
+  const auto keyOf = [&](const int cell) { return chunkOf(cell).key; };
+  const auto all = chunksOf({0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11});
+  arenas.sync(all, 1);
+  REQUIRE(arenas.placeForTesting(all, 1 << 20).is_success());
+  REQUIRE(arenas.vertexArenas() == 3u);
+  CHECK(arenas.placement(keyOf(0))->vertexArena == 0u);
+  CHECK(arenas.placement(keyOf(4))->vertexArena == 1u);
+  CHECK(arenas.placement(keyOf(8))->vertexArena == 2u);
+  // one arena per kind: nothing to plan for the indexes
+  CHECK(arenas.indexArenas() == 1u);
+
+  SECTION("the least-used arena's range moved into another, the arena released")
+  {
+    const auto kept = chunksOf({0, 4, 7, 8, 9});
+    arenas.sync(kept, 2);
+    // the freed ranges are not free yet: no room for the dry run
+    CHECK_FALSE(arenas.planCompaction());
+    arenas.reclaim(3);
+    const auto plan = arenas.planCompaction();
+    REQUIRE(plan);
+    CHECK(*plan == GeometryArenas::Compaction{true, 0});
+    const auto generation = arenas.generation();
+    const auto capacity = arenas.capacityBytes();
+    const auto result = arenas.compact(nullptr, *plan, 4);
+    CHECK(result.moves == 1u);
+    CHECK(result.movedBytes == 256u);
+    CHECK_FALSE(result.stopped);
+    CHECK(result.releasedBytes == 1024u);
+    CHECK(arenas.generation() == generation + 1);
+    CHECK(arenas.vertexArenas() == 2u);
+    CHECK(arenas.capacityBytes() == capacity - 1024);
+    CHECK(arenas.arenasReleased() == 1u);
+    CHECK(arenas.compactions() == 1u);
+    CHECK(arenas.movedBytes() == 256u);
+    const auto moved = arenas.placement(keyOf(0));
+    REQUIRE(moved);
+    CHECK(moved->vertexArena == 1u);
+    CHECK(moved->vertices.size == 256u);
+    CHECK_FALSE(arenas.vertexBuffer(0));
+    // every placement in a live arena, none overlapping another of its arena
+    auto ranges = std::map<std::size_t, std::vector<ArenaRange>>{};
+    for (const auto& [key, chunk] : kept)
+    {
+      const auto placement = arenas.placement(key);
+      REQUIRE(placement);
+      CHECK(placement->vertexArena != 0u);
+      ranges[placement->vertexArena].push_back(placement->vertices);
+    }
+    for (auto& [arena, list] : ranges)
+    {
+      std::ranges::sort(list, {}, &ArenaRange::offset);
+      for (std::size_t i = 1; i < list.size(); ++i)
+      {
+        CHECK(list[i - 1].offset + list[i - 1].size <= list[i].offset);
+      }
+    }
+    // nothing more to plan: one arena holds what the other cannot
+    CHECK(arenas.usedBytes() == 5 * 256 + 5 * 24u);
+    // a new arena takes the released index
+    const auto more = chunksOf({0, 4, 7, 8, 9, 20, 21, 22, 23});
+    arenas.sync(more, 5);
+    arenas.reclaim(6);
+    REQUIRE(arenas.placeForTesting(more, 1 << 20).is_success());
+    CHECK(arenas.vertexArenas() == 3u);
+    CHECK(arenas.placement(keyOf(23))->vertexArena == 0u);
+  }
+
+  SECTION("(c) a move that does not fit stops the pass: one bump, the source kept")
+  {
+    const auto kept = chunksOf({0, 1, 4, 5, 6, 8, 9, 10});
+    arenas.sync(kept, 2);
+    arenas.reclaim(3);
+    const auto plan = arenas.planCompaction();
+    REQUIRE(plan);
+    CHECK(*plan == GeometryArenas::Compaction{true, 0});
+    arenas.setCompactionMoveLimitForTesting(1);
+    const auto generation = arenas.generation();
+    const auto result = arenas.compact(nullptr, *plan, 4);
+    CHECK(result.moves == 1u);
+    CHECK(result.stopped);
+    CHECK_FALSE(result.released);
+    CHECK(result.releasedBytes == 0u);
+    CHECK(arenas.generation() == generation + 1);
+    CHECK(arenas.vertexArenas() == 3u);
+    // what moved stays moved, the rest where it was: each answers one live range
+    auto inSource = 0;
+    for (const auto& [key, chunk] : kept)
+    {
+      const auto placement = arenas.placement(key);
+      REQUIRE(placement);
+      CHECK(placement->vertexArena < 3u);
+      inSource += placement->vertexArena == 0u ? 1 : 0;
+    }
+    CHECK(inSource == 1);
+    // the next settled frame may try again: the rest moves and the source goes
+    arenas.setCompactionMoveLimitForTesting(0);
+    arenas.reclaim(5);
+    const auto again = arenas.planCompaction();
+    REQUIRE(again);
+    const auto rest = arenas.compact(nullptr, *again, 6);
+    CHECK(rest.moves == 1u);
+    CHECK_FALSE(rest.stopped);
+    CHECK(arenas.vertexArenas() == 2u);
+  }
+
+  SECTION("(d) a shared placement moves once, both instances answer the new range")
+  {
+    const auto record = quadRecord("models/test/quad.obj", 1, "textures/lp1b/floor");
+    const auto shared = makeSharedSurface(record, 0);
+    REQUIRE(shared);
+    auto instances = std::map<ChunkKey, ModelInstance>{};
+    const auto a = testInstance(10, shared, "textures/lp1b/floor");
+    const auto b = testInstance(11, shared, "textures/lp1b/wall");
+    instances.emplace(a.key(), a);
+    instances.emplace(b.key(), b);
+    // the chunks of the first two arenas only, then the shared surface in the third
+    const auto eight = chunksOf({0, 1, 2, 3, 4, 5, 6, 7});
+    arenas.sync(eight, 2);
+    arenas.reclaim(3);
+    arenas.syncInstances(instances, 3);
+    REQUIRE(arenas.placeForTesting(eight, 1 << 20).is_success());
+    const auto before = arenas.placement(a.key());
+    REQUIRE(before);
+    CHECK(before->shared);
+    CHECK(before->vertexArena == 2u);
+    // a chunk of each of the first two gone: room for the shared surface's 128 bytes
+    const auto six = chunksOf({0, 1, 2, 4, 5, 6});
+    arenas.sync(six, 4);
+    arenas.reclaim(5);
+    const auto plan = arenas.planCompaction();
+    REQUIRE(plan);
+    CHECK(*plan == GeometryArenas::Compaction{true, 2});
+    const auto result = arenas.compact(nullptr, *plan, 6);
+    CHECK(result.moves == 1u);
+    CHECK(result.movedBytes == 128u);
+    CHECK(result.releasedBytes == 1024u);
+    const auto pa = arenas.placement(a.key());
+    const auto pb = arenas.placement(b.key());
+    REQUIRE(pa);
+    REQUIRE(pb);
+    CHECK(pa->shared);
+    CHECK(pa->vertexArena != 2u);
+    CHECK(pa->vertexArena == pb->vertexArena);
+    CHECK(pa->vertices == pb->vertices);
+    CHECK(pa->indexes == before->indexes);
+    CHECK(arenas.vertexArenas() == 2u);
+    CHECK(arenas.placedShared() == 1u);
+  }
+}
+
 TEST_CASE("Frontend: model instances in the lists, with their shared indexes (LP7.2)")
 {
   const auto& table = *skinTestTable();

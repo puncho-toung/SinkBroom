@@ -468,6 +468,13 @@ private:
   bool m_budgetLeft = false;
   // LP6.4b (C68 (b)) test hook: called after every frame's budget pass (m_mutex)
   std::function<void(const BudgetPassReport&)> m_budgetPassHook;
+  // LP6.4b (C68 (d), D174, A60): the compaction a settled frame marked, when, and the
+  // uploads-only idle submissions so far
+  std::optional<GeometryArenas::Compaction> m_compactionWanted;
+  FrameClock::time_point m_compactionWantedAt;
+  std::uint64_t m_compactionSubmissions = 0;
+  // LP6.4b test hook: while held, no settled frame marks a compaction
+  std::atomic<bool> m_compactionHeldForTesting = false;
   // C38 (LP4.2b): the interactions are not recorded (setSkipInteractions)
   std::atomic<bool> m_skipInteractionsForTesting = false;
   // LP5.0 (D118): r_skipAmbient's stand-in (setSkipShaderPasses), not read by a pass yet
@@ -727,6 +734,8 @@ public:
   // LP6.4b, any thread: hook runs on the render thread after every frame's budget pass
   // until an empty function replaces it (no frame is triggered)
   void setBudgetPassHook(std::function<void(const BudgetPassReport&)> hook);
+  // LP6.4b, any thread: while held, no settled frame marks a compaction (tests)
+  void holdCompaction(bool hold);
   // C38 (LP4.2b), any thread: while set, the frames record no interactions
   // (LitPasses::setSkipInteractionsForTesting); a frame is triggered
   void setSkipInteractions(bool skip);
@@ -772,6 +781,18 @@ private:
    * the live figure changes
    */
   void budgetPass();
+  // LP6.4b (C68 (d), D174): the marked compaction recorded in commandList before the
+  // arenas' uploads, the emptied arena's buffer retired with the frame (D35)
+  GeometryArenas::CompactionResult runCompaction(nvrhi::ICommandList& commandList);
+  /**
+   * LP6.4b (C68 (d), D174, A60, the director's reading (6)): no frame took the marked
+   * compaction within CompactionIdleDelay: an uploads-only submission takes a frame slot
+   * as a frame does (its last frame waited for, its event query set, m_frameIndex moved,
+   * so that framesCompleted and every retire stamp stay one ring), records the copies
+   * alone, presents nothing and writes a Compaction event row, no frame row
+   * (framesPresented unmoved: idle stays zero frames)
+   */
+  void compactionSubmission();
   // LP6.4a (P8.3): the Start probe of the format classes, its line, the heaps' table
   void probeFormatClassesAtStart();
   // LP6.4a (C68 (a)): the heaps for the status (the measurements)

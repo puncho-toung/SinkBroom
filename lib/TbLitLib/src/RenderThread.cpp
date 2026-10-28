@@ -250,7 +250,8 @@ Result<void> RenderThread::createFrameResources(
   // step 8, LP0's part: the frame resources; D78: the list's upload chunks are 32 MB
   m_commandList = device.createCommandList(
     nvrhi::CommandListParameters{}.setUploadChunkSize(UploadChunkBytes));
-  m_arenas.setDevice(device, ArenaBytes);
+  // LP6.4b: ArenaBytes, or a test's smaller arenas
+  m_arenas.setDevice(device, geometryArenaBytes());
   m_arenas.setAllocationRoom([this] { return allocationRoom(); });
   // LP6.4a (C68 (a), D171, Q47): the slots' textures in heaps of HeapBytes, a new heap
   // under U2.3's room (the director's reading (1))
@@ -758,6 +759,14 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
   m_convergence = convergence;
   m_lastSettled = convergence.settled();
   m_sceneWaitSeen = m_geometry ? std::optional{sceneWaitState()} : std::nullopt;
+  // LP6.4b (C68 (d), D174, A60): a settled frame marks a compaction (a kind's least-used
+  // arena whose ranges fit the others), run in the next frame drawn for another reason
+  // or in an uploads-only idle submission
+  if (m_lastSettled && !m_compactionWanted && !m_compactionHeldForTesting)
+  {
+    m_compactionWanted = m_arenas.planCompaction();
+    m_compactionWantedAt = FrameClock::now();
+  }
 
   // the livelock guard: a frame that re-triggers itself without uploading anything or
   // changing what it waits for has made no progress; after MaxStalledFrames of them the
@@ -1018,6 +1027,12 @@ bool RenderThread::recordUploads(nvrhi::ICommandList& commandList)
   const auto cap = m_uploadCap.load();
   const auto inPlaceLeft =
     m_textureUploads.recordInPlace(commandList, m_images, cap, m_frameUploadBytes);
+  // LP6.4b (C68 (d), D174): a compaction marked by a settled frame, before the arenas'
+  // uploads (the copies precede every pass, D78)
+  if (m_compactionWanted)
+  {
+    runCompaction(commandList);
+  }
   const auto recorded =
     m_arenas.recordUploads(
       commandList, arenaChunks(), cap - std::min(cap, m_frameUploadBytes))
@@ -1251,6 +1266,86 @@ void RenderThread::probeFormatClassesAtStart()
   m_textureHeaps.setFormatClasses(std::move(table));
   const auto lock = std::scoped_lock{m_statusMutex};
   m_formatClassLine = std::move(line);
+}
+
+GeometryArenas::CompactionResult RenderThread::runCompaction(
+  nvrhi::ICommandList& commandList)
+{
+  const auto compaction = *std::exchange(m_compactionWanted, std::nullopt);
+  auto result = m_arenas.compact(&commandList, compaction, m_frameIndex);
+  if (result.released)
+  {
+    // D35: the emptied arena goes once the frames that drew from it have finished;
+    // released bytes until then
+    m_frameResources.retire(result.released.Get(), result.releasedBytes, m_frameIndex);
+    result.released = nullptr;
+  }
+  return result;
+}
+
+void RenderThread::holdCompaction(const bool hold)
+{
+  m_compactionHeldForTesting = hold;
+}
+
+void RenderThread::compactionSubmission()
+{
+  try
+  {
+    auto& device = m_device.device();
+    // a frame slot as a frame takes it (D35): the frame that last used it has finished
+    const auto slot = std::size_t(m_frameIndex % FramesInFlight);
+    if (m_frameEventSet[slot])
+    {
+      if (!waitForFrameEvent(slot))
+      {
+        return;
+      }
+      device.resetEventQuery(m_frameEvents[slot]);
+      m_frameEventSet[slot] = false;
+    }
+    m_timers.resolve(device, slot);
+    if (m_frameIndex >= FramesInFlight)
+    {
+      framesCompleted(m_frameIndex - FramesInFlight + 1);
+    }
+    auto result = GeometryArenas::CompactionResult{};
+    {
+      auto recording = OpenCommandList{device, *m_commandList};
+      result = runCompaction(recording.list());
+      recording.submit();
+    }
+    if (m_events.lost())
+    {
+      throw vk::DeviceLostError{
+        "NVRHI reported a lost device in the compaction's submit"};
+    }
+    device.setEventQuery(m_frameEvents[slot], nvrhi::CommandQueue::Graphics);
+    m_frameEventSet[slot] = true;
+    // one ring with the frames: the submission has a frame's number (every retire stamp
+    // and framesCompleted count it) and presents nothing (framesPresented unmoved)
+    ++m_frameIndex;
+    ++m_compactionSubmissions;
+    m_idleWorkPending = true;
+    m_lastFrameEnd = FrameClock::now();
+    // D77: idle is zero frames: an event row, no frame row
+    auto row = FrameLogRow{};
+    row.session = m_events.generation();
+    row.event = FrameLogEvent::Compaction;
+    row.allocCount = m_device.deviceMemoryAllocations();
+    row.arenaBytes = m_arenas.capacityBytes();
+    row.arenaMovedBytes = result.movedBytes;
+    m_timers.append(row);
+    device.runGarbageCollection();
+  }
+  catch (const vk::DeviceLostError& e)
+  {
+    m_events.markLost(e.what());
+  }
+  catch (const std::exception& e)
+  {
+    m_events.markFailed(e.what());
+  }
 }
 
 void RenderThread::warnVramBudget(const std::uint64_t used, const std::uint64_t budget)
@@ -2098,6 +2193,22 @@ void RenderThread::runLoop()
       deadline = std::min(deadline, *m_arrivalTriggerAt);
     }
 
+    // LP6.4b (C68 (d), D174, the director's reading (6)): a compaction no frame took
+    // within CompactionIdleDelay of the settled frame that marked it: an uploads-only
+    // submission, outside m_mutex as idleTick runs
+    if (m_compactionWanted && !m_events.lost() && !m_events.failed())
+    {
+      const auto compactAt = m_compactionWantedAt + CompactionIdleDelay;
+      if (compactAt <= now)
+      {
+        lock.unlock();
+        compactionSubmission();
+        lock.lock();
+        continue;
+      }
+      deadline = std::min(deadline, compactAt);
+    }
+
     if (m_idleWorkPending && !m_events.lost())
     {
       const auto idleAt = m_lastFrameEnd + IdleCollectInterval;
@@ -2638,6 +2749,8 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.texturesEvicted = m_images.evictions();
       row.texturesFloored = m_images.floored();
       row.feedsInPlace = m_textureUploads.feedsInPlace();
+      // LP6.4b (C68 (d)): the arena bytes the compactions moved so far
+      row.arenaMovedBytes = m_arenas.movedBytes();
       m_timers.frameShown(slot, row);
       ++m_framesPresented;
       // LP2.3 (D9): the panel's status line reads the frame's counts
@@ -2673,6 +2786,12 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         status.vramBudgetBytes = vramBudget();
         status.texturesEvicted = m_images.evictions();
         status.texturesFloored = m_images.floored();
+        // LP6.4b (C68 (d)): the arenas per kind, the compactions run, the bytes moved
+        status.vertexArenas = m_arenas.vertexArenas();
+        status.indexArenas = m_arenas.indexArenas();
+        status.compactions = m_arenas.compactions();
+        status.compactionSubmissions = m_compactionSubmissions;
+        status.arenaMovedBytes = m_arenas.movedBytes();
         status.heaps = textureHeapStatus();
         // D90 (LP4.1): the view's portal flow
         status.viewArea = litStats.viewArea;

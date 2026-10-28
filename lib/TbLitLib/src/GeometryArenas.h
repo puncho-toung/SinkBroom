@@ -40,6 +40,12 @@
 namespace tb::lit
 {
 
+// LP6.4b, any thread (tests): the geometry arenas' size the next sessions make (0:
+// ArenaBytes); process-wide like the texture heaps' hook, and the size a session takes at
+// its phase B
+void setGeometryArenaBytesForTesting(std::uint64_t bytes);
+std::uint64_t geometryArenaBytes();
+
 // where a chunk's geometry is: a range of a vertex arena and one of an index arena
 struct ChunkPlacement
 {
@@ -91,6 +97,9 @@ private:
   {
     nvrhi::BufferHandle buffer;
     RangeAllocator ranges;
+    // LP6.4b (the director's reading (7)): false once a compaction released it (its index
+    // kept, taken by the next arena of the kind made)
+    bool live = true;
   };
 
   nvrhi::IDevice* m_device = nullptr;
@@ -124,10 +133,38 @@ private:
   std::function<bool()> m_allocationRoom;
   std::uint64_t m_headroomRefusals = 0;
   bool m_refusedForHeadroom = false;
-  // LP6.1 (C64, P8.11): bumped by every freed placement and by releaseAll
+  // LP6.1 (C64, P8.11): bumped by every freed placement and by releaseAll (LP6.4b: and
+  // once by every compaction that moved a placement)
   std::uint64_t m_generation = 0;
+  // LP6.4b (C68 (d)): the compactions run, the bytes they moved, the arenas they
+  // released; tests: the moves after which a pass stops as if no range held the next (0:
+  // none)
+  std::uint64_t m_compactions = 0;
+  std::uint64_t m_movedBytes = 0;
+  std::uint64_t m_arenasReleased = 0;
+  std::size_t m_moveLimitForTesting = 0;
 
 public:
+  // LP6.4b (C68 (d), D174): a compaction's source, a kind's arena
+  struct Compaction
+  {
+    bool vertices = true;
+    std::size_t source = 0;
+
+    bool operator==(const Compaction&) const = default;
+  };
+  // what a compaction did: the bytes and placements moved, whether a range found no room
+  // (the pass stopped there, what moved stays moved, the source kept), and the emptied
+  // source's buffer, which the caller retires with the frame (D35)
+  struct CompactionResult
+  {
+    std::uint64_t movedBytes = 0;
+    std::size_t moves = 0;
+    bool stopped = false;
+    nvrhi::BufferHandle released;
+    std::uint64_t releasedBytes = 0;
+  };
+
   GeometryArenas() = default;
 
   // GUI thread in phase B, or the render thread: the device the arenas are made on, and
@@ -195,7 +232,8 @@ public:
   std::size_t sharedRecords() const;
   std::uint64_t placedSharedBytes() const;
 
-  // the arena buffers, for the passes' vertex and index buffer bindings
+  // the arena buffers, for the passes' vertex and index buffer bindings (null for a
+  // released one); the arenas of each kind (LP6.4b: not released)
   nvrhi::IBuffer* vertexBuffer(std::size_t arena) const;
   nvrhi::IBuffer* indexBuffer(std::size_t arena) const;
   std::size_t vertexArenas() const;
@@ -211,6 +249,32 @@ public:
 
   // teardown step 2: every buffer and range
   void releaseAll();
+
+  /**
+   * LP6.4b (C68 (d), D174, U2.9, the director's reading (6)), render thread, at a settled
+   * frame: for each kind (vertices first) with two arenas or more, its least-used arena,
+   * when every range placed in it (the chunks' and the shared placements') fits the
+   * kind's other arenas: a dry run on copies of their allocators, the largest range
+   * first, each first fit as allocate hands it out. nullopt when no kind has one.
+   */
+  std::optional<Compaction> planCompaction() const;
+  /**
+   * LP6.4b: the move of compaction's source in frame: each of its placements, the largest
+   * first, gets a range in the kind's other arenas (never the source, never a new arena;
+   * none: the pass stops there), its bytes copied (copyBuffer on the command list; none
+   * without one, the CPU tests'), the placement updated in place (a chunk's, or a shared
+   * one, which its instances' keys answer), its old range freed with the frame; the
+   * generation bumped once when anything moved; the source, with no range handed out
+   * after it, released (its buffer handed back to retire, its entry kept).
+   */
+  CompactionResult compact(
+    nvrhi::ICommandList* commandList, const Compaction& compaction, std::uint64_t frame);
+  // the compactions run, the bytes they moved and the arenas released so far
+  std::uint64_t compactions() const;
+  std::uint64_t movedBytes() const;
+  std::uint64_t arenasReleased() const;
+  // tests: a pass stops after moves moves as if no range held the next (0: never)
+  void setCompactionMoveLimitForTesting(std::size_t moves);
 
   /**
    * LP6.1 (C64, P8.11), render thread: the arena generation, bumped whenever a placement

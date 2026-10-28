@@ -757,6 +757,16 @@ void LitSession::setVramBudgetForTesting(const std::uint64_t bytes)
   m_renderThread->setVramBudget(bytes);
 }
 
+void LitSession::setGeometryArenaBytesForTesting(const std::uint64_t bytes)
+{
+  lit::setGeometryArenaBytesForTesting(bytes);
+}
+
+void LitSession::holdCompactionForTesting(const bool hold)
+{
+  m_renderThread->holdCompaction(hold);
+}
+
 void LitSession::setBudgetPassHookForTesting(
   std::function<void(const BudgetPassReport&)> hook)
 {

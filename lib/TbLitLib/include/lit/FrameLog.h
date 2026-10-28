@@ -37,6 +37,10 @@ enum class FrameLogEvent
   Frame,
   // a session stopped; the row has the device-local VRAM in use then
   Stop,
+  // LP6.4b (C68 (d), D174): an uploads-only idle submission compacted the arenas: no
+  // frame (no frame row, framesPresented unmoved); the row has the allocations, the
+  // arenas' bytes after it and the bytes it moved
+  Compaction,
 };
 
 /**
