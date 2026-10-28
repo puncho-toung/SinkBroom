@@ -99,6 +99,12 @@ target_include_directories(TbLitLibTest
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
 )
 
+# LP6.4a: tst_LitSession.cpp's GPU cases pass the COFF object's section limit in an
+# optimised MSVC build (C1128)
+if(MSVC)
+  target_compile_options(TbLitLibTest PRIVATE /bigobj)
+endif()
+
 # Copy fixtures
 set(TEST_FIXTURE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/fixture)
 set(TEST_FIXTURE_DEST_DIR $<TARGET_FILE_DIR:TbLitLibTest>/fixture)
