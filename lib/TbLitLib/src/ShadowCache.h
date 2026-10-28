@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include "InlineVector.h"
 #include "ViewFlow.h"
 #include "lit/ChunkBuilder.h"
 #include "lit/EngineLight.h"
@@ -29,6 +30,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -106,10 +108,11 @@ ShadowCvars shadowCvarsOf(const EngineFrameDefaults& frame);
  *   each (lightReachesCaster, the light volume's cull, the spectrum, the light
  *   triangles): order-independent, so the set the tiles were drawn from;
  * - perforated: LP3.4 (P3.6, C61, D156): the sum of shadowPerforatedTerm over the light's
- *   Perforated casters (their stage draws, so the registers that reach them, and their
- *   material entries' revision: the frontend's gathering, ViewLight::perforatedHash) and
- *   of shadowPerforatedImageTerm over their alpha-tested stages' image slots (pass 6's,
- *   each frame); an opaque caster's appearance is in neither (S36);
+ *   Perforated casters (their stage draws, so the registers that reach them, their
+ *   material entries' revision and, LP6.2, whether they are provisional: the frontend's
+ *   gathering, ViewLight::perforatedHash); an opaque caster's appearance is not in it
+ *   (S36). LP6.2 (D169): the alpha-tested stage images' terms are each tile's
+ *   (ShadowTileRecord::imageSum), no longer the light's;
  * - cvars: the shadow cvars by value;
  * - generation: the bake the chunk set was built under (LitPasses' count of the scene's
  *   tree and AreaData pointers, tree presence included: D94's no-tree rule makes every
@@ -165,14 +168,18 @@ std::uint64_t shadowCasterTerm(
  * enginePerforatedShadowDraws makes of it under the call's opening state, which are what
  * its evaluated registers decide (the condition and the colour alpha by which its stages
  * draw, ALPHA_TEST, the texture matrix, the texgen; each draw's program, state and
- * offsets); its material or registers pending (null): the id and a pending mark. Mixed to
- * 64 bits so that the sum over a light's perforated casters is order-independent. Pure.
+ * offsets); its material or registers pending (null): the id and a pending mark. LP6.2
+ * (D169, K53): and whether it is provisional (its registers not current, D52): a tile
+ * drawn with it is held provisional until its light's key moves, which its registers
+ * becoming current must move even when their values are the kept ones'. Mixed to 64 bits
+ * so that the sum over a light's perforated casters is order-independent. Pure.
  */
 std::uint64_t shadowPerforatedTerm(
   const ChunkKey& key,
   bool instance,
   const MaterialEntry* material,
-  const EvaluatedRegisters* registers);
+  const EvaluatedRegisters* registers,
+  bool provisional = false);
 
 /**
  * LP3.4 (C61, D156, K53): an alpha-tested stage image's term of its caster's light's
@@ -184,6 +191,25 @@ std::uint64_t shadowPerforatedTerm(
  */
 std::uint64_t shadowPerforatedImageTerm(
   std::uint64_t slot, bool complete, std::uint64_t version);
+
+// LP6.2 (D169): what a tile's image term reads of a slot now (ImageSlots: slotComplete
+// and the version)
+struct TileImageState
+{
+  bool complete = false;
+  std::uint64_t version = 0;
+};
+
+/**
+ * LP6.2 (D169, SC845): a tile's image term: the sum of shadowPerforatedImageTerm over its
+ * image slots (each an ImageSlotId with its state now) and over its keys whose slot is
+ * not made yet (each the term of no slot: ~0, not complete). A tile with no image has 0.
+ * Pure.
+ */
+std::uint64_t shadowTileImageSum(
+  std::span<const std::uint32_t> slots,
+  std::size_t unmadeKeys,
+  const std::function<TileImageState(std::uint32_t slot)>& state);
 
 // the pixels a and b share
 std::int64_t atlasOverlap(const AtlasRect& a, const AtlasRect& b);
@@ -294,6 +320,10 @@ struct ShadowRelocationPlan
 ShadowRelocationPlan planShadowRelocation(
   std::span<const ShadowMove> moves, int scratchSize, int minSize);
 
+// LP6.2 (D169): the image slots a tile keeps inline; past them it is drawn again on any
+// slot's change (never a wrong picture)
+inline constexpr auto TileImageCapacity = std::size_t{8};
+
 // LP3.3 (C61): one side's tile of a light's record
 struct ShadowTileRecord
 {
@@ -313,10 +343,22 @@ struct ShadowTileRecord
   // LP3.4 (D158): the frame that last relocated it (0: none), the tile-age view's
   std::uint64_t relocatedFrame = 0;
   // LP3.4 (D156, K53): drawn with a perforated caster's stage image not complete, or its
-  // material or registers pending: provisional (not valid either, so drawn again; this
-  // flag tells it from LP3.3's other reasons: a skipped draw or clear, a budget drop, a
-  // caster's light triangles pending)
+  // material or registers pending: provisional. LP6.2 (D169, K53 as the director reads
+  // it: provisional, not settled, never a wrong settled picture): still valid, so held,
+  // not drawn again, until one of its images moves (imageSum) or its light's key or
+  // matrices do; the frame stays unconverged while a placed tile is (LitFrameStats::
+  // tilesProvisional)
   bool provisional = false;
+  // LP6.2 (D169, SC845): the image slots (ImageSlotIds, stable until teardown) of the
+  // alpha-tested stages of the perforated casters this side's draws read (the casters
+  // D149's per-side cull admitted; stage.hasAlphaTest and an image), each once; the keys
+  // whose slot was not made yet, resolved at the next check; past TileImageCapacity
+  // imagesOverflow (drawn again on any slot's change); and the sum of their
+  // shadowPerforatedImageTerm as drawn (shadowTileImageSum)
+  InlineVector<std::uint32_t, TileImageCapacity> imageSlots;
+  std::vector<MaterialImageKey> imageKeys;
+  bool imagesOverflow = false;
+  std::uint64_t imageSum = 0;
 };
 
 /**

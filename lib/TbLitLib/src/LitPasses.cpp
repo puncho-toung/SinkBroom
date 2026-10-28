@@ -2286,18 +2286,57 @@ bool perforatedStageLeftOut(
   return false;
 }
 
-// LP3.4 (C61, D156): the term of key.perforated of a perforated caster's stage image: its
-// slot's id, completeness and version (none: a slot not made yet, not complete)
-std::uint64_t perforatedImageTerm(const ImageSlots* images, const MaterialImageKey& key)
+/**
+ * LP6.2 (D169, C61, D156): a tile's image term now (shadowTileImageSum over its slots,
+ * each by its id: no hash), its keys whose slot has been made since resolved into slots
+ * on the way (a slot's id is stable until teardown); render thread
+ */
+std::uint64_t tileImageSumNow(ShadowTileRecord& tile, const ImageSlots& images)
 {
-  const auto id = images ? images->find(key) : std::nullopt;
-  const auto* slot = id ? images->slot(*id) : nullptr;
-  if (!slot)
+  for (auto it = tile.imageKeys.begin(); it != tile.imageKeys.end();)
   {
-    return shadowPerforatedImageTerm(~std::uint64_t{0}, false, 0);
+    if (const auto id = images.find(*it))
+    {
+      if (std::ranges::find(tile.imageSlots, *id) == tile.imageSlots.end())
+      {
+        if (tile.imageSlots.size() < TileImageCapacity)
+        {
+          tile.imageSlots.push_back(*id);
+        }
+        else
+        {
+          tile.imagesOverflow = true;
+        }
+      }
+      it = tile.imageKeys.erase(it);
+    }
+    else
+    {
+      ++it;
+    }
   }
-  return shadowPerforatedImageTerm(
-    std::uint64_t(*id), slotComplete(*slot), slot->version);
+  return shadowTileImageSum(
+    std::span<const std::uint32_t>{tile.imageSlots.begin(), tile.imageSlots.end()},
+    tile.imageKeys.size(),
+    [&](const std::uint32_t id) {
+      const auto* slot = images.slot(id);
+      return slot ? TileImageState{slotComplete(*slot), slot->version} : TileImageState{};
+    });
+}
+
+// LP6.2 (D169): a drawn tile's images (its draws' keys, each found once, its slot made by
+// the draw's binding) and their term as drawn
+void storeTileImages(
+  ShadowTileRecord& tile, const ShadowTileDraws& drawn, const ImageSlots& images)
+{
+  tile.imageSlots.clear();
+  tile.imageKeys.clear();
+  tile.imagesOverflow = drawn.imagesOverflow;
+  for (const auto* key : drawn.images)
+  {
+    tile.imageKeys.push_back(*key);
+  }
+  tile.imageSum = tileImageSumNow(tile, images);
 }
 
 // LP3.1 (C59): the atlas's format and its framebuffer's (FBN:136-138: depth only)
@@ -2445,11 +2484,11 @@ void LitPasses::recordShadowAtlas(Frame& frame)
     record.key.generation = m_bakeGeneration * 2 + (m_lists.flowed ? 1 : 0);
     // LP3.3 (C61): a caster whose light triangles are not known yet (it is drawn whole:
     // its tiles are drawn again once they are); LP3.4 (C61, P3.6, D156): the perforated
-    // casters' part of the key, the frontend's sum over their registers and revisions and
-    // each alpha-tested stage image's completeness, and the perforated casters whose
-    // stage pass 6 cannot draw
+    // casters' part of the key, the frontend's sum over their registers, revisions and
+    // provisional state (LP6.2, D169: their alpha-tested stage images' terms are each
+    // tile's, ShadowTileRecord::imageSum), and the perforated casters whose stage pass 6
+    // cannot draw
     auto pending = false;
-    auto perforatedImages = std::uint64_t{0};
     for (const auto& caster : light.casters)
     {
       if (
@@ -2470,15 +2509,8 @@ void LitPasses::recordShadowAtlas(Frame& frame)
       {
         ++m_stats.perforatedCastersSkipped;
       }
-      for (const auto& stage : caster.material->stages)
-      {
-        if (stage.hasAlphaTest && stage.image)
-        {
-          perforatedImages += perforatedImageTerm(frame.inputs->images, *stage.image);
-        }
-      }
     }
-    record.key.perforated = light.perforatedHash + perforatedImages;
+    record.key.perforated = light.perforatedHash;
     castersPending.push_back(pending);
     const auto [first, stop] = shadowSides(record.type);
     record.sides = stop - first;
@@ -2661,6 +2693,13 @@ void LitPasses::recordShadowAtlas(Frame& frame)
   auto staleCandidates = std::vector<Stale>{};
   auto tiles = std::vector<TileWork>{};
   auto current = std::vector<AtlasRect>{};
+  // LP6.2 (D169): a kept tile's images can have moved only when a slot's state moved or a
+  // slot was made since the last check (a complete slot's version moves with its state:
+  // the swap, a re-request, a drop, an answer; a level written moves a Loading slot's,
+  // which the term does not read): else no tile's images are looked at
+  auto& images = *frame.inputs->images;
+  const auto checkImages =
+    images.stateVersion() != m_tileImageStates || images.size() != m_tileImageSlots;
   {
     auto shadowIndex = std::size_t{0};
     for (auto r = std::size_t{0}; r < m_shadowRecords.size(); ++r)
@@ -2700,7 +2739,17 @@ void LitPasses::recordShadowAtlas(Frame& frame)
         work.rect = rect;
         work.matrices = engineShadowMapMatrices(
           shadowLightOf(m_lists.lights[record.index]), side, shadowView, m_splitFrustums);
-        const auto drawnWhole = sameKey && tile.placed && tile.valid;
+        // LP6.2 (D169): kept only while its own images' term is the one it was drawn with
+        // (past its capacity: while no slot moved)
+        const auto drawnValid = sameKey && tile.placed && tile.valid;
+        const auto imagesMoved =
+          drawnValid && checkImages
+          && (tile.imagesOverflow || tileImageSumNow(tile, images) != tile.imageSum);
+        if (imagesMoved)
+        {
+          ++m_stats.tilesImageRedrawn;
+        }
+        const auto drawnWhole = drawnValid && !imagesMoved;
         const auto unchanged = drawnWhole && tile.shadowV == work.matrices.shadowV
                                && tile.shadowP == work.matrices.shadowP;
         if (
@@ -2830,6 +2879,13 @@ void LitPasses::recordShadowAtlas(Frame& frame)
         record.shadowP[slice] = tile.shadowP;
         // a tile not drawn whole (a skipped draw, a pending caster): drawn again
         m_stats.shadowsPending = m_stats.shadowsPending || !tile.valid;
+        // LP6.2 (D169, K53): a provisional tile, drawn this frame or held, keeps the
+        // frame unconverged (shadowsPending below) and flags its light's record
+        if (tile.provisional)
+        {
+          ++m_stats.tilesProvisional;
+          record.provisional = true;
+        }
         ++m_stats.layoutTiles;
         m_stats.layoutShadowDraws += tile.draws;
         m_stats.layoutAtlasBytes +=
@@ -2851,6 +2907,10 @@ void LitPasses::recordShadowAtlas(Frame& frame)
         m_shadowCache.drop(record.light);
       }
     }
+    // LP6.2 (D169): every kept tile's images are as checked or drawn now
+    m_tileImageStates = images.stateVersion();
+    m_tileImageSlots = images.size();
+    m_tilesImageRedrawn += m_stats.tilesImageRedrawn;
   };
   const auto unplaceAll = [&] {
     for (auto& record : m_shadowRecords)
@@ -2944,16 +3004,13 @@ void LitPasses::recordShadowAtlas(Frame& frame)
     }
     // LP3.3 (C61): the tile as drawn, against the record's key; LP3.4 (D156, K53): drawn
     // with a perforated caster's image not complete or its registers pending, it is
-    // provisional: drawn again, counted (its own cause, ShadowTileRecord::provisional)
+    // provisional; LP6.2 (D169, K53 as the director reads it): held, not drawn again,
+    // until its images' term (kept here as drawn) or its light's key moves; counted at
+    // the frame's end (finish)
     auto& tile = m_shadowCache.record(record.light).tiles[slice];
-    tile.valid =
-      cleared && drawn.complete && !castersPending[work.record] && !drawn.provisional;
+    tile.valid = cleared && drawn.complete && !castersPending[work.record];
     tile.provisional = drawn.provisional;
-    if (drawn.provisional)
-    {
-      ++m_stats.tilesProvisional;
-      record.provisional = true;
-    }
+    storeTileImages(tile, drawn, images);
     tile.shadowV = work.matrices.shadowV;
     tile.shadowP = work.matrices.shadowP;
     tile.draws = drawn.draws;
@@ -3442,6 +3499,31 @@ bool LitPasses::shadowMapPass(
       continue;
     }
     setMvp(m_parms, mvp);
+    // LP6.2 (D169): the alpha-tested stage images its draws read (loop 1's former rule),
+    // the tile's to keep
+    if (caster.material)
+    {
+      for (const auto& stage : caster.material->stages)
+      {
+        if (!stage.hasAlphaTest || !stage.image)
+        {
+          continue;
+        }
+        const auto* key = &*stage.image;
+        if (std::ranges::find(drawn.images, key) != drawn.images.end())
+        {
+          continue;
+        }
+        if (drawn.images.size() < decltype(drawn.images)::Capacity)
+        {
+          drawn.images.push_back(key);
+        }
+        else
+        {
+          drawn.imagesOverflow = true;
+        }
+      }
+    }
     auto draws = std::vector<PrepassDraw>{};
     if (caster.material && caster.registers)
     {
@@ -5624,6 +5706,11 @@ void LitPasses::setSkipShadowsForTesting(const bool on)
 void LitPasses::invalidateShadowTilesForTesting()
 {
   m_shadowCache.invalidateTiles();
+}
+
+std::uint64_t LitPasses::tilesImageRedrawnForTesting() const
+{
+  return m_tilesImageRedrawn;
 }
 
 void LitPasses::setShadowDepthCopyForTesting(const bool on)

@@ -147,7 +147,8 @@ std::uint64_t shadowPerforatedTerm(
   const ChunkKey& key,
   const bool instance,
   const MaterialEntry* material,
-  const EvaluatedRegisters* registers)
+  const EvaluatedRegisters* registers,
+  const bool provisional)
 {
   auto hash = FnvBasis;
   hash = fnvOf(hash, key.area);
@@ -156,6 +157,11 @@ std::uint64_t shadowPerforatedTerm(
   hash = fnvOf(hash, key.cell);
   hash = fnvOf(hash, key.part);
   hash = fnvOf(hash, instance);
+  if (provisional)
+  {
+    // LP6.2 (D169): a provisional caster's tiles are held until it is no longer
+    hash = fnvOf(hash, std::uint8_t{0xfe});
+  }
   if (!material || !registers)
   {
     // pending: drawn solid and provisional until they arrive
@@ -192,6 +198,22 @@ std::uint64_t shadowPerforatedImageTerm(
   hash = fnvOf(hash, complete);
   hash = fnvOf(hash, complete ? version : std::uint64_t{0});
   return mix(hash);
+}
+
+std::uint64_t shadowTileImageSum(
+  const std::span<const std::uint32_t> slots,
+  const std::size_t unmadeKeys,
+  const std::function<TileImageState(std::uint32_t slot)>& state)
+{
+  auto sum = std::uint64_t{0};
+  for (const auto slot : slots)
+  {
+    const auto now = state(slot);
+    sum += shadowPerforatedImageTerm(slot, now.complete, now.version);
+  }
+  sum +=
+    std::uint64_t(unmadeKeys) * shadowPerforatedImageTerm(~std::uint64_t{0}, false, 0);
+  return sum;
 }
 
 std::int64_t atlasOverlap(const AtlasRect& a, const AtlasRect& b)

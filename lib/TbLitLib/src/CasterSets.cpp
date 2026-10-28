@@ -210,7 +210,8 @@ void CasterSets::resolve(Candidate& candidate, const FrontendInputs& inputs)
       *candidate.key,
       candidate.instance != nullptr,
       candidate.material.get(),
-      candidate.registers.get());
+      candidate.registers.get(),
+      candidate.provisional);
   }
 }
 

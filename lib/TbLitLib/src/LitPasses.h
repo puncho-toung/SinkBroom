@@ -333,6 +333,11 @@ struct LitFrameStats
   std::size_t tilesRelocated = 0;
   std::size_t tilesCached = 0;
   std::size_t tilesProvisional = 0;
+  // LP6.2 (D169, K53 as the director reads it): tilesProvisional counts the placed tiles
+  // provisional at the frame's end, drawn this frame or held; and the tiles drawn again
+  // because one of their own perforated images moved (ShadowTileRecord::imageSum), their
+  // light's key and matrices unchanged
+  std::size_t tilesImageRedrawn = 0;
   // the atlas bytes the drawn tiles' far-plane clears and draws cover (tiles × size² × 4)
   std::uint64_t atlasBytesWritten = 0;
   // LP3.3 (C61, D146): the tiles the frame's interactions sample (drawn, cached or
@@ -486,6 +491,11 @@ struct ShadowTileDraws
   std::size_t draws = 0;
   bool complete = true;
   bool provisional = false;
+  // LP6.2 (D169): the alpha-tested stage images of the perforated casters drawn (the
+  // side's cull admitted them), each once by its key's address in its material entry
+  // (alive for the frame); past the capacity, overflowed
+  InlineVector<const MaterialImageKey*, 2 * TileImageCapacity> images;
+  bool imagesOverflow = false;
 };
 
 /**
@@ -882,6 +892,13 @@ private:
   // tiles take), made at the first frame that packs; a test's moving or settling frames
   std::optional<ShadowTileAllocator> m_heldLayout;
   std::optional<bool> m_shadowsMovingForTesting;
+  // LP6.2 (D169): the slots' state version and count when pass 6 last checked its kept
+  // tiles' images (a complete slot's version moves only with its state, a slot made moves
+  // the count: unchanged, no image term can have moved), and the tiles drawn again for an
+  // image since the session's start (tests)
+  std::uint64_t m_tileImageStates = 0;
+  std::size_t m_tileImageSlots = 0;
+  std::uint64_t m_tilesImageRedrawn = 0;
   std::uint64_t m_bakeGeneration = 0;
   const void* m_bakeTree = nullptr;
   const void* m_bakeAreas = nullptr;
@@ -999,6 +1016,9 @@ public:
   // LP3.3 (C61, D160's cached-vs-fresh test): every kept tile is drawn again at the next
   // frame that runs pass 6, as if its light's record had changed
   void invalidateShadowTilesForTesting();
+  // LP6.2 (D169): the tiles drawn again because one of their images moved, every frame's
+  // LitFrameStats::tilesImageRedrawn summed since the session's start
+  std::uint64_t tilesImageRedrawnForTesting() const;
   // LP3.3 (D146, P3.4a): off, a tile relocated at settle is drawn again instead of copied
   // (the fallback of a device that cannot copy D32 images)
   void setShadowDepthCopyForTesting(bool on);
