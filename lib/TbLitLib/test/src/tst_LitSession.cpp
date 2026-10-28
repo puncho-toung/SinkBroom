@@ -13099,7 +13099,7 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu2]")
       auto backText = std::vector<std::string>{};
       for (const auto state : backStates)
       {
-        backText.push_back(stateName(state));
+        backText.emplace_back(stateName(state));
       }
       std::cout << fmt::format(
         "LP6.4b step 2: {}; (a) in place: white {} frames, latency {:.2f} ms (the first "
@@ -20469,7 +20469,7 @@ TEST_CASE("LitSession arena compaction on a GPU (LP6.4b)", "[.][litgpu3]")
       }
       CHECK(movedBytes > 0u);
       CHECK(status.arenaMovedBytes == compacted.moved);
-      CHECK(movedChunks.size() >= 1u);
+      CHECK_FALSE(movedChunks.empty());
       CHECK(compacted.vertexArenas < full.vertexArenas);
       CHECK(compacted.capacity < full.capacity);
       CHECK(compacted.recordsGeneration == compacted.generation);
@@ -20507,7 +20507,7 @@ TEST_CASE("LitSession arena compaction on a GPU (LP6.4b)", "[.][litgpu3]")
       fmt::join(compactionRows, ", "));
     if (idle)
     {
-      CHECK(compactionRows.size() >= 1u);
+      CHECK_FALSE(compactionRows.empty());
       auto rowBytes = std::uint64_t{0};
       for (const auto& bytes : compactionRows)
       {
