@@ -604,7 +604,8 @@ const EngineBuiltin* engineBuiltin(int index);
  * two defines, vertex and pixel, LAYOUT_DRAW_VERT, POST_PROCESS_INGAME) that the
  * reflection check and the compile thread take as they take a builtin, and whether its
  * pixel shader declares t_CurrentRender: such a program draws over _currentRender, so its
- * material is SS_POST_PROCESS and the stage pass stops before it (K38).
+ * material is SS_POST_PROCESS: the first stage call stops before it and (LP6.5b, C71) the
+ * second draws it over the frame's copy.
  */
 struct EngineMaterialProgram
 {

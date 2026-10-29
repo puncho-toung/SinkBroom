@@ -162,6 +162,9 @@ struct SessionStatus
   // LP6.5a (C69, C70): pass 3's draws among them (0 without SSAO) and whether pass 4 ran
   std::size_t gbufferDraws = 0;
   bool ssaoRan = false;
+  // LP6.5b (C71, the director's reading (9)): the frame's copies of the HDR target into
+  // _currentRender (0 or 1: a post-process surface was left for the second stage call)
+  std::size_t stageCopies = 0;
   std::size_t skippedDraws = 0;
   std::size_t pendingPipelines = 0;
   // the session's arenas, textures and targets (GpuMemoryAccount::total)

@@ -153,6 +153,18 @@ PassDesc ssaoPassDesc()
   return pass;
 }
 
+// LP6.5b (C1's case rule): idStr::Icmp == 0, ASCII letters compared without case
+bool icmpEqual(const std::string_view a, const std::string_view b)
+{
+  const auto lower = [](const char c) {
+    return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
+  };
+  return a.size() == b.size()
+         && std::equal(a.begin(), a.end(), b.begin(), [&](const char x, const char y) {
+              return lower(x) == lower(y);
+            });
+}
+
 // LP6.5a (C70): SsaoPass' constant buffer (SsaoPass.cpp:47-54,
 // c_MaxRenderPassConstantBufferVersions, CommonPasses.h:38)
 constexpr auto SsaoConstantBufferVersions = std::uint32_t{16};
@@ -278,6 +290,7 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
   m_state = DrawState{};
   m_units = {};
   m_unitKeys = {};
+  m_unitTargets = {};
   m_currentSpace.reset();
   m_currentScissor = viewScissor(frame.view);
   m_scissor = engineScissorRect(frame.view, m_currentScissor);
@@ -571,9 +584,24 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
   }
   // LP5.2a (C46): after DrawInteractions, no SSR copy (r_useSSR 0, D19), the first
   // DrawShaderPasses call unless r_skipShaderPasses (RenderBackend.cpp:6107-6125); its
-  // r_skipAmbient test is the test switch (D118: the panel never sets it); the second
-  // call, after the fog lights and the _currentRender copy, draws the SS_POST_PROCESS
-  // surfaces this one stops at (K38), which the preview does not draw
+  // r_skipAmbient test is the test switch (D118: the panel never sets it), under which
+  // the engine's call returns numDrawSurfs, so no copy and no second call follow
+  // (SC824). LP6.5b (C71, D179, P8.25): the first call stops at the first SS_POST_PROCESS
+  // surface (processed, its index); the second call, after the fog lights and the
+  // _currentRender copy, draws the rest (RB:6141-6200)
+  auto processed = m_stageOrder.size();
+  // LP6.5b: one timer query per pass and frame (NVRHI begins a query once per command
+  // list, vulkan-queries.cpp:123): when a second call follows, the Stages query stays
+  // open across the fog lights (whose own query nests in it) and the copy, and ends
+  // after the second call
+  auto stageTimerOpen = false;
+  const auto closeStageTimer = [&] {
+    if (stageTimerOpen)
+    {
+      stageTimerOpen = false;
+      m_stats.stagesTimed = endTimer(frame, inputs.stageTimer);
+    }
+  };
   if (m_skipShaderPasses || EngineFrame.skipShaderPasses)
   {
     m_stats.stagesSkipped = true;
@@ -587,17 +615,23 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
                              | kdl::value_or(nullptr);
     if (stageTarget == frame.framebuffer)
     {
-      // LP6.0 (C65): summed over the frame's stage calls (LP6.5b adds the second)
+      // LP6.0 (C65): summed over the frame's stage calls
       const auto start = FrameClock::now();
       beginTimer(frame, inputs.stageTimer);
-      recordStages(frame);
-      m_stats.stagesTimed = endTimer(frame, inputs.stageTimer);
+      stageTimerOpen = true;
+      processed = recordStages(frame, 0, false);
       m_stats.stageRecordMs += recordMsSince(start);
+      if (processed >= m_stageOrder.size() || m_stats.stagesDisabled)
+      {
+        processed = m_stageOrder.size();
+        closeStageTimer();
+      }
     }
   }
 
   if (m_stats.stoppedEarly || (inputs.stopRequested && inputs.stopRequested()))
   {
+    closeStageTimer();
     m_stats.stoppedEarly = true;
     return;
   }
@@ -617,6 +651,39 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
     m_stats.fogTimed = endTimer(frame, inputs.fogTimer);
     m_stats.fogRecordMs = recordMsSince(start);
   }
+
+  // LP6.5b (C71, D179, the director's readings (4), (5)): now draw any screen warping
+  // post-process effects using _currentRender (RB:6141-6200, r_skipPostProcess 0 not
+  // mirrored): one copy of the HDR target per frame (one sample: the blit, no resolve),
+  // rpScreenCorrectionFactor ( 1, 1, 0, 1 ) and rpWindowCoord ( 1 / w, 1 / h, w, h ) of
+  // the viewport (the whole target), then DrawShaderPasses( drawSurfs + processed, ... )
+  // into hdrFBO under the stages' query
+  if (processed < m_stageOrder.size())
+  {
+    if (m_stats.stoppedEarly || (inputs.stopRequested && inputs.stopRequested()))
+    {
+      closeStageTimer();
+      m_stats.stoppedEarly = true;
+      return;
+    }
+    const auto start = FrameClock::now();
+    if (copyCurrentRender(frame))
+    {
+      const auto w = float(frame.view.width);
+      const auto h = float(frame.view.height);
+      m_parms.set(RenderParm::ScreenCorrectionFactor, Vec4{1.0f, 1.0f, 0.0f, 1.0f});
+      m_parms.set(RenderParm::WindowCoord, Vec4{1.0f / w, 1.0f / h, w, h});
+      m_stats.stageSecondCall = true;
+      m_logPostProcess = true;
+      const auto drawsBefore = m_stats.stageDraws;
+      recordStages(frame, processed, true);
+      m_stats.stagePostProcessDraws = m_stats.stageDraws - drawsBefore;
+      m_logPostProcess = false;
+    }
+    closeStageTimer();
+    m_stats.stageRecordMs += recordMsSince(start);
+  }
+  closeStageTimer();
   return;
 }
 
@@ -4109,17 +4176,19 @@ const EngineMaterialProgram* LitPasses::materialProgram(
   return it->second ? &*it->second : nullptr;
 }
 
-void LitPasses::recordStages(Frame& frame)
+std::size_t LitPasses::recordStages(
+  Frame& frame, const std::size_t first, const bool copied)
 {
   // DrawShaderPasses (RenderBackend.cpp:4271-4716): r_skipAmbient is the caller's test
   // (the test switch, D118); targetRender is null for the 3D view; GL_SelectTexture( 0 );
-  // currentSpace = 1 forces the first surface's space
+  // currentSpace = 1 forces the first surface's space (at each call: LP6.5b's second
+  // starts again; currentScissor is the backend's, carried from the fog lights)
   const auto& inputs = *frame.inputs;
   auto& images = *inputs.images;
   m_currentSpace.reset();
   auto disabledPrograms = std::set<int>{};
 
-  for (std::size_t i = 0; i < m_stageOrder.size(); ++i)
+  for (std::size_t i = first; i < m_stageOrder.size(); ++i)
   {
     const auto& surface = *m_stageOrder[i];
     // D124 (P6.6): a material or registers pending: the engine never draws one; kept
@@ -4154,15 +4223,17 @@ void LitPasses::recordStages(Frame& frame)
     // the preview's view is no xray subview, and every surface's stereo eye is 0
 
     // we need to draw the post process shaders after we have drawn the fog lights (:4329,
-    // currentRenderCopied false at the first call): K38, the pass stops here
-    if (material.sort >= EngineSortPostProcess)
+    // currentRenderCopied false at the first call): the first call stops here and
+    // answers the index; LP6.5b (A56, P8.25): stagePostProcess counts what is left, a
+    // statistic (the second call draws them)
+    if (material.sort >= EngineSortPostProcess && !copied)
     {
       for (std::size_t j = i; j < m_stageOrder.size(); ++j)
       {
         const auto* left = m_stageOrder[j];
         m_stats.stagePostProcess += left->material && left->material->hasAmbient ? 1 : 0;
       }
-      break;
+      return i;
     }
 
     // change the matrix and other space related vars if needed (:4352-4382): MVP,
@@ -4228,6 +4299,28 @@ void LitPasses::recordStages(Frame& frame)
           if (!fragment)
           {
             setUnit(images, unit, Intrinsic::Default);
+            continue;
+          }
+          // LP6.5b (C71, P8.8, the director's reading (6)): _currentRender (the frame's
+          // copy) and _currentNormals bound by name at the unit, never through the slot
+          // table (which answers Default: _default)
+          if (auto* target = namedTarget(frame, *fragment))
+          {
+            setUnitTarget(unit, target);
+            continue;
+          }
+          // K56: the bloodorb capture family's _accum is not mirrored: _default there,
+          // said once per session
+          if (icmpEqual(fragment->name, "_accum"))
+          {
+            setUnit(images, unit, Intrinsic::Default);
+            if (!m_accumWarned && inputs.warn)
+            {
+              m_accumWarned = true;
+              inputs.warn(
+                "The lit preview does not mirror _accum (the bloodorb capture family's "
+                "image): _default stands in where a material stage samples it");
+            }
             continue;
           }
           setUnit(images, unit, stageImage(images, *fragment));
@@ -4381,10 +4474,11 @@ void LitPasses::recordStages(Frame& frame)
         }
         else
         {
-          // D9: the pass is disabled; programReport() says why
+          // D9: the pass is disabled; programReport() says why (LP6.5b: no second
+          // call)
           m_stats.stagesDisabled = true;
           m_parms.set(RenderParm::Color, Vec4{1.0f, 1.0f, 1.0f, 1.0f});
-          return;
+          return m_stageOrder.size();
         }
         break;
       case DrawOutcome::Overflowed:
@@ -4401,6 +4495,34 @@ void LitPasses::recordStages(Frame& frame)
   // :4707-4712: GL_Color( 1, 1, 1 ) (alpha 1); GL_State( GLS_DEFAULT ) disables the
   // stencil test, which the next pass's pipeline keys carry as their own state
   m_parms.set(RenderParm::Color, Vec4{1.0f, 1.0f, 1.0f, 1.0f});
+  return m_stageOrder.size();
+}
+
+bool LitPasses::copyCurrentRender(Frame& frame)
+{
+  // RB:6160-6174 at one sample: BlitTexture of hdrFBO's colour 0 into postProcFBO at the
+  // full extent, a texel-for-texel copy of the same format and size: one copyTexture of
+  // the whole texture (the director's reading (4)); _currentRender made at the first
+  // frame that copies and kept (the director's reading (1))
+  auto& resources = *frame.inputs->frame;
+  if (!resources.ensureCurrentRender())
+  {
+    return false;
+  }
+  const auto hdr = resources.find(frame_resource::CurrentRenderHdr);
+  const auto copy = resources.find(frame_resource::CurrentRender);
+  if (!hdr || !hdr->texture || !copy || !copy->texture)
+  {
+    return false;
+  }
+  frame.inputs->commandList->copyTexture(
+    copy->texture, nvrhi::TextureSlice{}, hdr->texture, nvrhi::TextureSlice{});
+  // nvrhi rules 6 and 7: the copy ends the render pass; NVRHI's tracked barriers take the
+  // HDR target back to RenderTarget and _currentRender to ShaderResource at the next
+  // draw's state
+  m_state.valid = false;
+  ++m_stats.stageCopies;
+  return true;
 }
 
 void LitPasses::recordFogLights(Frame& frame)
@@ -5035,6 +5157,7 @@ ImageSlotId LitPasses::askSlot(ImageSlots& images, const MaterialImageKey& key)
 void LitPasses::setUnit(
   ImageSlots& images, const std::size_t unit, const Intrinsic intrinsic)
 {
+  m_unitTargets[unit] = nullptr;
   m_units[unit] = intrinsicSlot(images, intrinsic);
   if (m_units[unit])
   {
@@ -5054,6 +5177,7 @@ void LitPasses::setUnit(
     setUnit(images, unit, *intrinsic);
     return;
   }
+  m_unitTargets[unit] = nullptr;
   m_units[unit] = images.find(key);
   if (m_units[unit])
   {
@@ -5073,13 +5197,39 @@ void LitPasses::setUnit(
     setUnit(images, unit, *key);
     return;
   }
+  m_unitTargets[unit] = nullptr;
   m_units[unit].reset();
   m_unitKeys[unit].reset();
 }
 
 bool LitPasses::hasUnit(const std::size_t unit) const
 {
-  return m_units[unit] || m_unitKeys[unit];
+  return m_units[unit] || m_unitKeys[unit] || m_unitTargets[unit];
+}
+
+void LitPasses::setUnitTarget(const std::size_t unit, nvrhi::ITexture* texture)
+{
+  m_units[unit].reset();
+  m_unitKeys[unit].reset();
+  m_unitTargets[unit] = texture;
+}
+
+nvrhi::ITexture* LitPasses::namedTarget(
+  const Frame& frame, const MaterialImageKey& key) const
+{
+  // the engine's globalImages->currentRenderImage and gbufferNormalsRoughnessImage, which
+  // ImageFromFile finds by name whatever the case (C1); the preview's frame resources of
+  // those names, when the frame has made them
+  namespace fr = frame_resource;
+  for (const auto name : {fr::CurrentRender, fr::CurrentNormals})
+  {
+    if (icmpEqual(key.name, name))
+    {
+      const auto resource = frame.inputs->frame->find(name);
+      return resource ? resource->texture : nullptr;
+    }
+  }
+  return nullptr;
 }
 
 std::optional<ImageSlotId> LitPasses::unitSlot(ImageSlots& images, const std::size_t unit)
@@ -5170,6 +5320,14 @@ bool LitPasses::bindingSets(
   auto& images = *inputs.images;
   const auto unitBinding =
     [&](const std::size_t unit) -> std::optional<ImageSlots::Binding> {
+    // LP6.5b (C71, C72): a unit bound by name binds its frame resource whole
+    if (auto* target = m_unitTargets[unit])
+    {
+      auto binding = ImageSlots::Binding{};
+      binding.texture = target;
+      binding.subresources = nvrhi::AllSubresources;
+      return binding;
+    }
     const auto id = unitSlot(images, unit);
     if (!id)
     {
@@ -5182,6 +5340,21 @@ bool LitPasses::bindingSets(
     }
     return binding;
   };
+  // what a unit's binding adds to its set's key: its slot versions, or (LP6.5b, the
+  // director's reading (6)) a frame resource bound by name with the render-target
+  // generation (C28: the set goes with its targets)
+  const auto keyUnit =
+    [&](BindingSetKey& key, const std::size_t unit, const ImageSlots::Binding& binding) {
+      if (m_unitTargets[unit])
+      {
+        key.resources.push_back(binding.texture);
+        key.renderTargetGeneration = inputs.frame->renderTargetGeneration();
+      }
+      else
+      {
+        key.slots.append(binding.versions.begin(), binding.versions.end());
+      }
+    };
   // a set of textures, each unit at its slot, in the layout's item order (nvrhi rule 4)
   // LP6.1 (C64): inline, at most the ambient pass's nine units of a set
   using UnitSlots = InlineVector<std::pair<std::size_t, std::uint32_t>, 9>;
@@ -5210,7 +5383,7 @@ bool LitPasses::bindingSets(
       {
         return false;
       }
-      key.slots.append(binding->versions.begin(), binding->versions.end());
+      keyUnit(key, unit, *binding);
       bindings.push_back(*binding);
     }
     sets[set] = acquire(set, key, [&] {
@@ -5268,7 +5441,7 @@ bool LitPasses::bindingSets(
         {
           return false;
         }
-        key.slots.append(binding->versions.begin(), binding->versions.end());
+        keyUnit(key, unit, *binding);
         units.push_back(*binding);
       }
     }
@@ -6037,6 +6210,7 @@ void LitPasses::log(
   record.program = program;
   record.state = state;
   record.scissor = m_scissor;
+  record.postProcess = pass == LitDrawRecord::Pass::Stage && m_logPostProcess;
   m_drawLog.push_back(std::move(record));
 }
 

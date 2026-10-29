@@ -93,6 +93,10 @@ inline constexpr auto LdrFramebuffer = std::string_view{"ldrFBO"};
 // (Framebuffer_NVRHI.cpp:184-187)
 inline constexpr auto CurrentNormals = std::string_view{"_currentNormals"};
 inline constexpr auto GbufferFramebuffer = std::string_view{"geometryBufferFBO"};
+// LP6.5b (C71, D179, P8.8): the HDR copy the post-process stages sample, postProcFBO's
+// colour (Image_intrinsic.cpp: R_HDR_RGBA16FImage_ResNative, Framebuffer_NVRHI.cpp:
+// 150-152)
+inline constexpr auto CurrentRender = std::string_view{"_currentRender"};
 // LP6.5a (C70, SC808, SC811): the ambient occlusion pass 4 writes and the ambient pass
 // reads at t4 (Image_intrinsic.cpp:1127, 342-345), and SsaoPass' deinterleaved arrays
 // (SsaoPass.cpp:56-71)
@@ -185,6 +189,17 @@ public:
  * in renderTargetBytes (C68 (e)). A session without SSAO makes none of them, so its
  * targets are LP6.4b's.
  *
+ * LP6.5b (C71, C72, D179, the director's readings (1) and (2)): two targets are made on
+ * the render thread at the first frame that needs them and kept until teardown, remade
+ * with the others on a new extent and in renderTargetBytes from then on: _currentRender
+ * (RGBA16_FLOAT, a render target as postProcFBO's colour, keepInitialState: the copy's
+ * destination and the post-process stages' shader resource), at the first frame that
+ * copies (ensureCurrentRender); and, in a session without SSAO, _currentNormals with
+ * geometryBufferFBO, at the first frame a bumpyenvironment2 stage is listed
+ * (ensureNormals). Neither bumps the render-target generation when it is first made: no
+ * binding set can hold a target that did not exist (a set that binds it carries the
+ * generation, C28).
+ *
  * Threads: create on the GUI thread in phase B before the render thread starts (as the
  * headless target); releaseAll on the GUI thread in teardown step 2; everything else on
  * the render thread.
@@ -206,11 +221,17 @@ private:
     nvrhi::TextureHandle ao0;
     nvrhi::TextureHandle deinterleavedDepth;
     nvrhi::TextureHandle deinterleavedOcclusion;
+    // LP6.5b (C71): the HDR copy, once a frame has needed it
+    nvrhi::TextureHandle currentRender;
   };
 
   nvrhi::IDevice* m_device = nullptr;
   // LP6.5a (C69, C70): the session's SSAO is on: the G-buffer's targets are made too
   bool m_ssaoTargets = false;
+  // LP6.5b (C71, C72): a frame needed _currentRender, or the G-buffer's normals without
+  // SSAO: made with the targets from then on
+  bool m_currentRenderWanted = false;
+  bool m_normalsWanted = false;
   nvrhi::Format m_depthFormat = nvrhi::Format::D24S8;
   Targets m_targets;
   nvrhi::BufferHandle m_histogram;
@@ -242,6 +263,20 @@ public:
    * changed. The old ones are retired until the frames before have finished (D35).
    */
   Result<bool> ensureExtent(vk::Extent2D extent, std::uint64_t frame);
+
+  /**
+   * LP6.5b (C71, D179, the director's reading (1)), render thread: _currentRender at the
+   * targets' extent, made now when it is not, and made again with the targets from then
+   * on; whether it exists.
+   */
+  bool ensureCurrentRender();
+  /**
+   * LP6.5b (C72, D176, the director's reading (2)), render thread: _currentNormals and
+   * geometryBufferFBO, made now when they are not (a session without SSAO whose frame
+   * lists a bumpyenvironment2 stage), and made again with the targets from then on;
+   * whether they exist.
+   */
+  bool ensureNormals();
 
   // render thread: a resource of the frame's (the headless target) that frame and later
   // ones no longer use, held until the frames before have finished; and their release
@@ -279,6 +314,10 @@ public:
 
 private:
   Result<Targets> makeTargets(vk::Extent2D extent) const;
+  // LP6.5b: _currentNormals and geometryBufferFBO into targets (its depth made; why
+  // not, or nullopt), and _currentRender at an extent
+  std::optional<std::string> makeNormals(Targets& targets) const;
+  nvrhi::TextureHandle makeCurrentRender(vk::Extent2D extent) const;
 
   deleteCopyAndMove(FrameResources);
 };

@@ -378,13 +378,22 @@ struct LitFrameStats
   // the surfaces skipped because their material or registers are pending (D124: the
   // frame is unconverged) and (LP5.2b, C48) the cube-program draws made with the zero
   // cube because their cube image was not written yet (Pending, or Loading without a
-  // level: unconverged); the surfaces with an SL_AMBIENT stage left at the stop at
-  // SS_POST_PROCESS (K38)
+  // level: unconverged); the surfaces with an SL_AMBIENT stage left at the first call's
+  // stop at SS_POST_PROCESS (LP6.5b: drawn by the second call)
   std::size_t stagePending = 0;
   std::size_t stagePostProcess = 0;
-  // of stageSkipped: the TG_REFLECT_CUBE2 stages (LP5.2b, C48: programs 59-62 need LP6's
-  // inputs, and without a bump stage texture_color would sample the cube as a Texture2D,
-  // mirror.json M-STAGE-DIFF-05), the stages of a cinematic (D120), of a newStage program
+  // ----- LP6.5b (C71, D179, A56, the director's readings (4), (5), (9)) -----
+  // stagePostProcess is a statistic now: the first call stops there (RB:4329) and the
+  // second call draws them. The frame's copies of _currentRenderHDR into _currentRender
+  // (0 or 1: one per frame, after the fog lights, when a post-process surface is left and
+  // the skipAmbient stand-in is off), whether the second call ran, and its draws (inside
+  // stageDraws)
+  std::size_t stageCopies = 0;
+  bool stageSecondCall = false;
+  std::size_t stagePostProcessDraws = 0;
+  // of stageSkipped: the TG_REFLECT_CUBE2 stages without a bump stage (LP5.2b, C48;
+  // LP6.5b, C72: texture_color would sample the cube as a Texture2D, mirror.json
+  // M-STAGE-DIFF-05, narrowed), the stages of a cinematic (D120), of a newStage program
   // absent from the table or its blobs (D9)
   std::size_t stageTexgenLp6 = 0;
   std::size_t stageCinematic = 0;
@@ -549,6 +558,8 @@ struct LitDrawRecord
   nvrhi::Rect scissor;
   // LP3.1: a shadow draw's side (point 0-5, parallel 0-3, spot -1); -1 otherwise
   int side = -1;
+  // LP6.5b (C71): a Stage draw of the second call (over the frame's _currentRender copy)
+  bool postProcess = false;
 };
 
 /**
@@ -899,6 +910,11 @@ private:
   // made by the first draw that binds its image
   std::array<std::optional<ImageSlotId>, LitTextureUnits> m_units;
   std::array<std::optional<MaterialImageKey>, LitTextureUnits> m_unitKeys;
+  // LP6.5b (C71, C72, P8.8, the director's reading (6)): a unit bound by name to a frame
+  // resource (_currentRender, _currentNormals; setUnitTarget): its texture, which the
+  // binding set holds with the render-target generation in its key (C28), never through
+  // the slot table; null: the unit's slot or key
+  std::array<nvrhi::ITexture*, LitTextureUnits> m_unitTargets = {};
   /**
    * LP6.1 (C64): the intrinsic images the passes bind by name: _brdfLut, _white,
    * _default, _defaultUACRadiance, _blueNoise256, _fog, _fogEnter, and
@@ -947,6 +963,11 @@ private:
   // LP5.2a (C46, D115): the drawn surfaces in the stage pass's order (stagePassOrder),
   // made when the lists are built; pointers into m_lists.drawSurfs
   std::vector<const LitSurface*> m_stageOrder;
+  // LP6.5b (C71): the draw log marks the second call's draws (LitDrawRecord::postProcess)
+  bool m_logPostProcess = false;
+  // LP6.5b (C71, K56): _accum (the bloodorb capture family's) bound as _default, said
+  // once per session
+  bool m_accumWarned = false;
   // LP6.1 (C64): the draw records of passes 1, 5 and 7, and the lists' links into them:
   // the drawn surfaces' (m_lists.drawSurfs' order) and the lights' (m_lists.lights'
   // order, fog and blend lights and lights without interactions empty); stale after a
@@ -1333,8 +1354,9 @@ private:
    * hdrFBO with the prepass's depth, over m_stageOrder: a surface whose material or
    * registers are pending is skipped (counted, the frame unconverged, D124); one without
    * an SL_AMBIENT stage, a portal sky, an empty one and a suppressInSubview one are
-   * passed over; the pass stops at the first surface of sort SS_POST_PROCESS or more
-   * (K38, no _currentRender copy); per surface the space's matrices on a space change,
+   * passed over; the first call stops at the first surface of sort SS_POST_PROCESS or
+   * more (LP6.5b: the second call draws the rest); per surface the space's matrices on a
+   * space change,
    * its engine scissor (LitSurface::scissor) with the Y flip, and each draw of
    * engineShaderPassDraws: an old-style stage with its colour, vertex colour, texture
    * matrix (and TG_SCREEN's planes) and its image at unit 0 by the slot's state
@@ -1343,8 +1365,26 @@ private:
    * texgen's program (55, 57, 69, 70) with its cube at unit 0 (cubeImage), 57's bump
    * image at unit 1 (bumpImage) and 70's WOBBLESKY_X..Z; at the end GL_Color( 1 ) and
    * GLS_DEFAULT (no draw).
+   *
+   * LP6.5b (C71, D179, A56, P8.25, the director's readings (4)-(7)): the loop from
+   * m_stageOrder[first] on; copied false (the first call) stops at the first surface of
+   * sort SS_POST_PROCESS or more (RB:4329, currentRenderCopied false), stagePostProcess
+   * counting what is left, and answers its index (the order's size when none stops it);
+   * copied true (the second call, after the fog lights and the copy, recordFrame) draws
+   * every surface from first on, its draws logged postProcess. A newStage fragment map
+   * _currentRender or _currentNormals (C1's case rule) binds the frame resource at its
+   * unit by name (setUnitTarget), _accum _default with one notice (K56).
    */
-  void recordStages(Frame& frame);
+  std::size_t recordStages(Frame& frame, std::size_t first, bool copied);
+  /**
+   * LP6.5b (C71, D179, the director's reading (4)): RB:6141-6174 at one sample: one
+   * copyTexture of the whole _currentRenderHDR into _currentRender (made at the first
+   * frame that copies: FrameResources::ensureCurrentRender), NVRHI tracking the HDR
+   * target RenderTarget -> CopySource -> RenderTarget and _currentRender CopyDest ->
+   * ShaderResource for the second call's binding sets; stageCopies counted. False when
+   * _currentRender cannot be made (the second call is not drawn then).
+   */
+  bool copyCurrentRender(Frame& frame);
   /**
    * LP5.3 (C49, D122-D124): FogAllLights (RenderBackend.cpp:5038-5076, from :6136) into
    * hdrFBO with the prepass's depth: nothing under r_skipFogLights (EngineFrame, its
@@ -1568,6 +1608,12 @@ private:
   void setUnit(
     ImageSlots& images, std::size_t unit, const std::optional<MaterialImageKey>& key);
   bool hasUnit(std::size_t unit) const;
+  // LP6.5b (C71, C72): a unit bound by name to a frame resource's texture (null: none)
+  void setUnitTarget(std::size_t unit, nvrhi::ITexture* texture);
+  // LP6.5b (C71, C72, P8.8, the director's reading (6)): the frame resource a newStage or
+  // bumpyenvironment2 unit binds by name for an image key (C1's case rule:
+  // _currentRender, _currentNormals), when the frame has it; null for any other key
+  nvrhi::ITexture* namedTarget(const Frame& frame, const MaterialImageKey& key) const;
   // LP6.1 (C64): the binding's slot of a unit, a kept key asked for now
   std::optional<ImageSlotId> unitSlot(ImageSlots& images, std::size_t unit);
   void log(

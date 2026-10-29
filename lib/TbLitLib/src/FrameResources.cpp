@@ -223,13 +223,39 @@ Result<bool> FrameResources::ensureExtent(
                  old.normals,
                  old.ao0,
                  old.deinterleavedDepth,
-                 old.deinterleavedOcclusion})
+                 old.deinterleavedOcclusion,
+                 old.currentRender})
            {
              retire(texture.Get(), textureBytes(texture.Get()), frame);
            }
            ++m_generation;
            return true;
          });
+}
+
+bool FrameResources::ensureCurrentRender()
+{
+  m_currentRenderWanted = true;
+  if (!m_targets.currentRender && m_targets.hdr)
+  {
+    m_targets.currentRender = makeCurrentRender(m_targets.extent);
+  }
+  return m_targets.currentRender != nullptr;
+}
+
+bool FrameResources::ensureNormals()
+{
+  m_normalsWanted = true;
+  if (!m_targets.normals && m_targets.depth)
+  {
+    // a failed make leaves neither (Targets' fields stay as they were)
+    auto made = m_targets;
+    if (!makeNormals(made))
+    {
+      m_targets = std::move(made);
+    }
+  }
+  return m_targets.normals && m_targets.gbufferFramebuffer;
 }
 
 void FrameResources::retire(
@@ -315,6 +341,10 @@ std::optional<FrameResource> FrameResources::find(const std::string_view name) c
   {
     return FrameResource{nullptr, nullptr, m_targets.gbufferFramebuffer.Get(), true};
   }
+  if (name == fr::CurrentRender && m_targets.currentRender)
+  {
+    return FrameResource{m_targets.currentRender.Get(), nullptr, nullptr, true};
+  }
   if (name == fr::Ao0 && m_targets.ao0)
   {
     return FrameResource{m_targets.ao0.Get(), nullptr, nullptr, true};
@@ -378,7 +408,8 @@ std::uint64_t FrameResources::renderTargetBytes() const
          + textureBytes(m_targets.ldr.Get()) + textureBytes(m_targets.normals.Get())
          + textureBytes(m_targets.ao0.Get())
          + textureBytes(m_targets.deinterleavedDepth.Get())
-         + textureBytes(m_targets.deinterleavedOcclusion.Get());
+         + textureBytes(m_targets.deinterleavedOcclusion.Get())
+         + textureBytes(m_targets.currentRender.Get());
 }
 
 std::uint64_t FrameResources::bufferBytes() const
@@ -430,25 +461,27 @@ Result<FrameResources::Targets> FrameResources::makeTargets(
   {
     return Error{"Cannot create the frame's framebuffers"};
   }
-  if (m_ssaoTargets)
+  // LP6.5a (C69): the G-buffer's in an SSAO session; LP6.5b (C72): or once a frame listed
+  // a bumpyenvironment2 stage
+  if (m_ssaoTargets || m_normalsWanted)
   {
-    // LP6.5a (C69, SC808): R_GeometryBufferImage_ResNative (Image_intrinsic.cpp:347-352)
-    // at one sample, and geometryBufferFBO (Framebuffer_NVRHI.cpp:184-187)
-    targets.normals = device.createTexture(renderTargetDesc(
-      "_currentNormals", nvrhi::Format::RGBA16_FLOAT, extent, false, false));
-    if (!targets.normals)
+    if (const auto failed = makeNormals(targets))
+    {
+      return Error{*failed};
+    }
+  }
+  // LP6.5b (C71): the HDR copy once a frame needed it
+  if (m_currentRenderWanted)
+  {
+    targets.currentRender = makeCurrentRender(extent);
+    if (!targets.currentRender)
     {
       return Error{fmt::format(
-        "Cannot create the G-buffer's target at {}x{}", extent.width, extent.height)};
+        "Cannot create _currentRender at {}x{}", extent.width, extent.height)};
     }
-    targets.gbufferFramebuffer =
-      device.createFramebuffer(nvrhi::FramebufferDesc{}
-                                 .addColorAttachment(targets.normals)
-                                 .setDepthAttachment(targets.depth));
-    if (!targets.gbufferFramebuffer)
-    {
-      return Error{"Cannot create the G-buffer's framebuffer"};
-    }
+  }
+  if (m_ssaoTargets)
+  {
     // LP6.5a (C70): R_AmbientOcclusionImage_ResNative (Image_intrinsic.cpp:342-345:
     // TD_R8F, a render target and a UAV) and SsaoPass' arrays (SsaoPass.cpp:56-71)
     targets.ao0 = device.createTexture(
@@ -464,6 +497,47 @@ Result<FrameResources::Targets> FrameResources::makeTargets(
     }
   }
   return targets;
+}
+
+std::optional<std::string> FrameResources::makeNormals(Targets& targets) const
+{
+  if (!m_device || !targets.depth)
+  {
+    return std::string{"The G-buffer's targets need the frame's device and depth"};
+  }
+  auto& device = *m_device;
+  const auto extent = targets.extent;
+  // LP6.5a (C69, SC808): R_GeometryBufferImage_ResNative (Image_intrinsic.cpp:347-352) at
+  // one sample, and geometryBufferFBO (Framebuffer_NVRHI.cpp:184-187)
+  targets.normals = device.createTexture(renderTargetDesc(
+    "_currentNormals", nvrhi::Format::RGBA16_FLOAT, extent, false, false));
+  if (!targets.normals)
+  {
+    return fmt::format(
+      "Cannot create the G-buffer's target at {}x{}", extent.width, extent.height);
+  }
+  targets.gbufferFramebuffer =
+    device.createFramebuffer(nvrhi::FramebufferDesc{}
+                               .addColorAttachment(targets.normals)
+                               .setDepthAttachment(targets.depth));
+  if (!targets.gbufferFramebuffer)
+  {
+    targets.normals = nullptr;
+    return std::string{"Cannot create the G-buffer's framebuffer"};
+  }
+  return std::nullopt;
+}
+
+nvrhi::TextureHandle FrameResources::makeCurrentRender(const vk::Extent2D extent) const
+{
+  // LP6.5b (C71, C14's descriptor): R_HDR_RGBA16FImage_ResNative at one sample, a render
+  // target (postProcFBO's colour, Framebuffer_NVRHI.cpp:150-152) at the frame's extent;
+  // NVRHI tracks it RenderTarget -> CopyDest (the copy) -> ShaderResource (the stages)
+  // and back to RenderTarget at the command list's end (keepInitialState)
+  return m_device
+           ? m_device->createTexture(renderTargetDesc(
+               "_currentRender", nvrhi::Format::RGBA16_FLOAT, extent, false, false))
+           : nullptr;
 }
 
 } // namespace tb::lit

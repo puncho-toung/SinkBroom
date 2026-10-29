@@ -2802,6 +2802,8 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
                        + tonemap.draws;
         status.gbufferDraws = litStats.gbufferDraws;
         status.ssaoRan = litStats.ssaoRan;
+        // LP6.5b (C71): the copy for the second stage call
+        status.stageCopies = litStats.stageCopies;
         status.skippedDraws = litStats.skippedDraws;
         status.pendingPipelines = litStats.pendingPipelines + tonemap.pendingPipelines;
         const auto account = accountGpuMemory(

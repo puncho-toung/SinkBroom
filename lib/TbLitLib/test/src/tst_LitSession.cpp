@@ -13713,9 +13713,14 @@ TEST_CASE("LitSession pass 8, the material stage pass, on a GPU (LP5.2a)", "[.][
     CHECK_FALSE(stats.stagesSkipped);
     CHECK(stats.stagesTimed);
     CHECK_FALSE(stats.stagesDisabled);
-    // twelve stage draws; the haze stopped at (K38), the movie skipped (D120)
-    CHECK(stats.stageDraws == 12u);
+    // twelve stage draws in the first call; the haze stopped at (stagePostProcess, a
+    // statistic since LP6.5b, A56) and drawn by the second call over the frame's
+    // _currentRender copy (C71): thirteen; the movie skipped (D120)
+    CHECK(stats.stageDraws == 13u);
     CHECK(stats.stagePostProcess == 1u);
+    CHECK(stats.stagePostProcessDraws == 1u);
+    CHECK(stats.stageCopies == 1u);
+    CHECK(stats.stageSecondCall);
     CHECK(stats.stageCinematic == 1u);
     CHECK(stats.stageSkipped == 1u);
     CHECK(stats.stageTexgenLp6 == 0u);
@@ -13758,9 +13763,11 @@ TEST_CASE("LitSession pass 8, the material stage pass, on a GPU (LP5.2a)", "[.][
     // the implicit material: blend blend colored map clamp, its image magenta, alpha 1
     const auto implicitPoint = EngineVec3{150, 50, 110};
     check("implicit material", implicitPoint, Rgb{1.0f, 0.0f, 1.0f});
-    // K38: the _currentRender material draws nothing; the wall behind shows
+    // LP6.5b (C71, P8.5): the _currentRender material is drawn over the copy with no
+    // deform (no vertexParm 1: rpUser1 0), so it samples the copy at its own pixel: the
+    // wall behind (K38's old picture, now the deform's control)
     const auto hazePoint = EngineVec3{150, 90, 110};
-    check("SS_POST_PROCESS stop", hazePoint, at(bg, hazePoint));
+    check("the haze over the copy, deform 0", hazePoint, at(bg, hazePoint));
     // D120: the cinematic stage is not drawn
     const auto moviePoint = EngineVec3{150, 130, 110};
     check("cinematic", moviePoint, at(bg, moviePoint));
@@ -13933,7 +13940,10 @@ TEST_CASE("LitSession pass 8, the material stage pass, on a GPU (LP5.2a)", "[.][
       CHECK(
         programs["textures/lp52a/voronoi"]
         == findEngineMaterialProgram("vornoipattern")->row.index);
-      CHECK_FALSE(programs.contains("textures/lp52a/haze"));
+      // LP6.5b (C71): the haze drawn (the second call), on heathaze's row
+      CHECK(
+        programs["textures/lp52a/haze"]
+        == findEngineMaterialProgram("heathaze")->row.index);
       CHECK_FALSE(programs.contains("textures/lp52a/movie"));
     }
 
@@ -13949,18 +13959,19 @@ TEST_CASE("LitSession pass 8, the material stage pass, on a GPU (LP5.2a)", "[.][
       REQUIRE(pending);
       CHECK(pending->stagePending == 1u);
       CHECK(pending->unconverged);
-      CHECK(pending->stageDraws == 11u);
+      // LP6.5b: the haze drawn by the second call too
+      CHECK(pending->stageDraws == 12u);
       gate->open();
       auto landed = settledHdr(*session, camera, 1);
       for (auto attempt = 0;
-           attempt < 20 && landed && landed->second.stats.stageDraws != 12u;
+           attempt < 20 && landed && landed->second.stats.stageDraws != 13u;
            ++attempt)
       {
         landed = settledHdr(*session, camera, 1);
       }
       REQUIRE(landed);
       CHECK(landed->second.stats.stagePending == 0u);
-      CHECK(landed->second.stats.stageDraws == 12u);
+      CHECK(landed->second.stats.stageDraws == 13u);
       const auto got = rgbOf(
         landed->first.at(pixelOf(view, addPoint).first, pixelOf(view, addPoint).second));
       CHECK(near3(got, plus(at(bg, addPoint), linearRgb({0.5f, 0.25f, 0.0f}))));
@@ -21625,6 +21636,504 @@ TEST_CASE("LitSession the G-buffer and SSAO on a GPU (LP6.5a)", "[.][litgpu4]")
 
   std::cout << fmt::format(
     "LP6.5a [litgpu4] case: {:.1f} s\n",
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+}
+
+namespace
+{
+
+/**
+ * LP6.5b (C71, P8.5): a heat-haze panel over a striped wall lit head-on. The wall's
+ * image has vertical stripes 16 texels wide (white and black, exact through any block
+ * compression), so a sample of the copy shifted by the deform shows another stripe. The
+ * panel's normal map (haze_normal.tga, 64 × 64) is fragmentMap 1, which the engine loads
+ * as TD_BUMP ("unit 1 is the normal map", Material.cpp:1250-1254):
+ * DXT5 with CFM_NORMAL_DXT5, whose swizzle moves the source's red into alpha and clears
+ * red and blue (BinaryImage.cpp:360-372, the shim's ShimImageSource.cpp:177-189), its
+ * cache name
+ * generated/images/textures/lp65b/haze_normal#__0300.bimage (not P8.5's TD_DEFAULT
+ * #__0200). heathaze.ps reads localNormal = bumpMap.wy · 2 - 1, so the source holds the
+ * pattern in red (x: 255 on the left half, 0 on the right: +1 / -1) and green (y: 255 on
+ * the top half, 0 on the bottom), blue 0, alpha 255. The deform magnitude is vertexParm 1
+ * (rpUser1, heathaze.vs: texcoord1 = min( 0.43 · P[1][1] / w, 0.02 ) · rpUser1); haze
+ * has 8, haze_still 0 and names _CurrentRender in other case (C1's rule).
+ */
+const auto Lp65bMaterials = std::string{
+  "textures/lp65b/stripes\n{\n\tqer_editorimage textures/lp65b/stripes.tga\n"
+  "\tdiffusemap textures/lp65b/stripes.tga\n}\n"
+  "textures/lp65b/haze\n{\n\t{\n\t\tprogram heathaze\n\t\tvertexParm 0 0, 0\n"
+  "\t\tvertexParm 1 8\n\t\tfragmentMap 0 _currentRender\n"
+  "\t\tfragmentMap 1 textures/lp65b/haze_normal.tga\n\t}\n}\n"
+  "textures/lp65b/haze_still\n{\n\t{\n\t\tprogram heathaze\n\t\tvertexParm 0 0, 0\n"
+  "\t\tvertexParm 1 0\n\t\tfragmentMap 0 _CurrentRender\n"
+  "\t\tfragmentMap 1 textures/lp65b/haze_normal.tga\n\t}\n}\n"};
+
+// the striped wall at x 200 lit head-on by a parallel light from -x; the panel (when a
+// material is given) 2 units thick at x 120, 80 × 80 units around the camera's axis
+std::string lp65bHazeMapText(const std::string& panel = {})
+{
+  auto text = std::string{"{\n\"classname\" \"worldspawn\"\n"};
+  text += boxBrush(200, -400, -200, 216, 400, 400, "lp65b/stripes");
+  if (!panel.empty())
+  {
+    text += boxBrush(120, -40, 24, 122, 40, 104, panel);
+  }
+  text += "}\n";
+  text +=
+    "{\n\"classname\" \"light\"\n\"name\" \"lp65b_parallel\"\n\"origin\" \"100 0 64\"\n"
+    "\"light_radius\" \"300 300 300\"\n\"light_center\" \"-1 0 0\"\n\"parallel\" \"1\"\n"
+    "\"texture\" \"lights/lp22a/flatclamp\"\n\"_color\" \"0.5 0.5 0.5\"\n"
+    "\"noshadows\" \"1\"\n}\n";
+  return text;
+}
+
+// the pixels of a rectangle (inclusive) whose RGBA8 values differ between two LDR images
+std::size_t ldrDiffering(
+  const TargetImage& a,
+  const TargetImage& b,
+  const std::uint32_t x0,
+  const std::uint32_t y0,
+  const std::uint32_t x1,
+  const std::uint32_t y1)
+{
+  auto differs = std::size_t{0};
+  for (auto y = y0; y <= y1; ++y)
+  {
+    for (auto x = x0; x <= x1; ++x)
+    {
+      auto same = true;
+      for (std::uint32_t c = 0; c < 4; ++c)
+      {
+        same = same && a.at(x, y, c) == b.at(x, y, c);
+      }
+      differs += same ? 0 : 1;
+    }
+  }
+  return differs;
+}
+
+// an RGBA8 target read back (TargetImage's values / 255) as an RGB PNG under
+// TB_LIT_PNG_OUT, for the director
+void saveTargetPng(const TargetImage& image, const std::string& name)
+{
+  const auto folder = pngFolder();
+  if (!folder || image.channels != 4)
+  {
+    return;
+  }
+  auto rgb = std::vector<std::uint8_t>{};
+  rgb.reserve(std::size_t(image.width) * image.height * 3);
+  for (std::uint32_t y = 0; y < image.height; ++y)
+  {
+    for (std::uint32_t x = 0; x < image.width; ++x)
+    {
+      for (std::uint32_t c = 0; c < 3; ++c)
+      {
+        rgb.push_back(std::uint8_t(std::lround(image.at(x, y, c) * 255.0f)));
+      }
+    }
+  }
+  std::filesystem::create_directories(*folder);
+  CHECK(writePng(*folder / name, image.width, image.height, 3, rgb));
+}
+
+// what every frame of a stretch did with the copy (an every-frame hook's tally of the
+// frames before it: lastStats)
+struct CopyTally
+{
+  std::mutex mutex;
+  std::size_t frames = 0;
+  std::size_t copies = 0;
+  std::size_t secondCalls = 0;
+  // the stop rules' two: a post-process draw without a copy that frame, a copy with no
+  // post-process surface left
+  std::size_t drawnWithoutCopy = 0;
+  std::size_t copyWithoutSurface = 0;
+  bool currentRenderMade = false;
+
+  void reset()
+  {
+    const auto lock = std::scoped_lock{mutex};
+    frames = 0;
+    copies = 0;
+    secondCalls = 0;
+    drawnWithoutCopy = 0;
+    copyWithoutSurface = 0;
+    currentRenderMade = false;
+  }
+};
+
+void tallyCopies(LitSession& session, const std::shared_ptr<CopyTally>& tally)
+{
+  session.setEveryFrameHookForTesting([tally](RenderFrameAccess& access) {
+    const auto& stats = access.passes.lastStats();
+    const auto lock = std::scoped_lock{tally->mutex};
+    ++tally->frames;
+    tally->copies += stats.stageCopies;
+    tally->secondCalls += stats.stageSecondCall ? 1 : 0;
+    tally->drawnWithoutCopy +=
+      stats.stagePostProcessDraws > 0 && stats.stageCopies != 1 ? 1 : 0;
+    tally->copyWithoutSurface +=
+      stats.stageCopies > 0 && stats.stagePostProcess == 0 ? 1 : 0;
+    tally->currentRenderMade =
+      tally->currentRenderMade
+      || access.frame.find(frame_resource::CurrentRender).has_value();
+  });
+}
+
+} // namespace
+
+/**
+ * LP6.5b (C71, D179, A56, P8.5, P8.8, P8.25, SC824): the _currentRender copy and the
+ * second stage call: (a) a heat-haze panel with a deform over the striped wall drawn over
+ * the frame's copy, its region differing from the view without the panel, and with the
+ * deform 0 equal to it (the stage samples the copy at its own pixel); (b) no copy without
+ * a post-process surface (_currentRender never made, the targets' line LP6.5a's); (c)
+ * r_skipAmbient's stand-in: no copy, no second call, the wall shows; (d) a resize: the
+ * copy and its sets made again, the pictures right at the new extent; (f) Stop. Hidden:
+ * it needs a GPU and the game's blobs.
+ */
+TEST_CASE(
+  "LitSession the _currentRender copy and the second stage call on a GPU (LP6.5b)",
+  "[.][litgpu4]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto started = std::chrono::steady_clock::now();
+  const auto gamePath = std::filesystem::path{gamePathValue};
+  const auto root = assembleLitRoot(gamePath);
+  REQUIRE_FALSE(root.empty());
+  const auto base = root / "base";
+  namespace fr = frame_resource;
+  writeTextFile(base / "materials" / "zz_lp65b.mtr", Lp65bMaterials);
+  std::filesystem::create_directories(base / "textures" / "lp65b");
+  {
+    auto stripes = test::flat(64, 64, 255, 255, 255);
+    auto normal = test::flat(64, 64, 0, 0, 0);
+    for (int y = 0; y < 64; ++y)
+    {
+      for (int x = 0; x < 64; ++x)
+      {
+        const auto i = std::size_t((y * 64 + x) * 4);
+        const auto value = std::uint8_t((x / 16) % 2 ? 0 : 255);
+        stripes.pixels[i + 0] = value;
+        stripes.pixels[i + 1] = value;
+        stripes.pixels[i + 2] = value;
+        // heathaze.ps' .w the red (CFM_NORMAL_DXT5's swizzle), .y the green
+        normal.pixels[i + 0] = std::uint8_t(x < 32 ? 255 : 0);
+        normal.pixels[i + 1] = std::uint8_t(y < 32 ? 255 : 0);
+      }
+    }
+    for (const auto& [name, image] :
+         {std::pair{"stripes.tga", stripes}, std::pair{"haze_normal.tga", normal}})
+    {
+      auto file = std::ofstream{base / "textures" / "lp65b" / name, std::ios::binary};
+      const auto bytes = test::tgaFile(image);
+      file.write(bytes.data(), std::streamsize(bytes.size()));
+    }
+  }
+  for (const auto stage : {ShaderStage::Vertex, ShaderStage::Pixel})
+  {
+    const auto relative = shaderBlobPath("heathaze", stage);
+    REQUIRE(std::filesystem::exists(gamePath / "base" / relative));
+    std::filesystem::create_directories((base / relative).parent_path());
+    std::filesystem::copy_file(
+      gamePath / "base" / relative,
+      base / relative,
+      std::filesystem::copy_options::overwrite_existing);
+  }
+  const auto mapPath = base / "maps" / "lp65b_haze.map";
+  writeTextFile(mapPath, lp65bHazeMapText());
+  const auto snapshotOf = [&](const std::string& panel, const std::uint64_t sequence) {
+    auto snapshot = snapshotOfMapText(lp65bHazeMapText(panel));
+    snapshot.generation = 7;
+    snapshot.sequence = sequence;
+    snapshot.mapPath = mapPath.string();
+    return std::make_shared<const Snapshot>(std::move(snapshot));
+  };
+  const auto camera = litCamera({0, 0, 64}, {1, 0, 0}, {0, 0, 1});
+
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  auto noPanelTargets = std::uint64_t{0};
+  auto panelTargets = std::uint64_t{0};
+  auto copyBytes = std::uint64_t{0};
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto service = rootService(root);
+    auto events = Events{};
+    auto session = rootSession(instance, events, *service, root, true, true);
+    auto tonemap = EngineTonemap;
+    tonemap.hdrMinLuminance = 0.1f;
+    tonemap.hdrMaxLuminance = 0.1001f;
+    session->setTonemapForTesting(tonemap);
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+
+    // a settled frame of the camera whose stats pass pred, its HDR and LDR targets
+    const auto settledWith = [&](const std::function<bool(const LitFrameStats&)>& pred) {
+      return frameTargets(
+        *session,
+        camera,
+        {fr::CurrentRenderHdr, fr::CurrentRenderLdr},
+        [&](const RenderFrameAccess& access) {
+          return access.convergence.settled() && access.images.pending() == 0
+                 && !access.images.hasLoading() && !access.arenas.pending()
+                 && pred(access.passes.lastStats());
+        });
+    };
+    const auto renderTargetBytes = [&] {
+      auto bytes = std::uint64_t{0};
+      inFrame(*session, [&](RenderFrameAccess& access) {
+        bytes = access.frame.renderTargetBytes();
+      });
+      return bytes;
+    };
+
+    // (b) no post-process surface: no copy, _currentRender never made
+    auto tally = std::make_shared<CopyTally>();
+    tallyCopies(*session, tally);
+    REQUIRE(session->offerSnapshot(snapshotOf({}, 1)));
+    const auto noPanel = settledWith([](const LitFrameStats& s) {
+      return s.stagePostProcess == 0 && s.interactionDraws > 0;
+    });
+    REQUIRE(noPanel);
+    noPanelTargets = renderTargetBytes();
+    {
+      const auto lock = std::scoped_lock{tally->mutex};
+      CHECK(tally->frames > 0u);
+      CHECK(tally->copies == 0u);
+      CHECK(tally->secondCalls == 0u);
+      CHECK_FALSE(tally->currentRenderMade);
+    }
+    CHECK(noPanel->frame.lit.stageCopies == 0u);
+    CHECK_FALSE(noPanel->frame.lit.stageSecondCall);
+
+    // the panel's region (2 pixels inside its edges) at 160 × 120
+    const auto regionOf = [](const LitView& view) {
+      const auto [ax, ay] = pixelOf(view, EngineVec3{120, 40, 104});
+      const auto [bx, by] = pixelOf(view, EngineVec3{120, -40, 24});
+      return std::array<std::uint32_t, 4>{
+        std::min(ax, bx) + 2,
+        std::min(ay, by) + 2,
+        std::max(ax, bx) - 2,
+        std::max(ay, by) - 2};
+    };
+    const auto region = regionOf(litViewOf(camera, 160, 120));
+    const auto regionPixels =
+      std::size_t(region[2] - region[0] + 1) * std::size_t(region[3] - region[1] + 1);
+
+    // (a) the panel with its deform: drawn by the second call over the copy, which is
+    // made on every frame it is in view
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      access.passes.setDrawLogForTesting(true);
+    }));
+    tally->reset();
+    REQUIRE(session->offerSnapshot(snapshotOf("lp65b/haze", 2)));
+    const auto haze = settledWith([](const LitFrameStats& s) {
+      return s.stagePostProcess == 1 && s.stagePostProcessDraws == 1;
+    });
+    REQUIRE(haze);
+    panelTargets = renderTargetBytes();
+    auto hazeDraws = std::vector<LitDrawRecord>{};
+    auto copyDesc = nvrhi::TextureDesc{};
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      for (const auto& record : access.passes.drawLogForTesting())
+      {
+        if (record.chunk.material == "textures/lp65b/haze")
+        {
+          hazeDraws.push_back(record);
+        }
+      }
+      access.passes.setDrawLogForTesting(false);
+      if (const auto copy = access.frame.find(fr::CurrentRender))
+      {
+        copyDesc = copy->texture->getDesc();
+      }
+    }));
+    {
+      const auto& stats = haze->frame.lit;
+      CHECK(stats.stageCopies == 1u);
+      CHECK(stats.stageSecondCall);
+      CHECK(stats.stagePostProcess == 1u);
+      CHECK(stats.stagePostProcessDraws == 1u);
+      CHECK(stats.stageSkipped == 0u);
+      CHECK(stats.stageProgramMissing == 0u);
+      CHECK(stats.stagesTimed);
+    }
+    REQUIRE_FALSE(hazeDraws.empty());
+    for (const auto& record : hazeDraws)
+    {
+      CHECK(record.pass == LitDrawRecord::Pass::Stage);
+      CHECK(record.postProcess);
+      CHECK(record.program == findEngineMaterialProgram("heathaze")->row.index);
+    }
+    CHECK(copyDesc.width == 160u);
+    CHECK(copyDesc.height == 120u);
+    CHECK(copyDesc.format == nvrhi::Format::RGBA16_FLOAT);
+    copyBytes = panelTargets - noPanelTargets;
+    CHECK(copyBytes == 160u * 120u * 8u);
+    {
+      const auto lock = std::scoped_lock{tally->mutex};
+      CHECK(tally->drawnWithoutCopy == 0u);
+      CHECK(tally->copyWithoutSurface == 0u);
+    }
+    const auto& noPanelLdr = noPanel->image(fr::CurrentRenderLdr);
+    const auto& hazeLdr = haze->image(fr::CurrentRenderLdr);
+    const auto deformed =
+      ldrDiffering(hazeLdr, noPanelLdr, region[0], region[1], region[2], region[3]);
+    // N: a fifth of the region (the deform shifts the stripes by about 6 pixels across
+    // and 5 down, the sign by the normal map's quadrant)
+    CHECK(deformed >= regionPixels / 5);
+    // outside the panel the picture is the wall's
+    const auto outside = ldrDiffering(hazeLdr, noPanelLdr, 0, 0, 159, region[1] - 4);
+    CHECK(outside == 0u);
+
+    // the deform 0 (P8.5's control): the stage samples the copy at its own pixel, the
+    // panel's region equals the wall exactly (the HDR too); _CurrentRender by C1's rule
+    REQUIRE(session->offerSnapshot(snapshotOf("lp65b/haze_still", 3)));
+    const auto still = settledWith([](const LitFrameStats& s) {
+      return s.stagePostProcess == 1 && s.stagePostProcessDraws == 1;
+    });
+    REQUIRE(still);
+    const auto& stillLdr = still->image(fr::CurrentRenderLdr);
+    const auto stillDiffering =
+      ldrDiffering(stillLdr, noPanelLdr, region[0], region[1], region[2], region[3]);
+    CHECK(stillDiffering == 0u);
+    CHECK(
+      still->image(fr::CurrentRenderHdr).values
+      == noPanel->image(fr::CurrentRenderHdr).values);
+    CHECK(still->frame.lit.stageCopies == 1u);
+
+    // (c) r_skipAmbient's stand-in with the panel in view: no stage pass, so no copy and
+    // no second call (SC824); the wall shows (K38's old picture)
+    tally->reset();
+    session->skipShaderPassesForTesting(true);
+    const auto skipped =
+      settledWith([](const LitFrameStats& s) { return s.stagesSkipped; });
+    REQUIRE(skipped);
+    CHECK(skipped->frame.lit.stageCopies == 0u);
+    CHECK_FALSE(skipped->frame.lit.stageSecondCall);
+    CHECK(skipped->frame.lit.stageDraws == 0u);
+    const auto skippedDiffering =
+      ldrDiffering(skipped->image(fr::CurrentRenderLdr), noPanelLdr, 0, 0, 159, 119);
+    CHECK(skippedDiffering == 0u);
+    {
+      const auto lock = std::scoped_lock{tally->mutex};
+      // the frames after the switch (the first may still be the last frame's)
+      CHECK(tally->secondCalls <= 1u);
+    }
+
+    // (d) a resize with the deformed panel in view: _currentRender made again at the new
+    // extent with the targets (the generation), its binding sets made again; the
+    // pictures right there: the still panel equals the skipped picture, the deformed one
+    // differs
+    const auto generation = session->renderTargetGenerationForTesting();
+    session->resizeHeadlessForTesting(200, 150);
+    REQUIRE(waitFor(
+      [&] { return session->renderTargetGenerationForTesting() == generation + 1; },
+      10000ms,
+      false));
+    const auto bigRegion = regionOf(litViewOf(camera, 200, 150));
+    const auto bigSkipped =
+      settledWith([](const LitFrameStats& s) { return s.stagesSkipped; });
+    REQUIRE(bigSkipped);
+    REQUIRE(bigSkipped->image(fr::CurrentRenderLdr).width == 200u);
+    session->skipShaderPassesForTesting(false);
+    const auto bigStill = settledWith([](const LitFrameStats& s) {
+      return s.stagePostProcessDraws == 1 && s.stageCopies == 1;
+    });
+    REQUIRE(bigStill);
+    auto bigCopy = nvrhi::TextureDesc{};
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      if (const auto copy = access.frame.find(fr::CurrentRender))
+      {
+        bigCopy = copy->texture->getDesc();
+      }
+    }));
+    CHECK(bigCopy.width == 200u);
+    CHECK(bigCopy.height == 150u);
+    const auto bigStillDiffering = ldrDiffering(
+      bigStill->image(fr::CurrentRenderLdr),
+      bigSkipped->image(fr::CurrentRenderLdr),
+      0,
+      0,
+      199,
+      149);
+    CHECK(bigStillDiffering == 0u);
+    REQUIRE(session->offerSnapshot(snapshotOf("lp65b/haze", 4)));
+    const auto bigHaze = settledWith([](const LitFrameStats& s) {
+      return s.stagePostProcessDraws == 1 && s.stageCopies == 1;
+    });
+    REQUIRE(bigHaze);
+    const auto bigDeformed = ldrDiffering(
+      bigHaze->image(fr::CurrentRenderLdr),
+      bigSkipped->image(fr::CurrentRenderLdr),
+      bigRegion[0],
+      bigRegion[1],
+      bigRegion[2],
+      bigRegion[3]);
+    const auto bigRegionPixels = std::size_t(bigRegion[2] - bigRegion[0] + 1)
+                                 * std::size_t(bigRegion[3] - bigRegion[1] + 1);
+    CHECK(bigDeformed >= bigRegionPixels / 5);
+    {
+      const auto lock = std::scoped_lock{tally->mutex};
+      CHECK(tally->drawnWithoutCopy == 0u);
+      CHECK(tally->copyWithoutSurface == 0u);
+    }
+    session->setEveryFrameHookForTesting({});
+    saveTargetPng(noPanelLdr, "lp65b-no-panel.png");
+    saveTargetPng(hazeLdr, "lp65b-haze.png");
+    saveTargetPng(stillLdr, "lp65b-haze-still.png");
+    saveTargetPng(bigSkipped->image(fr::CurrentRenderLdr), "lp65b-200-skipped.png");
+    saveTargetPng(bigHaze->image(fr::CurrentRenderLdr), "lp65b-200-haze.png");
+
+    std::cout << fmt::format(
+      "LP6.5b C71 (a) the deformed panel: {} of {} region pixels differ from the wall "
+      "(N {}), 0 outside it: {}; the still panel {} differ, its HDR equal: {}; the copy "
+      "{} x {} RGBA16F, the targets {} -> {} B (+{}); (c) skipped: {} differ; (d) at 200 "
+      "x 150 the still panel {} differ, the deformed {} of {}\n",
+      deformed,
+      regionPixels,
+      regionPixels / 5,
+      outside,
+      stillDiffering,
+      still->image(fr::CurrentRenderHdr).values
+        == noPanel->image(fr::CurrentRenderHdr).values,
+      copyDesc.width,
+      copyDesc.height,
+      noPanelTargets,
+      panelTargets,
+      copyBytes,
+      skippedDiffering,
+      bigStillDiffering,
+      bigDeformed,
+      bigRegionPixels);
+
+    // (f) Stop: every allocation freed
+    teardown(*session);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    CHECK(events.count(SessionEvent::Warning) == 0u);
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  CHECK(resetDispatcher());
+  CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+  messages.print("LP6.5b C71, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+  std::cout << fmt::format(
+    "LP6.5b C71 [litgpu4] case: {:.1f} s\n",
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
 }
 
