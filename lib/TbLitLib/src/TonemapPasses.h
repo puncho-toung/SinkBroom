@@ -190,6 +190,9 @@ struct TonemapFrameInputs
   // the HDR target holds a picture this frame: the lit passes drew into it, or a test
   // filled it
   bool hdrDrawn = false;
+  // LP6.6 (C73, RB:6230-6233): a TAA history exists: the passes read _taaResolved (the
+  // frame's resolve, or the settled history's) instead of _currentRenderHDR
+  bool taaResolved = false;
   // C16: the queries the passes are timed with, or null
   nvrhi::ITimerQuery* tonemapTimer = nullptr;
   nvrhi::ITimerQuery* blitTimer = nullptr;
@@ -205,6 +208,8 @@ struct TonemapFrameStats
 {
   // histogram, exposure and tonemapping were recorded into the LDR target
   bool tonemapped = false;
+  // LP6.6 (C73): and their source was _taaResolved (a TAA history), not _currentRenderHDR
+  bool taaResolved = false;
   // the LDR target was blitted into the frame's target
   bool blitted = false;
   // the frame's target was cleared to (0, 0, 0, 1) instead (an empty, pending or

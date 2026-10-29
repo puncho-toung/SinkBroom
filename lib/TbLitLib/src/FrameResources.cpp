@@ -224,10 +224,16 @@ Result<bool> FrameResources::ensureExtent(
                  old.ao0,
                  old.deinterleavedDepth,
                  old.deinterleavedOcclusion,
-                 old.currentRender})
+                 old.currentRender,
+                 old.taaResolved,
+                 old.taaFeedback1,
+                 old.taaFeedback2,
+                 old.taaMotionVectors})
            {
              retire(texture.Get(), textureBytes(texture.Get()), frame);
            }
+           // LP6.6: the new motion vectors are cleared before a resolve reads them
+           m_taaVectorsCleared = false;
            ++m_generation;
            return true;
          });
@@ -256,6 +262,35 @@ bool FrameResources::ensureNormals()
     }
   }
   return m_targets.normals && m_targets.gbufferFramebuffer;
+}
+
+bool FrameResources::ensureTaaTargets()
+{
+  m_taaWanted = true;
+  if (!m_targets.taaResolved && m_targets.hdr)
+  {
+    // a failed make leaves none (Targets' fields stay as they were)
+    auto made = m_targets;
+    if (!makeTaaTargets(made))
+    {
+      m_targets = std::move(made);
+      m_taaVectorsCleared = false;
+    }
+  }
+  return m_targets.taaResolved && m_targets.taaFeedback1 && m_targets.taaFeedback2
+         && m_targets.taaMotionVectors;
+}
+
+void FrameResources::recordTaaClears(nvrhi::ICommandList& commandList)
+{
+  if (m_targets.taaMotionVectors && !m_taaVectorsCleared)
+  {
+    // SC820: RB:5179-5181 clears _taaMotionVectors to 0 every frame; the preview never
+    // draws them (camera-only, 0 while still), so one clear after each make is the same
+    commandList.clearTextureFloat(
+      m_targets.taaMotionVectors, nvrhi::AllSubresources, nvrhi::Color{0.0f});
+    m_taaVectorsCleared = true;
+  }
 }
 
 void FrameResources::retire(
@@ -345,6 +380,22 @@ std::optional<FrameResource> FrameResources::find(const std::string_view name) c
   {
     return FrameResource{m_targets.currentRender.Get(), nullptr, nullptr, true};
   }
+  if (name == fr::TaaResolved && m_targets.taaResolved)
+  {
+    return FrameResource{m_targets.taaResolved.Get(), nullptr, nullptr, true};
+  }
+  if (name == fr::TaaFeedback1 && m_targets.taaFeedback1)
+  {
+    return FrameResource{m_targets.taaFeedback1.Get(), nullptr, nullptr, true};
+  }
+  if (name == fr::TaaFeedback2 && m_targets.taaFeedback2)
+  {
+    return FrameResource{m_targets.taaFeedback2.Get(), nullptr, nullptr, true};
+  }
+  if (name == fr::TaaMotionVectors && m_targets.taaMotionVectors)
+  {
+    return FrameResource{m_targets.taaMotionVectors.Get(), nullptr, nullptr, true};
+  }
   if (name == fr::Ao0 && m_targets.ao0)
   {
     return FrameResource{m_targets.ao0.Get(), nullptr, nullptr, true};
@@ -409,7 +460,11 @@ std::uint64_t FrameResources::renderTargetBytes() const
          + textureBytes(m_targets.ao0.Get())
          + textureBytes(m_targets.deinterleavedDepth.Get())
          + textureBytes(m_targets.deinterleavedOcclusion.Get())
-         + textureBytes(m_targets.currentRender.Get());
+         + textureBytes(m_targets.currentRender.Get())
+         + textureBytes(m_targets.taaResolved.Get())
+         + textureBytes(m_targets.taaFeedback1.Get())
+         + textureBytes(m_targets.taaFeedback2.Get())
+         + textureBytes(m_targets.taaMotionVectors.Get());
 }
 
 std::uint64_t FrameResources::bufferBytes() const
@@ -480,6 +535,14 @@ Result<FrameResources::Targets> FrameResources::makeTargets(
         "Cannot create _currentRender at {}x{}", extent.width, extent.height)};
     }
   }
+  // LP6.6 (C73): the TAA's once a frame accumulated
+  if (m_taaWanted)
+  {
+    if (const auto failed = makeTaaTargets(targets))
+    {
+      return Error{*failed};
+    }
+  }
   if (m_ssaoTargets)
   {
     // LP6.5a (C70): R_AmbientOcclusionImage_ResNative (Image_intrinsic.cpp:342-345:
@@ -524,6 +587,40 @@ std::optional<std::string> FrameResources::makeNormals(Targets& targets) const
   {
     targets.normals = nullptr;
     return std::string{"Cannot create the G-buffer's framebuffer"};
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> FrameResources::makeTaaTargets(Targets& targets) const
+{
+  if (!m_device)
+  {
+    return std::string{"The TAA targets need the frame's device"};
+  }
+  auto& device = *m_device;
+  const auto extent = targets.extent;
+  // Image_intrinsic.cpp:1094-1097: R_HDR_RGBA16FImage_ResNative_UAV (TD_RGBA16F, a render
+  // target and a UAV) three times, R_HDR_RG16FImage_ResNative (TD_RG16F, a render
+  // target); NVRHI tracks them from RenderTarget to UnorderedAccess / ShaderResource and
+  // back at the command list's end (keepInitialState)
+  targets.taaResolved = device.createTexture(
+    renderTargetDesc("_taaResolved", nvrhi::Format::RGBA16_FLOAT, extent, false, true));
+  targets.taaFeedback1 = device.createTexture(
+    renderTargetDesc("_taaFeedback1", nvrhi::Format::RGBA16_FLOAT, extent, false, true));
+  targets.taaFeedback2 = device.createTexture(
+    renderTargetDesc("_taaFeedback2", nvrhi::Format::RGBA16_FLOAT, extent, false, true));
+  targets.taaMotionVectors = device.createTexture(renderTargetDesc(
+    "_taaMotionVectors", nvrhi::Format::RG16_FLOAT, extent, false, false));
+  if (
+    !targets.taaResolved || !targets.taaFeedback1 || !targets.taaFeedback2
+    || !targets.taaMotionVectors)
+  {
+    targets.taaResolved = nullptr;
+    targets.taaFeedback1 = nullptr;
+    targets.taaFeedback2 = nullptr;
+    targets.taaMotionVectors = nullptr;
+    return fmt::format(
+      "Cannot create the TAA targets at {}x{}", extent.width, extent.height);
   }
   return std::nullopt;
 }

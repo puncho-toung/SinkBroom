@@ -226,7 +226,16 @@ struct FrameConvergence
   // LP6.4b (C68 (b)): the frame's budget pass left evictions or floors for the next frame
   // (EvictionsPerFrame); a re-trigger
   bool budgetLeft = false;
+  // LP6.6 (C73, D181, P8.4): the progressive TAA's term: the session's TAA is on, the
+  // frame's lit passes drew, and its history after the frame (taaHistory, 0-16) holds
+  // fewer than EngineTaa.historyFrames frames. Its re-trigger is the render thread's (a
+  // frame whose other terms hold draws the next at the pacer's rate; one in the camera's
+  // moving window, once that window ends)
+  bool taaHistoryShort = false;
+  std::size_t taaHistory = 0;
 
+  // every term but the TAA history's (P8.14: the "settled exact frame")
+  bool otherTermsHold() const;
   bool settled() const;
   // the frame triggers the next one itself (D77's unconverged pass)
   bool retriggers() const;
@@ -409,6 +418,52 @@ private:
   std::optional<FrameProgress> m_lastProgress;
   // any thread (tests): the last frame drawn was settled
   std::atomic<bool> m_lastSettled = false;
+  // ----- LP6.6 (C73, D181, P8.4, the director's readings (3), (4)): the progressive TAA
+  // history, render thread only -----
+  // what a frame draws from, compared with the last frame's: a difference (a camera move,
+  // a resize, a snapshot, a batch, a table, a feed, an override, a test switch) is a
+  // start change, after which the frame draws plain
+  struct TaaInputs
+  {
+    CameraState camera;
+    std::uint64_t renderTargetGeneration = 0;
+    std::uint64_t snapshotsTaken = 0;
+    std::uint64_t chunksVersion = 0;
+    std::uint64_t tableVersion = 0;
+    std::uint64_t feedApplied = 0;
+    std::uint64_t overrides = 0;
+    bool skipInteractions = false;
+    bool skipShaderPasses = false;
+
+    bool operator==(const TaaInputs&) const = default;
+  };
+  TaaInputs m_taaLast;
+  // the last frame's other convergence terms held and its lit passes drew (the history's
+  // next frame may accumulate); the history after it (0-16)
+  bool m_taaLastExact = false;
+  std::size_t m_taaHistory = 0;
+  // the frame being recorded: its index (0 plain), a kept history of 16, the resolve's
+  // pipeline pending, a start change, the tonemap reads _taaResolved
+  std::size_t m_taaFrameIndex = 0;
+  bool m_taaFrameHold = false;
+  bool m_taaFramePending = false;
+  bool m_taaFrameStartChange = false;
+  bool m_frameTaaResolved = false;
+  // the frame is the still timer's (FramePacer::drawReason at its start); the slot
+  // changes its start took (eraseChangedSets before the passes); its lit passes drew
+  bool m_frameStillTimer = false;
+  std::size_t m_frameSlotChanges = 0;
+  bool m_frameHdrDrawn = false;
+  // blob 89 failed (D9: the compile thread's one notice): TAA off for the session
+  bool m_taaFailed = false;
+  // a short history whose last frame's other terms held waits for the camera's moving
+  // window to end (set by converge, read with m_mutex held after the frame), and the time
+  // its trigger fires (FramePacer::movingUntil)
+  bool m_taaWaitsForStill = false;
+  std::optional<FrameClock::time_point> m_taaStartAt;
+  // accumulated frames reset by a change seen only after they were recorded, in a row;
+  // MaxStalledFrames of them stop the history's own re-trigger (the livelock guard's)
+  std::size_t m_taaResets = 0;
   // LP2.3 (D9): the last frame shown, written by the render thread, read on any thread
   mutable std::mutex m_statusMutex;
   SessionStatus m_status;
@@ -824,8 +879,11 @@ private:
   // LP2.2b: the headless target and its framebuffer at m_headlessExtent; false: failed
   bool makeHeadlessTarget();
   // D77 (LP2.2b): the frame's convergence after its passes, and whether it re-triggers
-  // itself (with the livelock guard)
+  // itself (with the livelock guard); LP6.6 (C73): the TAA history after the frame
   void converge(const LitFrameStats& lit, std::uint64_t tableVersion);
+  // LP6.6 (C73, D181): the session's progressive TAA is on (SessionOptions::
+  // progressiveAaForTesting) and blob 89 has not failed
+  bool taaActive() const;
   // LP2.2b (C29): a settled frame copies the LDR target for the readbacks asked for
   void recordLdrReadback(nvrhi::ICommandList& commandList);
   // once the frame in slot is submitted: waits for it on the GPU and hands the copy over

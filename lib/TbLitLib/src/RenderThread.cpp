@@ -152,13 +152,18 @@ void fillBakeStatus(SessionStatus& status, const SceneGeometry& geometry)
   status.bake = bake->geometry == MapBake::Geometry::Proc ? Bake::Proc : Bake::Bproc;
 }
 
-bool FrameConvergence::settled() const
+bool FrameConvergence::otherTermsHold() const
 {
   return !pipelinesPending && !materialsPending && !drawsSkipped && !uploadsLeft
          && !imagesPending && !provisionalChunks && !lutPending && !entityDefsPending
          && !modelsPending && !lightsProvisional && !geometryInFlight && !drawsOverflowed
          && !lightTrianglesPending && !probeImagesPending && !gridImagesPending
          && !probesInFlight && !feedBehind && !shadowsPending && !budgetLeft;
+}
+
+bool FrameConvergence::settled() const
+{
+  return otherTermsHold() && !taaHistoryShort;
 }
 
 bool FrameConvergence::retriggers() const
@@ -758,6 +763,45 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
     lit.prepassDisabled || lit.interactionsDisabled || tonemap.disabled;
   // LP6.4b (C68 (b)): the budget pass left evictions or floors for the next frame
   convergence.budgetLeft = m_budgetLeft;
+  // LP6.6 (C73, P8.12): the resolve's pipeline pending: the frame drew plain
+  convergence.pipelinesPending = convergence.pipelinesPending || m_taaFramePending;
+
+  // LP6.6 (C73, D181, P8.4, the director's readings (3), (4)): the history after the
+  // frame. A frame that accumulated (index 1-16) keeps its index when its other terms
+  // held and, past the history's first (weight 1) frame, nothing changed while it was
+  // recorded (its lists, a shadow tile drawn, cleared, relocated or redrawn for an
+  // image); a kept history of 16 likewise; anything else leaves no history
+  const auto taaOn = taaActive() && !m_frameHdrClear;
+  const auto exact = convergence.otherTermsHold() && m_frameHdrDrawn && !m_frameHdrClear;
+  const auto changedInFrame = lit.listsRebuilt || lit.tilesDrawn > 0
+                              || lit.tilesVacated > 0 || lit.tilesRelocated > 0
+                              || lit.tilesImageRedrawn > 0;
+  auto history = std::size_t{0};
+  if (taaOn && m_taaFrameIndex > 0 && exact)
+  {
+    if (m_taaFrameHold)
+    {
+      history = changedInFrame ? 0 : m_taaFrameIndex;
+    }
+    else if (lit.taaRan && (m_taaFrameIndex == 1 || !changedInFrame))
+    {
+      history = m_taaFrameIndex;
+    }
+  }
+  const auto reset = m_taaFrameIndex > 1 && history == 0;
+  m_taaResets = m_taaFrameStartChange || history >= EngineTaa.historyFrames
+                  ? 0
+                  : m_taaResets + (reset ? 1 : 0);
+  convergence.taaHistory = history;
+  convergence.taaHistoryShort =
+    taaOn && m_frameHdrDrawn && history < EngineTaa.historyFrames;
+  // the next frame accumulates only after a frame whose other terms held; a short
+  // history draws it at the pacer's rate, or once the camera's moving window ends
+  const auto taaRetrigger = convergence.taaHistoryShort && exact && !m_frameShadowsMoving
+                            && m_taaResets < MaxStalledFrames;
+  m_taaWaitsForStill = convergence.taaHistoryShort && exact && m_frameShadowsMoving;
+  m_taaLastExact = exact;
+  m_taaHistory = history;
   m_convergence = convergence;
   m_lastSettled = convergence.settled();
   m_sceneWaitSeen = m_geometry ? std::optional{sceneWaitState()} : std::nullopt;
@@ -793,7 +837,14 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
     m_stalledFrames = progressed ? 0 : m_stalledFrames + 1;
     m_retrigger = m_stalledFrames < MaxStalledFrames;
   }
+  // LP6.6 (C73): the history's own progress (one frame more each time) is its guard
+  m_retrigger = m_retrigger || taaRetrigger;
   m_lastProgress = progress;
+}
+
+bool RenderThread::taaActive() const
+{
+  return m_options.progressiveAaForTesting && !m_taaFailed;
 }
 
 void RenderThread::setEveryFrameHook(std::function<void(RenderFrameAccess&)> hook)
@@ -1180,6 +1231,11 @@ std::vector<int> RenderThread::startComputePrograms() const
     {
       programs.push_back(named.row.index);
     }
+  }
+  // LP6.6 (C73, P8.12): the TAA resolve when the session's TAA is on
+  if (m_options.progressiveAaForTesting)
+  {
+    programs.push_back(EngineBuiltinTaaResolve);
   }
   return programs;
 }
@@ -1735,6 +1791,8 @@ void RenderThread::recordTonemap(
   inputs.target = target;
   inputs.targetFramebuffer = targetFramebuffer;
   inputs.hdrDrawn = hdrDrawn;
+  // LP6.6 (C73)
+  inputs.taaResolved = m_frameTaaResolved;
   const auto slot = std::size_t(m_frameIndex % FramesInFlight);
   inputs.tonemapTimer = m_timers.query(slot, TimedPass::Tonemap);
   inputs.blitTimer = m_timers.query(slot, TimedPass::Blit);
@@ -1856,6 +1914,48 @@ bool RenderThread::recordLitPasses(
   m_passes.setSkipShaderPassesForTesting(m_skipShaderPassesForTesting.load());
   // LP3.1 (C57): r_skipShadows 1's stand-in, a test's session option
   m_passes.setSkipShadowsForTesting(m_options.skipShadowsForTesting);
+  // LP6.6 (C73, D181, P8.4, P8.12, the director's readings (3), (4)): the frame's place
+  // in the TAA history, decided before its passes (the jitter enters their draws): it
+  // accumulates when the last frame's other convergence terms held, nothing changed at
+  // its start and the camera is not in its moving window (cameraMoving, C62), and the
+  // resolve's pipeline is ready; the history's 17th such frame keeps it (no jitter, no
+  // resolve); any other frame draws plain
+  if (taaActive())
+  {
+    const auto current = TaaInputs{
+      camera,
+      m_renderTargetGeneration,
+      m_snapshotsTaken,
+      m_chunksVersion,
+      tableVersion,
+      m_frameFeedApplied,
+      0,
+      m_skipInteractionsForTesting.load(),
+      m_skipShaderPassesForTesting.load()};
+    m_taaFrameStartChange = current != m_taaLast || m_frameShadowsMoving
+                            || m_frameStillTimer || m_frameUploadBytes > 0
+                            || m_frameSlotChanges > 0;
+    m_taaLast = current;
+    const auto lookup = m_pipelines.compute(EngineBuiltinTaaResolve);
+    if (lookup.state == ComputePipelineLookup::State::Failed)
+    {
+      // D9: the compile thread disabled 89 and said so once; the frames draw plain and
+      // converge
+      m_taaFailed = true;
+    }
+    m_taaFramePending = lookup.state == ComputePipelineLookup::State::Pending;
+    if (
+      lookup.state == ComputePipelineLookup::State::Ready && m_taaLastExact
+      && !m_taaFrameStartChange)
+    {
+      m_taaFrameHold = m_taaHistory >= EngineTaa.historyFrames;
+      m_taaFrameIndex = m_taaFrameHold ? m_taaHistory : m_taaHistory + 1;
+    }
+  }
+  inputs.taaIndex = m_taaFrameIndex;
+  inputs.taaHold = m_taaFrameHold;
+  inputs.taaPending = m_taaFramePending;
+  inputs.taaTimer = m_timers.query(slot, TimedPass::Taa);
   const auto stats = m_passes.record(inputs);
   if (stats.prepassTimed)
   {
@@ -1888,6 +1988,11 @@ bool RenderThread::recordLitPasses(
   if (stats.shadowAtlasTimed)
   {
     m_timers.passTimed(slot, TimedPass::Shadows);
+  }
+  // LP6.6 (C73): pass 11's
+  if (stats.taaTimed)
+  {
+    m_timers.passTimed(slot, TimedPass::Taa);
   }
   // C28: the slots asked for by the passes' draws lose no set they made
   eraseChangedSets();
@@ -2113,6 +2218,8 @@ void RenderThread::runLoop()
     {
       // LP3.3 (C62): the frame's pass 6 holds or settles (the still timer's settles)
       m_frameShadowsMoving = m_pacer.cameraMoving(now);
+      // LP6.6 (C73, P8.4): the still timer's frame settles the shadows: a start change
+      m_frameStillTimer = m_pacer.drawReason() == FrameDrawReason::StillTimer;
       m_pacer.frameStarted(now);
       m_frameStart = now;
       const auto frameCamera = m_camera;
@@ -2169,6 +2276,10 @@ void RenderThread::runLoop()
       // LP3.0 (D151, C62): whether a settle wants the still timer (LP3.3: a held LOD, a
       // pending cascade budget, a held layout that is not the engine's)
       m_pacer.setSettleWanted(m_passes.lastStats().shadowSettleWanted);
+      // LP6.6 (C73): a short TAA history waits for the camera's moving window to end
+      m_taaStartAt = outcome == FrameOutcome::Presented && m_taaWaitsForStill
+                       ? m_pacer.movingUntil()
+                       : std::nullopt;
       continue;
     }
 
@@ -2184,6 +2295,18 @@ void RenderThread::runLoop()
         continue;
       }
       deadline = std::min(deadline, *still);
+    }
+
+    // LP6.6 (C73): the TAA history's frame once the camera's moving window has ended
+    if (m_taaStartAt && canDraw())
+    {
+      if (*m_taaStartAt <= now)
+      {
+        m_taaStartAt.reset();
+        m_pacer.trigger();
+        continue;
+      }
+      deadline = std::min(deadline, *m_taaStartAt);
     }
 
     // the chunk jobs: a finished batch is applied, the inbox may be taken again, and a
@@ -2412,6 +2535,14 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
     const auto clearFrameTarget =
       kdl::invoke_later{[&] { m_frameResources.setFrameTarget(nullptr); }};
     m_frameUploadBytes = 0;
+    // LP6.6 (C73): the frame's place in the TAA history is decided before its passes
+    m_frameSlotChanges = 0;
+    m_taaFrameIndex = 0;
+    m_taaFrameHold = false;
+    m_taaFramePending = false;
+    m_taaFrameStartChange = false;
+    m_frameTaaResolved = false;
+    m_frameHdrDrawn = false;
     syncChunks();
     refreshImages();
     requestProbeImages();
@@ -2489,7 +2620,11 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
                      + litStats.interactionDraws + litStats.stageDraws + litStats.fogDraws
                      + litStats.blendDraws
                    > 0;
+        // RB:6230-6233: the tonemap reads _taaResolved while a history exists (the
+        // frame's resolve, or the kept one of 16)
+        m_frameTaaResolved = hdrDrawn && (litStats.taaRan || m_taaFrameHold);
       }
+      m_frameHdrDrawn = hdrDrawn;
       runAfterPassHooks(commandList);
       // LP2.2b: the tonemap passes into the LDR target and its blit into the frame's
       // target, which replace LP0's clear of it; LP6.0 (C65): their CPU record time, the
@@ -2783,6 +2918,8 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.feedsInPlace = m_textureUploads.feedsInPlace();
       // LP6.4b (C68 (d)): the arena bytes the compactions moved so far
       row.arenaMovedBytes = m_arenas.movedBytes();
+      // LP6.6 (C73, C65): the TAA history after the frame
+      row.taaHistory = std::uint64_t(m_convergence.taaHistory);
       m_timers.frameShown(slot, row);
       ++m_framesPresented;
       // LP2.3 (D9): the panel's status line reads the frame's counts
@@ -2790,6 +2927,10 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         auto status = SessionStatus{};
         status.frames = m_framesPresented;
         status.settled = m_convergence.settled();
+        // LP6.6 (C73, P8.14): the other terms alone, the TAA's switch and history
+        status.exactSettled = m_convergence.otherTermsHold();
+        status.taaOn = taaActive();
+        status.taaHistory = m_convergence.taaHistory;
         status.lightsVisible = litStats.lightsVisible;
         status.lightsDrawn = litStats.lightsDrawn;
         status.lightsOverflowed = litStats.lightsOverflowed;
@@ -3047,11 +3188,13 @@ void RenderThread::eraseChangedSets()
   for (const auto slot : m_images.takeUsageChangedSlots())
   {
     m_passes.recordsSlotChanged(slot);
+    ++m_frameSlotChanges;
   }
   for (const auto slot : m_images.takeChangedSlots())
   {
     m_passes.recordsSlotChanged(slot);
     m_bindingSets.slotChanged(slot);
+    ++m_frameSlotChanges;
   }
 }
 

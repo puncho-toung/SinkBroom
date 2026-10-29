@@ -106,6 +106,9 @@ public:
    * and the LODs, any other settles them.
    */
   bool cameraMoving(FrameClock::time_point now) const;
+  // LP6.6 (C73): when a frame started then is no longer cameraMoving: StillTimerDelay
+  // after the last camera move; empty without one
+  std::optional<FrameClock::time_point> movingUntil() const;
   // the still timer fired: a frame trigger whose reason is StillTimer, spent until the
   // camera moves again
   void stillTimerFired();

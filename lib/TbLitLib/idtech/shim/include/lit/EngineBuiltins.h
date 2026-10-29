@@ -1523,6 +1523,10 @@ inline constexpr int EngineBuiltinRect = 109;
 inline constexpr int EngineBuiltinTonemapping = 111;
 inline constexpr int EngineBuiltinHistogram = 113;
 inline constexpr int EngineBuiltinExposure = 115;
+// LP6.6 (C73, SC821): BUILTIN_TAA_RESOLVE (RenderProgs.h, "builtin/post/taa" at
+// SAMPLE_COUNT 1 and USE_CATMULL_ROM_FILTER 1, RenderProgs.cpp:918), the progressive
+// TAA's resolve (pass 11); the MSAA rows 90-92 are never selected (one sample)
+inline constexpr int EngineBuiltinTaaResolve = 89;
 // LP4.2a (C34, SC326): the ambient pass's programs (RenderProgs.h:404-412): the probe
 // path's BUILTIN_AMBIENT_LIGHTING_IBL and its PBR form, and the light-grid path's (LP4.3)
 inline constexpr int EngineBuiltinAmbientLightingIbl = 4;

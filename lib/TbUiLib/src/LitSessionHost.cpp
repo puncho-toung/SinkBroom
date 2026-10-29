@@ -385,6 +385,8 @@ lit::SessionOptions LitSessionHost::sessionOptions() const
   // LP6.5a (C70, D177, Q43): SSAO on in sessions, the game's r_useSSAO 1 (the panel's
   // switch to turn it off is C74's, LP6.6)
   options.ssaoForTesting = true;
+  // LP6.6 (C73, D181, D21: r_antiAliasing 2): the progressive TAA on in sessions
+  options.progressiveAaForTesting = true;
   return options;
 }
 

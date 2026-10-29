@@ -163,7 +163,9 @@ constexpr auto RenderParmNames =
 // (MipMapGenPass_cb.h:25-30), TemporalAntiAliasingConstants
 // (TemporalAntiAliasingPass_cb.h:25-47), ToneMappingConstants (TonemapPass_cb.h:25-47)
 constexpr auto MipmapGenConstantsSize = std::uint32_t{16};
-constexpr auto TemporalAntiAliasingConstantsSize = std::uint32_t{132};
+// LP6.6 (C73): the idRenderMatrix, eight idVec2, four floats and a uint: 148 bytes (132
+// before LP6.6 read it; no device's limit lies between the two)
+constexpr auto TemporalAntiAliasingConstantsSize = std::uint32_t{148};
 constexpr auto ToneMappingConstantsSize = std::uint32_t{80};
 // LP6.5a (C70): SsaoConstants (SsaoPass_cb.h)
 constexpr auto SsaoConstantsSize = std::uint32_t{272};
@@ -378,6 +380,31 @@ EngineConstantBlock engineBlitBlock()
     BlitConstantsSize};
 }
 
+EngineConstantBlock engineTaaBlock()
+{
+  // TemporalAntiAliasingPass_cb.h:25-47 as taa.cs.hlsl:31-50 declares it (row-major
+  // float4x4, then float2s two to a 16-byte row)
+  return EngineConstantBlock{
+    "TemporalAntiAliasingConstants",
+    {
+      {"reprojectionMatrix", 0},
+      {"inputViewOrigin", 64},
+      {"inputViewSize", 72},
+      {"outputViewOrigin", 80},
+      {"outputViewSize", 88},
+      {"inputPixelOffset", 96},
+      {"outputTextureSizeInv", 104},
+      {"inputOverOutputViewSize", 112},
+      {"outputOverInputViewSize", 120},
+      {"clampingFactor", 128},
+      {"newFrameWeight", 132},
+      {"pqC", 136},
+      {"invPqC", 140},
+      {"stencilMask", 144},
+    },
+    TemporalAntiAliasingConstantsSize};
+}
+
 EngineConstantBlock engineSsaoBlock()
 {
   // SsaoPass_cb.h, as the shaders declare it (ssao_*.cs.hlsl's SsaoConstants, packed by
@@ -420,6 +447,8 @@ std::optional<EngineConstantBlock> engineLayoutConstantBlock(
   case L::SsaoCompute:
   case L::SsaoBlur:
     return engineSsaoBlock();
+  case L::TaaResolve:
+    return engineTaaBlock();
   default:
     break;
   }
@@ -757,6 +786,21 @@ std::optional<std::vector<nvrhi::BindingLayoutDesc>> engineBindingLayoutDescs(
        Item::Texture_SRV(0),
        Item::Texture_SRV(1),
        Item::Texture_UAV(0)})};
+  case L::TaaResolve:
+    // LP6.6 (C73): TemporalAntiAliasingPass.cpp:151-170 (CreateBindingSetAndLayout's
+    // one compute set): the constants (pushed by RenderProgs.cpp:398's rule, never at
+    // 148 bytes), the bilinear sampler, the unresolved colour, the motion vectors, the
+    // feedback read, the resolved colour and the feedback written
+    return std::vector{layoutDesc(
+      S::Compute,
+      {pushConstants ? Item::PushConstants(0, TemporalAntiAliasingConstantsSize)
+                     : Item::VolatileConstantBuffer(0),
+       Item::Sampler(0),
+       Item::Texture_SRV(0),
+       Item::Texture_SRV(1),
+       Item::Texture_SRV(2),
+       Item::Texture_UAV(0),
+       Item::Texture_UAV(1)})};
   case L::SsaoBlur:
     // :134-145: the deinterleaved depth and occlusion, the destination, the point clamp
     // sampler

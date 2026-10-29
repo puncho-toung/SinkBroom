@@ -81,8 +81,10 @@ struct SessionOptions
   // ambient occlusion the ambient pass reads at t4. Off in TbLitLib tests (a case opts
   // in), on in sessions (LitSessionHost, Q43); the panel's switch is C74's (LP6.6)
   bool ssaoForTesting = false;
-  // LP6.5a (P8.14, D181): LP6.6's progressive TAA, off in TbLitLib tests and on in
-  // sessions once C73 lands; nothing reads it before LP6.6
+  // LP6.5a (P8.14, D181), LP6.6 (C73): the progressive TAA (r_antiAliasing 2's preview
+  // form): once the camera stops and every other convergence term holds, 16 jittered
+  // frames resolved through blob 89 into _taaResolved, then the frame settles. Off in
+  // TbLitLib tests (a case opts in), on in sessions (LitSessionHost); parity keeps it off
   bool progressiveAaForTesting = false;
 };
 
@@ -149,6 +151,12 @@ struct SessionStatus
   std::uint64_t frames = 0;
   // D77: the last frame was settled
   bool settled = false;
+  // LP6.6 (C73, P8.14): its convergence terms but the TAA history's held (the "settled
+  // exact frame"; settled itself while TAA is off), the session's progressive TAA is on,
+  // and the history's length after the frame (0-16; 16: settled)
+  bool exactSettled = false;
+  bool taaOn = false;
+  std::size_t taaHistory = 0;
   std::size_t lightsVisible = 0;
   std::size_t lightsDrawn = 0;
   std::size_t lightsOverflowed = 0;

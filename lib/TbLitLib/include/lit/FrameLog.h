@@ -286,6 +286,10 @@ struct FrameLogRow
   std::optional<std::uint64_t> texturesFloored;
   std::optional<std::uint64_t> feedsInPlace;
   std::optional<std::uint64_t> arenaMovedBytes;
+  // LP6.6 (C73, C65), frame rows: the progressive TAA history's length after the frame
+  // (0-16: 0 for a plain frame, 1 the history's first, 16 its settled one and the frames
+  // that keep it); empty in an event row, the last column
+  std::optional<std::uint64_t> taaHistory;
 };
 
 // the CSV header line, ending in a newline

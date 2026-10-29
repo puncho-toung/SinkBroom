@@ -734,6 +734,31 @@ TEST_CASE("EngineTables")
     CHECK_FALSE(engineBindingLayoutDescs(L::OctahedronCubeSkinned, false));
     CHECK_FALSE(enginePushConstantsEnabled(
       L::OctahedronCube, enginePushConstantLimit(4096), 0x10DE));
+    // LP6.6 (C73): TAA_RESOLVE's one compute set (TemporalAntiAliasingPass.cpp:151-170):
+    // the constants (a volatile buffer at b0 or 148 pushed bytes), s0, t0-t2, u0 u1
+    for (const auto pushTaa : {false, true})
+    {
+      const auto taa = engineBindingLayoutDescs(L::TaaResolve, pushTaa);
+      REQUIRE(setCount(taa) == 1u);
+      const auto& items = (*taa)[0].bindings;
+      CHECK((*taa)[0].visibility == nvrhi::ShaderType::Compute);
+      REQUIRE(items.size() == 7u);
+      CHECK(T(items[0].type) == (pushTaa ? T::PushConstants : T::VolatileConstantBuffer));
+      CHECK(items[0].slot == 0u);
+      CHECK((!pushTaa || items[0].size == 148u));
+      CHECK(T(items[1].type) == T::Sampler);
+      CHECK(T(items[2].type) == T::Texture_SRV);
+      CHECK(items[2].slot == 0u);
+      CHECK(items[3].slot == 1u);
+      CHECK(items[4].slot == 2u);
+      CHECK(T(items[5].type) == T::Texture_UAV);
+      CHECK(items[5].slot == 0u);
+      CHECK(T(items[6].type) == T::Texture_UAV);
+      CHECK(items[6].slot == 1u);
+    }
+    CHECK(engineTaaBlock().size == 148u);
+    CHECK(engineTaaBlock().members.size() == 14u);
+    CHECK(engineLayoutConstantBlock(L::TaaResolve) == engineTaaBlock());
     // LP3.0 (C60): DRAW_INTERACTION_SM's four sets; no skinned form (P3.24e)
     CHECK(setCount(engineBindingLayoutDescs(L::DrawInteractionSm, false)) == 4u);
     CHECK_FALSE(engineBindingLayoutDescs(L::DrawInteractionSmSkinned, false));

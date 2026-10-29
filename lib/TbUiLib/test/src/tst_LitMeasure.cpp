@@ -1270,7 +1270,8 @@ constexpr auto TilesImageRedrawn = std::size_t{114};
 // 113th, and (C66, D169) caster_sets_built and tiles_image_redrawn, the 115th; LP6.4a
 // (C68 (a)): and the texture heaps' three (texture_heaps, heap_bytes,
 // textures_dedicated), the 118th; LP6.4b (C68 (b)-(d)): and textures_evicted,
-// textures_floored, feeds_in_place and arena_moved_bytes, the 122nd the last
+// textures_floored, feeds_in_place and arena_moved_bytes, the 122nd; LP6.6 (C73): and
+// taa_history, the 123rd the last
 constexpr auto TextureHeaps = std::size_t{115};
 constexpr auto HeapBytes = std::size_t{116};
 constexpr auto TexturesDedicated = std::size_t{117};
@@ -1278,7 +1279,8 @@ constexpr auto TexturesEvicted = std::size_t{118};
 constexpr auto TexturesFloored = std::size_t{119};
 constexpr auto FeedsInPlace = std::size_t{120};
 constexpr auto ArenaMovedBytes = std::size_t{121};
-constexpr auto Count = std::size_t{122};
+constexpr auto TaaHistory = std::size_t{122};
+constexpr auto Count = std::size_t{123};
 } // namespace column
 
 /**

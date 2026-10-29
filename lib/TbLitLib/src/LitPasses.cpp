@@ -191,6 +191,8 @@ bool icmpEqual(const std::string_view a, const std::string_view b)
 // LP6.5a (C70): SsaoPass' constant buffer (SsaoPass.cpp:47-54,
 // c_MaxRenderPassConstantBufferVersions, CommonPasses.h:38)
 constexpr auto SsaoConstantBufferVersions = std::uint32_t{16};
+// LP6.6 (C73): TemporalAntiAliasingPass::CreateParameters::numConstantBufferVersions
+constexpr auto TaaConstantBufferVersions = std::uint32_t{16};
 
 // RenderBackend_NVRHI.cpp:698-788: set 1 t0-t2, set 2 t3 t4 t7 t8 t9 t10 t12 t13 t14
 constexpr auto AmbientUnits = std::array<AmbientUnitBinding, 12>{{
@@ -276,6 +278,13 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
   m_stats.camera = inputs.camera;
   m_frameWrites.clear();
   m_stats.constantWriteBudget = writeBudget();
+  // LP6.6 (C73, P8.12, M-PASS-DIFF-05): the TAA resolve's pipeline pending: the frame
+  // draws plain and is unconverged (the compile thread's onReady draws the next)
+  if (inputs.taaPending)
+  {
+    m_stats.taaPendingPipelines = 1;
+    ++m_stats.pendingPipelines;
+  }
   if (
     !inputs.device || !inputs.commandList || !inputs.frame || !inputs.arenas
     || !inputs.pipelines || !inputs.images || !inputs.bindingSets || !inputs.samplers)
@@ -306,6 +315,16 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
   frame.view = litViewOf(inputs.camera, extent.width, extent.height);
   frame.formats =
     FramebufferFormats{nvrhi::Format::RGBA16_FLOAT, inputs.frame->depthFormat()};
+  // LP6.6 (C73, P8.20, the director's reading (3)): a frame that accumulates a TAA
+  // history draws with the jitter of its index; a plain or kept frame with none
+  m_stats.taaIndex = inputs.taaIndex;
+  frame.drawView = frame.view;
+  if (inputs.taaIndex > 0 && !inputs.taaHold)
+  {
+    frame.jitter = engineTaaPixelOffset(inputs.taaIndex);
+    frame.drawView = engineJitteredView(frame.view, *frame.jitter);
+    m_stats.taaJitter = *frame.jitter;
+  }
 
   // SC201: ZeroUniforms and the view's parms; the frame's command list starts with no
   // state, so the draw state starts again too
@@ -317,7 +336,9 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
   m_currentSpace.reset();
   m_currentScissor = viewScissor(frame.view);
   m_scissor = engineScissorRect(frame.view, m_currentScissor);
-  setViewParms(m_parms, frame.view);
+  // LP6.6 (C73): PROJMATRIX the jittered projectionRenderMatrix on an accumulated frame
+  // (RB:5961 sets viewDef->projectionRenderMatrix, the jittered one)
+  setViewParms(m_parms, frame.drawView);
   recordClears(frame);
 
   // LP6.0 (C65): the lists' CPU time, kept lists too
@@ -348,7 +369,7 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
   // rebuildLists' own)
   m_stats.surfacesMs = m_stats.listsRebuilt ? m_lists.surfacesMs : 0.0;
   m_stats.lightsMs = m_stats.listsRebuilt ? m_lists.lightsMs : 0.0;
-  m_stats.unconverged = m_lists.pending;
+  m_stats.unconverged = m_lists.pending || m_stats.taaPendingPipelines > 0;
   m_stats.waitsForTable = m_lists.pending;
   // DX.2: a surface drawn whole until its light triangles are known
   m_stats.lightTrianglesPending =
@@ -732,7 +753,24 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
     m_stats.stageRecordMs += recordMsSince(start);
   }
   closeStageTimer();
-  return;
+
+  // LP6.6 (C73, SC821, the director's reading (3)): pass 11, the TAA resolve, after the
+  // fog lights, the copy and the second stage call and before the tonemap passes
+  // (RB:6206-6216: DrawMotionVectors, not mirrored, then TemporalAAPass), on a frame that
+  // accumulates only
+  if (frame.jitter)
+  {
+    if (m_stats.stoppedEarly || (inputs.stopRequested && inputs.stopRequested()))
+    {
+      m_stats.stoppedEarly = true;
+      return;
+    }
+    const auto start = FrameClock::now();
+    beginTimer(frame, inputs.taaTimer);
+    m_stats.taaRan = recordTaa(frame);
+    m_stats.taaTimed = endTimer(frame, inputs.taaTimer);
+    m_stats.taaRecordMs = recordMsSince(start);
+  }
 }
 
 void LitPasses::beginTimer(Frame& frame, nvrhi::ITimerQuery* timer)
@@ -1095,12 +1133,28 @@ void LitPasses::recordClears(Frame& frame)
     | kdl::ignore();
 }
 
-void LitPasses::setSpace(Frame&, const std::size_t space)
+void LitPasses::setDrawMvp(const Frame& frame, const EngineMat4& mvp)
 {
-  // change the matrix if needed: RB_SetMVP( space->mvp )
+  if (frame.jitter)
+  {
+    setMvp(
+      m_parms,
+      engineJitteredClipMatrix(mvp, *frame.jitter, frame.view.width, frame.view.height));
+  }
+  else
+  {
+    setMvp(m_parms, mvp);
+  }
+}
+
+void LitPasses::setSpace(Frame& frame, const std::size_t space)
+{
+  // change the matrix if needed: RB_SetMVP( space->mvp ); LP6.6 (P8.20): the prepass's
+  // MVP is pass 3's (setAmbientSpace: the same function of the same space), so EQUAL
+  // passes on an accumulated frame
   if (m_currentSpace != space)
   {
-    setMvp(m_parms, m_lists.spaces[space].mvp);
+    setDrawMvp(frame, m_lists.spaces[space].mvp);
     m_currentSpace = space;
   }
 }
@@ -1331,7 +1385,7 @@ LitPasses::DepthStageBinding LitPasses::bindDepthStageDraw(
     {
       const auto& space = m_lists.spaces[surface.space];
       const auto mat =
-        engineGlMatrixMultiply(space.modelViewMatrix, frame.view.projectionMatrix);
+        engineGlMatrixMultiply(space.modelViewMatrix, frame.drawView.projectionMatrix);
       m_parms.set(
         RenderParm::TexGen0S,
         Vec4{mat[0 * 4 + 0], mat[1 * 4 + 0], mat[2 * 4 + 0], mat[3 * 4 + 0]});
@@ -1835,8 +1889,8 @@ void LitPasses::setInteractionSpace(
   m_currentSpace = index;
   const auto& space = m_lists.spaces[index];
 
-  // model-view-projection
-  setMvp(m_parms, space.mvp);
+  // model-view-projection (LP6.6: jittered on an accumulated frame)
+  setDrawMvp(frame, space.mvp);
 
   // MODELMATRIX and MODELVIEWMATRIX: the float[16]s transposed
   m_parms.set(RenderParm::ModelMatrixX, engineMatrixTranspose(space.modelMatrix));
@@ -2183,10 +2237,11 @@ nvrhi::IBindingSet* LitPasses::ambientViewSet(
 
 void LitPasses::setAmbientSpace(Frame& frame, const std::size_t index)
 {
-  // RenderBackend.cpp:2480-2502: change the matrix if needed
+  // RenderBackend.cpp:2480-2502: change the matrix if needed (LP6.6: jittered on an
+  // accumulated frame, as the prepass's)
   m_currentSpace = index;
   const auto& space = m_lists.spaces[index];
-  setMvp(m_parms, space.mvp);
+  setDrawMvp(frame, space.mvp);
 
   // tranform the view origin into model local space
   const auto localView =
@@ -2470,7 +2525,13 @@ bool LitPasses::recordSsao(
   // Render (SsaoPass.cpp:214-270): the constants, written before the state that binds
   // them (nvrhi rule 5)
   const auto extent = inputs.frame->extent();
-  m_stats.ssaoConstants = engineSsaoConstants(frame.view, extent.width, extent.height);
+  // LP6.6 (C70, C73): the frame's jitter and its jittered inverse projection while a TAA
+  // history accumulates, (0, 0) and the plain view otherwise
+  m_stats.ssaoConstants = engineSsaoConstants(
+    frame.drawView,
+    extent.width,
+    extent.height,
+    frame.jitter.value_or(std::array<float, 2>{0.0f, 0.0f}));
   commandList.writeBuffer(
     m_ssaoConstants, &m_stats.ssaoConstants, sizeof(m_stats.ssaoConstants));
   ++m_stats.constantWrites;
@@ -2490,6 +2551,149 @@ bool LitPasses::recordSsao(
   // a compute state ends the graphics state: the next draw sets its state again
   m_state.valid = false;
   m_ssaoImage = ao;
+  return true;
+}
+
+bool LitPasses::recordTaa(Frame& frame)
+{
+  using Item = nvrhi::BindingSetItem;
+  const auto& inputs = *frame.inputs;
+  auto& device = *inputs.device;
+  auto& commandList = *inputs.commandList;
+  const auto failed = [&](const std::string_view why) {
+    m_stats.taaDisabled = true;
+    if (m_stats.disabledReason.empty())
+    {
+      m_stats.disabledReason = std::string{why};
+    }
+    return false;
+  };
+  // P8.12, M-PASS-DIFF-05: the render thread lets a frame accumulate only once 89 is
+  // ready; a lookup that is not ready here keeps the frame unconverged
+  const auto lookup = inputs.pipelines->compute(EngineBuiltinTaaResolve);
+  if (lookup.state == ComputePipelineLookup::State::Pending)
+  {
+    ++m_stats.taaPendingPipelines;
+    ++m_stats.pendingPipelines;
+    m_stats.unconverged = true;
+    return false;
+  }
+  if (lookup.state == ComputePipelineLookup::State::Failed || !lookup.pipeline)
+  {
+    return failed(lookup.error);
+  }
+  if (lookup.bindingLayouts.size() != 1 || !lookup.bindingLayouts.front())
+  {
+    return failed("the TAA resolve's binding layouts are not one set");
+  }
+  // the director's reading (1): the targets at the first frame that accumulates
+  if (!inputs.frame->ensureTaaTargets())
+  {
+    return failed("the TAA targets cannot be made");
+  }
+  namespace fr = frame_resource;
+  const auto hdr = inputs.frame->find(fr::CurrentRenderHdr);
+  const auto vectors = inputs.frame->find(fr::TaaMotionVectors);
+  const auto feedback1 = inputs.frame->find(fr::TaaFeedback1);
+  const auto feedback2 = inputs.frame->find(fr::TaaFeedback2);
+  const auto resolved = inputs.frame->find(fr::TaaResolved);
+  if (!hdr || !vectors || !feedback1 || !feedback2 || !resolved)
+  {
+    return failed("the TAA resolve's targets are missing");
+  }
+  const auto& layout = lookup.bindingLayouts.front();
+  const auto* layoutDesc = layout->getDesc();
+  const auto pushed =
+    layoutDesc && !layoutDesc->bindings.empty()
+    && layoutDesc->bindings.front().type == nvrhi::ResourceType::PushConstants;
+
+  // TemporalAntiAliasingPass::Init (:120-133): the border-0 bilinear sampler and, without
+  // push constants, the volatile constant buffer
+  if (!m_taaSampler)
+  {
+    auto desc = nvrhi::SamplerDesc{};
+    desc.setAllAddressModes(nvrhi::SamplerAddressMode::Border);
+    desc.setBorderColor(nvrhi::Color{0.0f});
+    m_taaSampler = device.createSampler(desc);
+    if (!m_taaSampler)
+    {
+      return failed("NVRHI cannot create the TAA sampler");
+    }
+  }
+  if (!pushed && !m_taaConstants)
+  {
+    m_taaConstants = device.createBuffer(nvrhi::utils::CreateVolatileConstantBufferDesc(
+      std::uint32_t(sizeof(EngineTaaConstants)),
+      "TemporalAntiAliasingConstants",
+      TaaConstantBufferVersions));
+    if (!m_taaConstants)
+    {
+      return failed("NVRHI cannot create the TAA constant buffer");
+    }
+  }
+
+  // :151-170, the render thread's (C20): two sets, the second with the feedbacks swapped,
+  // made at the first run and for each new render-target generation or resolved target
+  const auto generation = inputs.frame->renderTargetGeneration();
+  if (
+    m_taaSetsGeneration != generation || m_taaSetsTarget != resolved->texture
+    || !m_taaSets[0])
+  {
+    m_taaSets = {};
+    const auto setOf = [&](nvrhi::ITexture* read, nvrhi::ITexture* write) {
+      return device.createBindingSet(
+        nvrhi::BindingSetDesc{}
+          .addItem(
+            pushed ? Item::PushConstants(0, std::uint32_t(sizeof(EngineTaaConstants)))
+                   : Item::ConstantBuffer(0, m_taaConstants))
+          .addItem(Item::Sampler(0, m_taaSampler))
+          .addItem(Item::Texture_SRV(0, hdr->texture))
+          .addItem(Item::Texture_SRV(1, vectors->texture))
+          .addItem(Item::Texture_SRV(2, read))
+          .addItem(Item::Texture_UAV(0, resolved->texture))
+          .addItem(Item::Texture_UAV(1, write)),
+        layout);
+    };
+    m_taaSets[0] = setOf(feedback1->texture, feedback2->texture);
+    m_taaSets[1] = setOf(feedback2->texture, feedback1->texture);
+    if (!m_taaSets[0] || !m_taaSets[1])
+    {
+      m_taaSets = {};
+      return failed("NVRHI cannot create a TAA binding set");
+    }
+    m_taaSetsGeneration = generation;
+    m_taaSetsTarget = resolved->texture;
+  }
+
+  // SC820: the motion vectors are 0 (cleared once after they are made, never drawn)
+  inputs.frame->recordTaaClears(commandList);
+
+  // TemporalResolve (:189-239): the constants, written before the state that binds them
+  // (nvrhi rule 5), the set of the frame (AdvanceFrame swaps them after every frame: the
+  // history's first frame takes the first, which writes feedback 2)
+  const auto extent = inputs.frame->extent();
+  m_stats.taaConstants =
+    engineTaaConstants(extent.width, extent.height, *frame.jitter, inputs.taaIndex == 1);
+  if (!pushed)
+  {
+    commandList.writeBuffer(
+      m_taaConstants, &m_stats.taaConstants, sizeof(m_stats.taaConstants));
+    ++m_stats.constantWrites;
+    m_stats.constantBytes += sizeof(m_stats.taaConstants);
+  }
+  auto state = nvrhi::ComputeState{};
+  state.pipeline = lookup.pipeline;
+  state.bindings = {m_taaSets[(inputs.taaIndex - 1) % 2]};
+  commandList.setComputeState(state);
+  if (pushed)
+  {
+    commandList.setPushConstants(&m_stats.taaConstants, sizeof(m_stats.taaConstants));
+    m_stats.pushConstantBytes += sizeof(m_stats.taaConstants);
+  }
+  const auto groups = engineTaaDispatch(extent.width, extent.height);
+  commandList.dispatch(groups[0], groups[1], 1);
+  // a compute state ends the graphics state: the next draw sets its state again
+  m_state.valid = false;
   return true;
 }
 
@@ -4488,8 +4692,8 @@ std::size_t LitPasses::recordStages(
         if (stageDraw.screenTexgen)
         {
           const auto& space = m_lists.spaces[surface.space];
-          const auto mat =
-            engineGlMatrixMultiply(space.modelViewMatrix, frame.view.projectionMatrix);
+          const auto mat = engineGlMatrixMultiply(
+            space.modelViewMatrix, frame.drawView.projectionMatrix);
           m_parms.set(
             RenderParm::TexGen0S,
             Vec4{mat[0 * 4 + 0], mat[1 * 4 + 0], mat[2 * 4 + 0], mat[3 * 4 + 0]});
@@ -4597,7 +4801,9 @@ bool LitPasses::bindBumpyEnvironment2(
 {
   const auto& inputs = *frame.inputs;
   auto& images = *inputs.images;
-  const auto& view = frame.view;
+  // LP6.6 (C73): SHADOW_MATRIX_0 and _1 from the jittered projection on an accumulated
+  // frame (RB:438-469 read viewDef->projectionMatrix and projectionRenderMatrix)
+  const auto& view = frame.drawView;
 
   // RB:395-419: the probe bounds with their validity and centre, the probe positions and
   // the specular cubemap blend weights, as the ambient pass's probe path sets them
@@ -4834,7 +5040,7 @@ bool LitPasses::tBlendLight(
     {
       // change the matrix, and the light projection matrix
       const auto& space = m_lists.spaces[surface.space];
-      setMvp(m_parms, space.mvp);
+      setDrawMvp(frame, space.mvp);
       auto lightProjectInCurrentSpace = std::array<EnginePlane, 4>{};
       for (std::size_t i = 0; i < 4; ++i)
       {
@@ -4947,7 +5153,7 @@ bool LitPasses::basicFog(
     if (m_currentSpace != surface.space)
     {
       const auto& space = m_lists.spaces[surface.space];
-      setMvp(m_parms, space.mvp);
+      setDrawMvp(frame, space.mvp);
       auto localFogPlanes = std::array<EnginePlane, 4>{};
       for (std::size_t i = 0; i < 4; ++i)
       {
@@ -5002,7 +5208,7 @@ bool LitPasses::fogCube(
   // inverseBaseLightProject, the planes InverseTransformPlane( normalize false )
   const auto& inverseBaseLightProject =
     light.record->derived.projection.inverseBaseLightProject;
-  setMvp(m_parms, engineMatrixMultiply(frame.view.worldMvp, inverseBaseLightProject));
+  setDrawMvp(frame, engineMatrixMultiply(frame.view.worldMvp, inverseBaseLightProject));
   auto localFogPlanes = std::array<EnginePlane, 4>{};
   for (std::size_t i = 0; i < 4; ++i)
   {
@@ -5181,7 +5387,10 @@ std::vector<PipelineKey> litStartPipelineKeys(
 }
 
 EngineSsaoConstants engineSsaoConstants(
-  const LitView& view, const std::uint32_t width, const std::uint32_t height)
+  const LitView& view,
+  const std::uint32_t width,
+  const std::uint32_t height,
+  const std::array<float, 2>& pixelOffset)
 {
   // SsaoPass::Render (SsaoPass.cpp:228-270) over the viewport (0, 0, w - 1, h - 1): the
   // quarter extent ( 0, 0 ) to ( ( w + 3 ) / 4, ( h + 3 ) / 4 ); the cvars at their
@@ -5189,8 +5398,9 @@ EngineSsaoConstants engineSsaoConstants(
   auto constants = EngineSsaoConstants{};
   constants.viewportOrigin = {0.0f, 0.0f};
   constants.viewportSize = {float(width), float(height)};
-  // GetCurrentPixelOffset with r_taaJitter 0 (D177, K54)
-  constants.pixelOffset = {0.0f, 0.0f};
+  // GetCurrentPixelOffset: with r_taaJitter 0 (D177, K54) or on a plain frame (0, 0);
+  // LP6.6 (C73): the frame's TAA jitter on an accumulated frame
+  constants.pixelOffset = pixelOffset;
   // idRenderMatrix::Inverse( *( idRenderMatrix* )viewDef->projectionMatrix ); the
   // engine's output is left as it was (zero) when the inverse fails
   const auto& projection = view.projectionMatrix;
@@ -5216,6 +5426,91 @@ EngineSsaoConstants engineSsaoConstants(
   constants.powerExponent = EngineFrame.ssaoPowerExponent;
   constants.radiusToScreen = 0.5f * float(height) * std::abs(projection[1 * 4 + 1]);
   return constants;
+}
+
+std::array<float, 2> engineTaaPixelOffset(const std::size_t index)
+{
+  // TemporalAntiAliasingPass.cpp:281-287
+  constexpr auto offsets = std::array<std::array<float, 2>, 8>{{
+    {0.0625f, -0.1875f},
+    {-0.0625f, 0.1875f},
+    {0.3125f, 0.0625f},
+    {-0.1875f, -0.3125f},
+    {-0.3125f, 0.3125f},
+    {-0.4375f, 0.0625f},
+    {0.1875f, 0.4375f},
+    {0.4375f, -0.4375f},
+  }};
+  return index == 0 ? std::array<float, 2>{0.0f, 0.0f} : offsets[(index - 1) % 8];
+}
+
+EngineTaaConstants engineTaaConstants(
+  const std::uint32_t width,
+  const std::uint32_t height,
+  const std::array<float, 2>& pixelOffset,
+  const bool firstFrame)
+{
+  // TemporalResolve (TemporalAntiAliasingPass.cpp:197-216) over the viewport (0, 0, w -
+  // 1, h - 1): its width() + 1 is w; renderSystem->GetWidth() and GetHeight() are the
+  // target's
+  const auto w = float(width);
+  const auto h = float(height);
+  auto constants = EngineTaaConstants{};
+  constants.inputViewOrigin = {0.0f, 0.0f};
+  constants.inputViewSize = {w, h};
+  constants.outputViewOrigin = {0.0f, 0.0f};
+  constants.outputViewSize = {w, h};
+  constants.inputPixelOffset = pixelOffset;
+  constants.outputTextureSizeInv = {1.0f / w, 1.0f / h};
+  constants.inputOverOutputViewSize = {w / w, h / h};
+  constants.outputOverInputViewSize = {w / w, h / h};
+  constants.clampingFactor =
+    EngineTaa.enableHistoryClamping ? EngineTaa.clampingFactor : -1.0f;
+  // TemporalAAPass (RB:5277-5278): prevViewsValid is the feedback's validity
+  constants.newFrameWeight = firstFrame ? 1.0f : EngineTaa.newFrameWeight;
+  constants.pqC = std::clamp(EngineTaa.maxRadiance, 1e-4f, 1e8f);
+  constants.invPqC = 1.0f / constants.pqC;
+  return constants;
+}
+
+std::array<std::uint32_t, 2> engineTaaDispatch(
+  const std::uint32_t width, const std::uint32_t height)
+{
+  return {(width + 15) / 16, (height + 15) / 16};
+}
+
+EngineMat4 engineJitteredClipMatrix(
+  const EngineMat4& matrix,
+  const std::array<float, 2>& pixelOffset,
+  const int width,
+  const int height)
+{
+  // GLMatrix.cpp:446-450: xoffset = -2 jx / W enters clip x times z_eye, and clip w is
+  // -z_eye: clip x += ( 2 jx / W ) · clip w (y alike)
+  const auto x = 2.0f * pixelOffset[0] / float(std::max(width, 1));
+  const auto y = 2.0f * pixelOffset[1] / float(std::max(height, 1));
+  auto jittered = matrix;
+  for (std::size_t c = 0; c < 4; ++c)
+  {
+    jittered[0 * 4 + c] += x * matrix[3 * 4 + c];
+    jittered[1 * 4 + c] += y * matrix[3 * 4 + c];
+  }
+  return jittered;
+}
+
+LitView engineJitteredView(const LitView& view, const std::array<float, 2>& pixelOffset)
+{
+  // R_SetupProjectionMatrix( viewDef, true ) (GLMatrix.cpp:418-466), then
+  // tr_frontend_main.cpp:904-907 with the jittered projection
+  auto jittered = view;
+  jittered.projectionMatrix[2 * 4 + 0] =
+    -2.0f * pixelOffset[0] / float(std::max(view.width, 1));
+  jittered.projectionMatrix[2 * 4 + 1] =
+    -2.0f * pixelOffset[1] / float(std::max(view.height, 1));
+  jittered.projectionRenderMatrix = engineMatrixTranspose(jittered.projectionMatrix);
+  jittered.worldMvp = engineMatrixMultiply(
+    jittered.projectionRenderMatrix, engineMatrixTranspose(view.worldModelViewMatrix));
+  return jittered;
 }
 
 std::array<std::array<std::uint32_t, 3>, 3> engineSsaoDispatches(
@@ -6439,6 +6734,11 @@ std::uint64_t LitPasses::volatileBufferBytes() const
   {
     bytes += m_ssaoConstants->getDesc().byteSize * m_ssaoConstants->getDesc().maxVersions;
   }
+  // LP6.6 (C73): TemporalAntiAliasingPass' constant buffer
+  if (m_taaConstants)
+  {
+    bytes += m_taaConstants->getDesc().byteSize * m_taaConstants->getDesc().maxVersions;
+  }
   return bytes;
 }
 
@@ -6500,6 +6800,9 @@ void LitPasses::renderTargetsChanged(const std::uint64_t generation)
   }
   // LP6.5a (C70): pass 4's sets bind the old targets; made again at its next run
   m_ssaoSets = {};
+  // LP6.6 (C73): and pass 11's
+  m_taaSets = {};
+  m_taaSetsTarget = nullptr;
 }
 
 const DrawRecordTable& LitPasses::recordsForTesting() const
@@ -6528,6 +6831,12 @@ void LitPasses::releaseAll()
   m_ssaoSetsGeneration = 0;
   m_ssaoConstants = nullptr;
   m_ssaoImage = nullptr;
+  // LP6.6 (C73): pass 11's sets, constant buffer and sampler, before the targets
+  m_taaSets = {};
+  m_taaSetsGeneration = 0;
+  m_taaSetsTarget = nullptr;
+  m_taaConstants = nullptr;
+  m_taaSampler = nullptr;
   // LP3.1 (C59): the shadow atlas goes with the session's device objects (teardown step
   // 2), so that the stop row's allocations are back to the start's
   m_atlasFramebuffer = nullptr;

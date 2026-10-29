@@ -57,12 +57,14 @@ bool pushesConstants(const std::vector<nvrhi::BindingLayoutHandle>& layouts)
          && desc->bindings.front().type == nvrhi::ResourceType::PushConstants;
 }
 
-// C14: the passes LP2.2b declares over FrameResources
-PassDesc histogramPassDesc()
+// C14: the passes LP2.2b declares over FrameResources; LP6.6 (C73, RB:6230-6233): the
+// histogram and the tonemap read the source SimpleRender is given, _taaResolved while a
+// TAA history exists, else _currentRenderHDR
+PassDesc histogramPassDesc(const std::string_view source)
 {
   auto pass = PassDesc{};
   pass.name = "histogram";
-  pass.reads = {std::string{frame_resource::CurrentRenderHdr}};
+  pass.reads = {std::string{source}};
   pass.writes = {std::string{frame_resource::HistogramBuffer}};
   return pass;
 }
@@ -77,13 +79,11 @@ PassDesc exposurePassDesc()
   return pass;
 }
 
-PassDesc tonemapPassDesc()
+PassDesc tonemapPassDesc(const std::string_view source)
 {
   auto pass = PassDesc{};
   pass.name = "tonemap";
-  pass.reads = {
-    std::string{frame_resource::CurrentRenderHdr},
-    std::string{frame_resource::ExposureBuffer}};
+  pass.reads = {std::string{source}, std::string{frame_resource::ExposureBuffer}};
   pass.writes = {
     std::string{frame_resource::LdrFramebuffer},
     std::string{frame_resource::CurrentRenderLdr}};
@@ -268,12 +268,14 @@ TonemapFrameStats TonemapPasses::record(const TonemapFrameInputs& inputs)
   const auto* common = inputs.samplers->common(device)
                        | kdl::value_or(static_cast<const SamplerSet::Common*>(nullptr));
 
+  const auto source =
+    inputs.taaResolved ? frame_resource::TaaResolved : frame_resource::CurrentRenderHdr;
   const auto histogramPass =
-    frame.resolve(histogramPassDesc()) | kdl::value_or(PassResources{});
+    frame.resolve(histogramPassDesc(source)) | kdl::value_or(PassResources{});
   const auto exposurePass =
     frame.resolve(exposurePassDesc()) | kdl::value_or(PassResources{});
   const auto tonemapPass =
-    frame.resolve(tonemapPassDesc()) | kdl::value_or(PassResources{});
+    frame.resolve(tonemapPassDesc(source)) | kdl::value_or(PassResources{});
   const auto blitPass = frame.resolve(blitPassDesc()) | kdl::value_or(PassResources{});
   const auto resolved = !histogramPass.reads.empty() && !exposurePass.reads.empty()
                         && !tonemapPass.reads.empty() && !blitPass.reads.empty();
@@ -312,7 +314,8 @@ TonemapFrameStats TonemapPasses::record(const TonemapFrameInputs& inputs)
   auto histogramKey = BindingSetKey{};
   histogramKey.layout = histogramLayout.Get();
   histogramKey.renderTargetGeneration = generation;
-  histogramKey.resources = {histogramBuffer, pushHistogram ? nullptr : cb};
+  // LP6.6: the source by its texture too (_taaResolved is made without a new generation)
+  histogramKey.resources = {histogramBuffer, pushHistogram ? nullptr : cb, hdr};
   const auto histogramSet = cache.get(histogramKey, frameIndex, [&] {
     return device.createBindingSet(
       nvrhi::BindingSetDesc{}
@@ -340,7 +343,7 @@ TonemapFrameStats TonemapPasses::record(const TonemapFrameInputs& inputs)
   tonemapKey.layout = tonemapLayout.Get();
   tonemapKey.slots = lut.versions;
   tonemapKey.renderTargetGeneration = generation;
-  tonemapKey.resources = {exposureBuffer, linearClamp, pushTonemap ? nullptr : cb};
+  tonemapKey.resources = {exposureBuffer, linearClamp, pushTonemap ? nullptr : cb, hdr};
   const auto tonemapSet = cache.get(tonemapKey, frameIndex, [&] {
     return device.createBindingSet(
       nvrhi::BindingSetDesc{}
@@ -470,6 +473,8 @@ TonemapFrameStats TonemapPasses::record(const TonemapFrameInputs& inputs)
   }
   endTonemapTimer();
   m_stats.tonemapped = true;
+  // LP6.6 (C73): the passes read _taaResolved
+  m_stats.taaResolved = inputs.taaResolved;
 
   if (stopped())
   {

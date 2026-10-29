@@ -329,7 +329,7 @@ std::string_view frameLogHeader()
          "ms,record_other_ms,gpu_gbuffer_ms,gpu_ssao_ms,gpu_taa_ms,records_held,record_"
          "resolves,surfaces_ms,lights_ms,links_ms,caster_sets_built,tiles_image_"
          "redrawn,texture_heaps,heap_bytes,textures_dedicated,textures_evicted,"
-         "textures_floored,feeds_in_place,arena_moved_bytes\n";
+         "textures_floored,feeds_in_place,arena_moved_bytes,taa_history\n";
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)
@@ -343,10 +343,10 @@ std::string formatFrameLogRow(const FrameLogRow& row)
     // the frame's columns empty (gpu_prepass_ms ... gpu_fog_ms), then proc_bytes, then
     // LP7's twelve counts, LP3.1's twenty-one, LP3.2's three, LP3.4's one, LP6.0's ten
     // and three, LP6.1's two and LP6.2's five empty; then LP6.4a's three (the stop row's)
-    // and LP6.4b's four (an event row's own)
+    // and LP6.4b's four (an event row's own); LP6.6's one empty
     return fmt::format(
       "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,{},,,,,,,,,,,,"
-      ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,{},{}\n",
+      ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,{},{},\n",
       row.session,
       eventName(row.event),
       vram,
@@ -357,7 +357,7 @@ std::string formatFrameLogRow(const FrameLogRow& row)
   }
   return fmt::format(
     "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},"
-    "{},{},{},{},{},{},{}\n",
+    "{},{},{},{},{},{},{},{}\n",
     row.session,
     eventName(row.event),
     row.frameIndex,
@@ -388,7 +388,8 @@ std::string formatFrameLogRow(const FrameLogRow& row)
     listsSplitFields(row),
     keptSetFields(row),
     heapFields(row),
-    budgetFields(row));
+    budgetFields(row),
+    optionalCount(row.taaHistory));
 }
 
 std::optional<std::string> FrameLogWriter::open(const std::filesystem::path& path)

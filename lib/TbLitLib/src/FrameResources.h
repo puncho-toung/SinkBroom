@@ -105,6 +105,15 @@ inline constexpr auto SsaoDeinterleavedDepth =
   std::string_view{"SSAO/DeinterleavedDepth"};
 inline constexpr auto SsaoDeinterleavedOcclusion =
   std::string_view{"SSAO/DeinterleavedOcclusion"};
+// LP6.6 (C73, SC820, SC821): the progressive TAA's targets (Image_intrinsic.cpp:
+// 1094-1097): the resolved colour the tonemap reads while a history exists, the two
+// feedbacks the resolve reads and writes in turn, and the motion vectors it reads
+// (cleared to 0 and never drawn: the engine's are camera-only and 0 while the camera is
+// still)
+inline constexpr auto TaaResolved = std::string_view{"_taaResolved"};
+inline constexpr auto TaaFeedback1 = std::string_view{"_taaFeedback1"};
+inline constexpr auto TaaFeedback2 = std::string_view{"_taaFeedback2"};
+inline constexpr auto TaaMotionVectors = std::string_view{"_taaMotionVectors"};
 inline constexpr auto HistogramBuffer = std::string_view{"HistogramBuffer"};
 inline constexpr auto ExposureBuffer = std::string_view{"ExposureBuffer"};
 // the frame's presentation target: the acquired swapchain image or the headless target
@@ -200,6 +209,15 @@ public:
  * binding set can hold a target that did not exist (a set that binds it carries the
  * generation, C28).
  *
+ * LP6.6 (C73, the director's reading (1)): the progressive TAA's four targets are made
+ * together at the first frame that accumulates (ensureTaaTargets) and kept until
+ * teardown, remade with the others on a new extent and in renderTargetBytes from then on:
+ * _taaResolved and the feedbacks _taaFeedback1 and _taaFeedback2 (RGBA16_FLOAT, render
+ * targets and UAVs, keepInitialState: R_HDR_RGBA16FImage_ResNative_UAV) and
+ * _taaMotionVectors (RG16_FLOAT, a render target: R_HDR_RG16FImage_ResNative), cleared to
+ * 0 once after it is made (recordTaaClears) and never drawn. A session that never
+ * accumulates never makes them; their first make bumps no generation (as _currentRender).
+ *
  * Threads: create on the GUI thread in phase B before the render thread starts (as the
  * headless target); releaseAll on the GUI thread in teardown step 2; everything else on
  * the render thread.
@@ -223,6 +241,11 @@ private:
     nvrhi::TextureHandle deinterleavedOcclusion;
     // LP6.5b (C71): the HDR copy, once a frame has needed it
     nvrhi::TextureHandle currentRender;
+    // LP6.6 (C73): the progressive TAA's, once a frame has accumulated
+    nvrhi::TextureHandle taaResolved;
+    nvrhi::TextureHandle taaFeedback1;
+    nvrhi::TextureHandle taaFeedback2;
+    nvrhi::TextureHandle taaMotionVectors;
   };
 
   nvrhi::IDevice* m_device = nullptr;
@@ -232,6 +255,10 @@ private:
   // SSAO: made with the targets from then on
   bool m_currentRenderWanted = false;
   bool m_normalsWanted = false;
+  // LP6.6 (C73): a frame accumulated a TAA history: the TAA targets are made with the
+  // others from then on; the motion vectors made since their last clear
+  bool m_taaWanted = false;
+  bool m_taaVectorsCleared = false;
   nvrhi::Format m_depthFormat = nvrhi::Format::D24S8;
   Targets m_targets;
   nvrhi::BufferHandle m_histogram;
@@ -277,6 +304,14 @@ public:
    * whether they exist.
    */
   bool ensureNormals();
+  /**
+   * LP6.6 (C73, the director's reading (1)), render thread: the four TAA targets at the
+   * targets' extent, made now when they are not, and made again with the targets from
+   * then on; whether they exist.
+   */
+  bool ensureTaaTargets();
+  // LP6.6 (C73), render thread: _taaMotionVectors cleared to 0 once after each make
+  void recordTaaClears(nvrhi::ICommandList& commandList);
 
   // render thread: a resource of the frame's (the headless target) that frame and later
   // ones no longer use, held until the frames before have finished; and their release
@@ -318,6 +353,8 @@ private:
   // not, or nullopt), and _currentRender at an extent
   std::optional<std::string> makeNormals(Targets& targets) const;
   nvrhi::TextureHandle makeCurrentRender(vk::Extent2D extent) const;
+  // LP6.6: the four TAA targets into targets at their extent (why not, or nullopt)
+  std::optional<std::string> makeTaaTargets(Targets& targets) const;
 
   deleteCopyAndMove(FrameResources);
 };

@@ -101,6 +101,15 @@ bool FramePacer::cameraMoving(const FrameClock::time_point now) const
          && now - *m_lastCameraMove < StillTimerDelay;
 }
 
+std::optional<FrameClock::time_point> FramePacer::movingUntil() const
+{
+  if (!m_lastCameraMove)
+  {
+    return std::nullopt;
+  }
+  return *m_lastCameraMove + StillTimerDelay;
+}
+
 std::uint64_t FramePacer::stillTimerFirings() const
 {
   return m_stillTimerFirings;

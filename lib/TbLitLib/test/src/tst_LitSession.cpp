@@ -380,8 +380,8 @@ using namespace std::chrono_literals;
 // counts (C64), LP6.2's three parts of lists_ms (C65), caster sets made and tiles drawn
 // again for an image (C66, D169), LP6.4a's texture heaps, their bytes and the dedicated
 // slot textures (C68 (a)), LP6.4b's evictions, floored slots, in-place feeds and arena
-// bytes moved (C68 (b)-(d))
-constexpr auto FrameLogFields = std::size_t{122};
+// bytes moved (C68 (b)-(d)), LP6.6's TAA history (C73)
+constexpr auto FrameLogFields = std::size_t{123};
 
 // LP2.0, T0.2: the validation layer's id of "Vertex attribute at location N not consumed
 // by vertex shader" (mirror.json M-PIPE-DEFECT-01), as this machine's layer names it
@@ -4028,7 +4028,7 @@ namespace
 // only) into a test game root; LP4.2a: and the ambient pass's probe path; LP3.1 (C60):
 // and the shadow-atlas interactions (one pair of blob files for the six), which the cases
 // that run with shadows draw with
-constexpr auto Lp2Programs = std::array<int, 26>{
+constexpr auto Lp2Programs = std::array<int, 27>{
   EngineBuiltinColor,
   EngineBuiltinTextureVertexColor,
   EngineBuiltinInteraction,
@@ -4058,7 +4058,9 @@ constexpr auto Lp2Programs = std::array<int, 26>{
   EngineBuiltinSmallGeometryBuffer,
   EngineNamedSsaoDeinterleave,
   EngineNamedSsaoCompute,
-  EngineNamedSsaoBlur};
+  EngineNamedSsaoBlur,
+  // LP6.6 (C73): the progressive TAA's resolve
+  EngineBuiltinTaaResolve};
 
 // the light stand-ins (a white light of no falloff: the default light shaders the
 // fixture map's lights reach) and a lit translucent material, written into the root
@@ -20567,7 +20569,10 @@ TEST_CASE("LitSession arena compaction on a GPU (LP6.4b)", "[.][litgpu3]")
       REQUIRE(rows[i].size() == FrameLogFields);
       if (rows[i][1] == "compaction")
       {
-        compactionRows.push_back(rows[i][FrameLogFields - 1]);
+        // LP6.6: arena_moved_bytes by name (taa_history is the last column since)
+        const auto moved = std::size_t(
+          std::ranges::find(rows[0], std::string{"arena_moved_bytes"}) - rows[0].begin());
+        compactionRows.push_back(rows[i][moved]);
       }
     }
     std::cout << fmt::format(
@@ -22493,6 +22498,1052 @@ TEST_CASE("LitSession bumpyenvironment2 on a GPU (LP6.5b)", "[.][litgpu4]")
     "LP6.5b C72: the warning \"{}\"; {} frame rows with gpu_gbuffer_ms; case {:.1f} s\n",
     warnings[0],
     timed,
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+}
+
+namespace
+{
+
+/**
+ * LP6.6 (C73): a headless 160 × 120 session with validation over a root, the progressive
+ * TAA and SSAO as asked, the stage pass off; without shadows (the LP6.5a ambient picture:
+ * the interactions skipped too) or with them (the LP3.3 shadow scenes: the interactions
+ * drawn).
+ */
+std::unique_ptr<LitSession> taaSession(
+  const VulkanInstance& instance,
+  Events& events,
+  MaterialService& service,
+  const std::filesystem::path& root,
+  const bool taa,
+  const bool ssao,
+  const std::filesystem::path& frameLog = {},
+  const bool startPipelines = true,
+  const bool shadows = false)
+{
+  auto options = SessionOptions{};
+  options.validation = true;
+  options.gamePath = root;
+  options.frameLogPath = frameLog;
+  options.requestStartPipelines = startPipelines;
+  options.skipShadowsForTesting = !shadows;
+  options.ssaoForTesting = ssao;
+  options.progressiveAaForTesting = taa;
+  auto session =
+    LitSession::create(
+      instance.handles(), VK_NULL_HANDLE, 160, 120, options, events.sink(), 7, &service)
+    | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  session->skipShaderPassesForTesting(true);
+  session->skipInteractionsForTesting(!shadows);
+  return session;
+}
+
+// LP6.6: what a frame did, read by the every-frame hook at the next frame's start (the
+// last frame's stats, convergence, lists and records), with the frame's own start, extent
+// and the bytes its start uploaded (read by the hook in that frame)
+struct TaaFrame
+{
+  FrameClock::time_point start;
+  std::uint32_t width = 0;
+  std::uint64_t startUploads = 0;
+  CameraState camera;
+  std::size_t index = 0;
+  std::array<float, 2> jitter = {0.0f, 0.0f};
+  bool taaRan = false;
+  std::size_t taaPending = 0;
+  bool listsRebuilt = false;
+  bool tonemapResolved = false;
+  std::size_t history = 0;
+  bool settled = false;
+  bool exact = false;
+  bool ssaoRan = false;
+  std::array<float, 2> ssaoOffset = {0.0f, 0.0f};
+  std::size_t tilesDrawn = 0;
+  std::size_t tilesRelocated = 0;
+  bool shadowsMoving = false;
+  std::vector<ScreenRect> scissors;
+  std::vector<int> lods;
+  EngineTaaConstants constants;
+};
+
+struct TaaTally
+{
+  std::mutex mutex;
+  std::vector<TaaFrame> frames;
+  std::optional<FrameClock::time_point> lastStart;
+  std::uint32_t lastWidth = 0;
+  std::uint64_t lastUploads = 0;
+  // copy the last frame's targets at the next frame's start, before its passes
+  bool capture = false;
+  std::vector<std::pair<std::string, nvrhi::StagingTextureHandle>> stagings;
+
+  std::vector<TaaFrame> copy()
+  {
+    const auto lock = std::scoped_lock{mutex};
+    return frames;
+  }
+};
+
+const auto TaaCaptured = std::array<std::string_view, 3>{
+  frame_resource::CurrentRenderLdr,
+  frame_resource::CurrentRenderHdr,
+  frame_resource::TaaResolved};
+
+void tallyTaa(LitSession& session, const std::shared_ptr<TaaTally>& tally)
+{
+  session.setEveryFrameHookForTesting([tally](RenderFrameAccess& access) {
+    const auto& stats = access.passes.lastStats();
+    auto frame = TaaFrame{};
+    frame.camera = stats.camera;
+    frame.index = stats.taaIndex;
+    frame.jitter = stats.taaJitter;
+    frame.taaRan = stats.taaRan;
+    frame.taaPending = stats.taaPendingPipelines;
+    frame.listsRebuilt = stats.listsRebuilt;
+    frame.tonemapResolved = access.tonemap.lastStats().taaResolved;
+    frame.history = access.convergence.taaHistory;
+    frame.settled = access.convergence.settled();
+    frame.exact = access.convergence.otherTermsHold();
+    frame.ssaoRan = stats.ssaoRan;
+    frame.ssaoOffset = stats.ssaoConstants.pixelOffset;
+    frame.tilesDrawn = stats.tilesDrawn;
+    frame.tilesRelocated = stats.tilesRelocated;
+    frame.shadowsMoving = stats.shadowsMoving;
+    frame.constants = stats.taaConstants;
+    for (const auto& light : access.passes.lists().lights)
+    {
+      frame.scissors.push_back(light.scissor);
+    }
+    for (const auto& record : access.passes.shadowLights())
+    {
+      frame.lods.push_back(record.lod);
+    }
+    const auto lock = std::scoped_lock{tally->mutex};
+    if (tally->lastStart)
+    {
+      frame.start = *tally->lastStart;
+      frame.width = tally->lastWidth;
+      frame.startUploads = tally->lastUploads;
+      tally->frames.push_back(std::move(frame));
+    }
+    tally->lastStart = access.frameStart;
+    tally->lastWidth = access.frame.extent().width;
+    tally->lastUploads = access.bytesUploaded;
+    if (tally->capture)
+    {
+      tally->capture = false;
+      for (const auto name : TaaCaptured)
+      {
+        const auto resource = access.frame.find(name);
+        if (!resource || !resource->texture)
+        {
+          continue;
+        }
+        const auto& desc = resource->texture->getDesc();
+        auto staging = access.device.createStagingTexture(
+          nvrhi::TextureDesc{}
+            .setWidth(desc.width)
+            .setHeight(desc.height)
+            .setFormat(desc.format),
+          nvrhi::CpuAccessMode::Read);
+        access.commandList.copyTexture(
+          staging, nvrhi::TextureSlice{}, resource->texture, nvrhi::TextureSlice{});
+        tally->stagings.emplace_back(std::string{name}, std::move(staging));
+      }
+    }
+  });
+}
+
+// the tally's captured targets, read in a later frame (RGBA16F as floats, RGBA8 / 255)
+std::map<std::string, TargetImage, std::less<>> taaCaptured(
+  LitSession& session, TaaTally& tally)
+{
+  auto out = std::map<std::string, TargetImage, std::less<>>{};
+  auto stagings = std::vector<std::pair<std::string, nvrhi::StagingTextureHandle>>{};
+  {
+    const auto lock = std::scoped_lock{tally.mutex};
+    stagings.swap(tally.stagings);
+  }
+  const auto read = inFrame(session, [&](RenderFrameAccess& access) {
+    access.device.waitForIdle();
+    for (auto& [name, staging] : stagings)
+    {
+      const auto& desc = staging->getDesc();
+      auto image = TargetImage{};
+      image.width = desc.width;
+      image.height = desc.height;
+      image.channels = 4;
+      image.values.resize(std::size_t(desc.width) * desc.height * 4);
+      auto pitch = std::size_t{0};
+      const auto* bytes =
+        static_cast<const std::uint8_t*>(access.device.mapStagingTexture(
+          staging, nvrhi::TextureSlice{}, nvrhi::CpuAccessMode::Read, &pitch));
+      for (std::uint32_t y = 0; bytes && y < desc.height; ++y)
+      {
+        const auto* row = bytes + y * pitch;
+        auto* into = image.values.data() + std::size_t(y) * desc.width * 4;
+        for (std::uint32_t x = 0; x < desc.width * 4; ++x)
+        {
+          into[x] = desc.format == nvrhi::Format::RGBA16_FLOAT
+                      ? halfToFloat(reinterpret_cast<const std::uint16_t*>(row)[x])
+                      : float(row[x]) / 255.0f;
+        }
+      }
+      if (bytes)
+      {
+        access.device.unmapStagingTexture(staging);
+      }
+      staging = nullptr;
+      out.emplace(name, std::move(image));
+    }
+  });
+  CHECK(read);
+  return out;
+}
+
+/**
+ * Waits for a frame whose status is settled with the whole history (16 frames), at least
+ * frames frames after framesPresented was mark (the status of a frame drawn before a
+ * change is not taken for the change's).
+ */
+bool taaSettles(
+  LitSession& session,
+  const std::uint64_t mark,
+  const std::uint64_t frames,
+  const std::chrono::milliseconds timeout = 20000ms)
+{
+  return waitFor(
+    [&] {
+      const auto status = session.status();
+      return status.frames >= mark + frames && status.settled && status.taaOn
+             && status.taaHistory == EngineTaa.historyFrames;
+    },
+    timeout,
+    false);
+}
+
+// waits until a frame's status shows an unsettled history of at least frames
+bool taaAccumulates(LitSession& session, const std::size_t frames)
+{
+  return waitFor(
+    [&] {
+      const auto status = session.status();
+      return !status.settled && status.taaHistory >= frames;
+    },
+    10000ms,
+    false);
+}
+
+/**
+ * The 16 frames of a history after the frame at, which reset it: their indices 1-16 in a
+ * row (the frames between them plain), each resolved with its jitter, the lists kept, the
+ * scissors and the shadow LODs the first's; the frames they span. Empty when no history
+ * of 16 follows.
+ */
+std::vector<TaaFrame> historyAfter(
+  const std::vector<TaaFrame>& frames, const std::size_t at)
+{
+  auto first = std::optional<std::size_t>{};
+  for (auto i = at + 1; i < frames.size(); ++i)
+  {
+    if (frames[i].index == 1)
+    {
+      first = i;
+      break;
+    }
+  }
+  if (!first || *first + EngineTaa.historyFrames > frames.size())
+  {
+    return {};
+  }
+  return {
+    frames.begin() + std::ptrdiff_t(*first),
+    frames.begin() + std::ptrdiff_t(*first + EngineTaa.historyFrames)};
+}
+
+// a history's 16 frames as C73 draws them
+void checkHistory(const std::vector<TaaFrame>& history, const bool ssao)
+{
+  REQUIRE(history.size() == EngineTaa.historyFrames);
+  for (std::size_t i = 0; i < history.size(); ++i)
+  {
+    const auto& frame = history[i];
+    CAPTURE(i);
+    CHECK(frame.index == i + 1);
+    CHECK(frame.taaRan);
+    CHECK(frame.taaPending == 0u);
+    CHECK(frame.history == i + 1);
+    CHECK(frame.jitter == engineTaaPixelOffset(i + 1));
+    CHECK(frame.constants.inputPixelOffset == frame.jitter);
+    CHECK(frame.constants.newFrameWeight == (i == 0 ? 1.0f : 0.1f));
+    CHECK(frame.tonemapResolved);
+    CHECK(frame.exact);
+    CHECK(frame.settled == (i + 1 == history.size()));
+    // K57: the jitter never rebuilds the lists, nor moves a scissor or a shadow LOD
+    CHECK_FALSE(frame.listsRebuilt);
+    CHECK(frame.scissors == history.front().scissors);
+    CHECK(frame.lods == history.front().lods);
+    CHECK(frame.tilesDrawn == 0u);
+    CHECK(frame.tilesRelocated == 0u);
+    CHECK(frame.camera == history.front().camera);
+    if (ssao)
+    {
+      CHECK(frame.ssaoRan);
+      CHECK(frame.ssaoOffset == frame.jitter);
+    }
+  }
+}
+
+double msBetween(const FrameClock::time_point a, const FrameClock::time_point b)
+{
+  return std::chrono::duration<double, std::milli>(b - a).count();
+}
+
+} // namespace
+
+/**
+ * LP6.6 (C73, D181, A53, P8.4, P8.12, P8.20, K57, Q46): the progressive TAA on the LP6.5a
+ * fixture (the unlit box before the east wall: its outline the picture's edges) and the
+ * LP3.3 shadow scene: (a) after the camera stops and every other term holds, 16 jittered
+ * frames resolved at the pacer's rate, the 16th settled, then no frame; the resolved
+ * picture differs from the plain one on the edges and equals it on the flat interiors,
+ * and holds after the 16th; (b) a camera move, a resize, a texture arrival and the
+ * shadows' settle each reset the history, which starts again; (c) the pending rule: the
+ * plain picture and an unconverged frame until blob 89 is made; (d) K57: no lists build,
+ * scissor or shadow LOD moves with the jitter; (e) TAA off (the default): the plain
+ * frame, no TAA target; (f) Stop. Hidden: it needs a GPU and the game's blobs.
+ */
+TEST_CASE("LitSession the progressive TAA on a GPU (LP6.6)", "[.][litgpu4]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto gamePath = std::filesystem::path{gamePathValue};
+  const auto started = std::chrono::steady_clock::now();
+  namespace fr = frame_resource;
+  // LP6.5a's views: the east wall with the unlit box at the centre (columns 64-95, rows
+  // 44-75), and the baked corner
+  const auto wallView = litCamera({200, 0, 64}, {1, 0, 0}, {0, 0, 1});
+  const auto cornerView = litCamera({230, -60, 30}, {0, -1, 0}, {0, 0, 1});
+  const auto boxEdge = [](const std::uint32_t x, const std::uint32_t y) {
+    // within 2 pixels of the box's outline or the target's border
+    const auto nearOutline = x + 2 >= 64 && x <= 97 && y + 2 >= 44 && y <= 77
+                             && !(x >= 66 && x < 94 && y >= 46 && y < 74);
+    return nearOutline || x < 2 || y < 2 || x >= 158 || y >= 118;
+  };
+
+  SECTION("C73: (a) 16 frames after the stop, then none; (d) K57; (e) TAA off; (f) Stop")
+  {
+    const auto root = assembleLitRoot(gamePath);
+    REQUIRE_FALSE(root.empty());
+    writeLp65aBake(root);
+    const auto logPath =
+      std::filesystem::temp_directory_path() / "TbLitLibTest-lp66-frame-log.csv";
+    std::filesystem::remove(logPath);
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    auto plain = std::optional<TargetFrame>{};
+    auto plainMadeTaa = true;
+    auto frames = std::vector<TaaFrame>{};
+    auto captured = std::map<std::string, TargetImage, std::less<>>{};
+    auto held = std::optional<LdrImage>{};
+    auto idleFrames = std::uint64_t{0};
+    auto lastMove = FrameClock::time_point{};
+    auto resolvedDesc = nvrhi::TextureDesc{};
+    auto vectorsDesc = nvrhi::TextureDesc{};
+    auto feedbackDesc = nvrhi::TextureDesc{};
+    auto account = GpuMemoryAccount{};
+    auto status = SessionStatus{};
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      // the walls' image a flat colour (the feed's override): their interiors are flat,
+      // so that the resolve can differ from the plain picture only on the box's outline
+      {
+        const auto wallKey = stageImage(*service, "textures/lp1b/wall", 2);
+        REQUIRE(wallKey);
+        REQUIRE(
+          service
+            ->setImageOverride(wallKey->name, constantOverride(64, 64, {150, 140, 120}))
+            .is_success());
+        REQUIRE(waitForFeed(*service));
+      }
+
+      // (e) TAA off (the TbLitLib default): the plain picture of the same scene and view
+      {
+        auto events = Events{};
+        auto session = taaSession(instance, events, *service, root, false, false);
+        session->setExposed(true);
+        REQUIRE(waitFor(
+          [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+          5000ms,
+          false));
+        REQUIRE(session->offerSnapshot(lp22aSnapshot(lp65aMapText(), root, 7, 1)));
+        plain = settledTargets(
+          *session, wallView, {fr::CurrentRenderHdr, fr::CurrentRenderLdr});
+        REQUIRE(plain);
+        REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+          plainMadeTaa = access.frame.find(fr::TaaResolved).has_value()
+                         || access.frame.find(fr::TaaMotionVectors).has_value();
+        }));
+        CHECK_FALSE(session->status().taaOn);
+        teardown(*session);
+        CHECK(session->deviceMemoryAllocations() == 0);
+        CHECK(events.count(SessionEvent::Error) == 0u);
+        CHECK(events.count(SessionEvent::Warning) == 0u);
+      }
+
+      auto events = Events{};
+      auto session = taaSession(instance, events, *service, root, true, false, logPath);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp65aMapText(), root, 7, 1)));
+      // both views settled once (their images and pipelines made), then the corner
+      REQUIRE(settledTargets(*session, wallView, {}));
+      REQUIRE(settledTargets(*session, cornerView, {}));
+      auto tally = std::make_shared<TaaTally>();
+      tallyTaa(*session, tally);
+      REQUIRE(inFrame(*session, [](RenderFrameAccess&) {}));
+      // (a) the camera stops at the wall: its history (the move's frame and 16 more),
+      // then nothing for 5 s
+      const auto beforeMove = session->framesPresented();
+      lastMove = FrameClock::now();
+      session->setCamera(wallView);
+      REQUIRE(taaSettles(*session, beforeMove, 17));
+      status = session->status();
+      const auto atSixteen = session->framesPresented();
+      std::this_thread::sleep_for(5000ms);
+      idleFrames = session->framesPresented() - atSixteen;
+      // the 16th frame's targets, copied at the next frame's start, and that frame's LDR:
+      // the readback's frame keeps the history (no jitter, no resolve)
+      {
+        const auto lock = std::scoped_lock{tally->mutex};
+        tally->capture = true;
+      }
+      held = session->readbackLdrForTesting();
+      REQUIRE(held);
+      session->setEveryFrameHookForTesting({});
+      captured = taaCaptured(*session, *tally);
+      frames = tally->copy();
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        resolvedDesc = access.frame.find(fr::TaaResolved)->texture->getDesc();
+        vectorsDesc = access.frame.find(fr::TaaMotionVectors)->texture->getDesc();
+        feedbackDesc = access.frame.find(fr::TaaFeedback2)->texture->getDesc();
+        account = accountOf(access);
+      }));
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      // (f) Stop: every allocation freed
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      CHECK(events.count(SessionEvent::Warning) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+    messages.print("LP6.6 C73 (a), validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+
+    // (e) the plain frame: no history, no resolve, no TAA target
+    REQUIRE(plain);
+    CHECK(plain->frame.lit.taaIndex == 0u);
+    CHECK_FALSE(plain->frame.lit.taaRan);
+    CHECK(plain->frame.convergence.taaHistory == 0u);
+    CHECK_FALSE(plain->frame.convergence.taaHistoryShort);
+    CHECK_FALSE(plain->frame.tonemap.taaResolved);
+    CHECK_FALSE(plainMadeTaa);
+
+    // (a) the wall's frames after the stop: the move's (plain), then the history
+    auto wall = std::vector<TaaFrame>{};
+    for (const auto& frame : frames)
+    {
+      if (frame.camera == wallView && frame.start >= lastMove)
+      {
+        wall.push_back(frame);
+      }
+    }
+    REQUIRE(wall.size() >= 17u);
+    CHECK(wall.front().index == 0u);
+    CHECK_FALSE(wall.front().taaRan);
+    CHECK(wall.front().history == 0u);
+    CHECK(wall.front().jitter == std::array<float, 2>{0.0f, 0.0f});
+    CHECK(wall.front().ssaoOffset == std::array<float, 2>{0.0f, 0.0f});
+    CHECK_FALSE(wall.front().tonemapResolved);
+    CHECK_FALSE(wall.front().settled);
+    CHECK(wall.front().listsRebuilt);
+    const auto history = historyAfter(wall, 0);
+    checkHistory(history, false);
+    auto plainBetween = std::size_t{0};
+    for (std::size_t i = 1; i < wall.size() && wall[i].index != 1; ++i)
+    {
+      plainBetween += wall[i].index == 0 ? 1 : 0;
+    }
+    const auto spanMs = msBetween(history.front().start, history.back().start);
+    const auto startMs = msBetween(lastMove, history.front().start);
+    CHECK(startMs >= 200.0);
+    // the pacer's rate: 30 Hz at most
+    CHECK(spanMs >= 15.0 * 33.0);
+    CHECK(idleFrames == 0u);
+    CHECK(status.exactSettled);
+    CHECK(status.taaHistory == 16u);
+
+    // the targets: _taaResolved and the feedbacks RGBA16F, the vectors RG16F, 160 × 120
+    CHECK(resolvedDesc.width == 160u);
+    CHECK(resolvedDesc.height == 120u);
+    CHECK(resolvedDesc.format == nvrhi::Format::RGBA16_FLOAT);
+    CHECK(resolvedDesc.isUAV);
+    CHECK(feedbackDesc.format == nvrhi::Format::RGBA16_FLOAT);
+    CHECK(feedbackDesc.isUAV);
+    CHECK(vectorsDesc.format == nvrhi::Format::RG16_FLOAT);
+    CHECK(vectorsDesc.width == 160u);
+
+    // the resolved picture against the plain one: the edges differ, the flat interiors
+    // do not (within 1/255); the 16th's picture holds in the kept frame
+    REQUIRE(captured.contains(fr::CurrentRenderLdr));
+    REQUIRE(captured.contains(fr::TaaResolved));
+    const auto& ldr16 = captured.find(fr::CurrentRenderLdr)->second;
+    const auto& resolved16 = captured.find(fr::TaaResolved)->second;
+    const auto& plainLdr = plain->image(fr::CurrentRenderLdr);
+    const auto& plainHdr = plain->image(fr::CurrentRenderHdr);
+    REQUIRE(ldr16.width == plainLdr.width);
+    REQUIRE(ldr16.height == plainLdr.height);
+    auto differing = 0;
+    auto differingOffEdge = 0;
+    auto differingAt = std::vector<std::string>{};
+    auto flat = 0;
+    auto flatWorst = 0.0f;
+    auto hdrFlatWorst = 0.0;
+    for (std::uint32_t y = 0; y < ldr16.height; ++y)
+    {
+      for (std::uint32_t x = 0; x < ldr16.width; ++x)
+      {
+        auto worst = 0.0f;
+        for (std::uint32_t c = 0; c < 3; ++c)
+        {
+          worst = std::max(worst, std::abs(ldr16.at(x, y, c) - plainLdr.at(x, y, c)));
+        }
+        const auto differs = worst > 1.5f / 255.0f;
+        differing += differs ? 1 : 0;
+        differingOffEdge += differs && !boxEdge(x, y) ? 1 : 0;
+        if (differs)
+        {
+          differingAt.push_back(fmt::format("({} {}: {:.0f}/255)", x, y, worst * 255.0f));
+        }
+        const auto box = x >= 67 && x < 93 && y >= 47 && y < 73;
+        const auto openWall = (x >= 4 && x < 156 && y >= 4 && y < 116)
+                              && !(x >= 56 && x < 104 && y >= 36 && y < 84);
+        if (box || openWall)
+        {
+          ++flat;
+          flatWorst = std::max(flatWorst, worst);
+          for (std::uint32_t c = 0; c < 3; ++c)
+          {
+            const auto p = double(plainHdr.at(x, y, c));
+            hdrFlatWorst = std::max(
+              hdrFlatWorst,
+              std::abs(double(resolved16.at(x, y, c)) - p) / std::max(p, 1e-3));
+          }
+        }
+      }
+    }
+    CAPTURE(fmt::format("{}", fmt::join(differingAt, " ")));
+    CHECK(differing > 0);
+    CHECK(differingOffEdge == 0);
+    CHECK(flat > 10000);
+    CHECK(flatWorst <= 1.5f / 255.0f);
+    REQUIRE(held->width == ldr16.width);
+    auto heldDiffers = 0;
+    for (std::uint32_t y = 0; y < ldr16.height; ++y)
+    {
+      for (std::uint32_t x = 0; x < ldr16.width; ++x)
+      {
+        for (std::uint32_t c = 0; c < 4; ++c)
+        {
+          const auto byte = held->rgba[(std::size_t(y) * held->width + x) * 4 + c];
+          heldDiffers += std::lround(ldr16.at(x, y, c) * 255.0f) != long(byte) ? 1 : 0;
+        }
+      }
+    }
+    CHECK(heldDiffers == 0);
+
+    // the frame log: taa_history 1-16 on the history's rows, gpu_taa_ms on each, settled
+    // only from the 16th
+    const auto rows = readCsv(logPath);
+    REQUIRE(rows.size() >= 2u);
+    REQUIRE(rows[0].size() == FrameLogFields);
+    const auto historyColumn = frameLogColumn(rows, "taa_history");
+    const auto taaMsColumn = frameLogColumn(rows, "gpu_taa_ms");
+    const auto settledColumn = frameLogColumn(rows, "settled");
+    REQUIRE(historyColumn == FrameLogFields - 1);
+    REQUIRE(taaMsColumn < FrameLogFields);
+    auto shortSettled = 0;
+    auto timedRows = 0;
+    auto historyRows = 0;
+    auto taaMs = std::vector<double>{};
+    for (std::size_t i = 1; i < rows.size(); ++i)
+    {
+      if (rows[i].size() != FrameLogFields || rows[i][1] != "frame")
+      {
+        continue;
+      }
+      const auto h = std::stoi(rows[i][historyColumn]);
+      // a frame that drew nothing (before the snapshot, the stop's last) has no history
+      // to accumulate: its TAA term holds
+      const auto drew = std::stoi(rows[i][frameLogColumn(rows, "draws")]) > 0;
+      shortSettled += drew && h < 16 && rows[i][settledColumn] == "1" ? 1 : 0;
+      if (h >= 1 && h <= 16)
+      {
+        ++historyRows;
+        if (!rows[i][taaMsColumn].empty())
+        {
+          ++timedRows;
+          taaMs.push_back(std::stod(rows[i][taaMsColumn]));
+        }
+      }
+    }
+    CHECK(shortSettled == 0);
+    CHECK(historyRows >= 16);
+    CHECK(timedRows >= 16);
+    std::sort(taaMs.begin(), taaMs.end());
+    std::cout << fmt::format(
+      "LP6.6 C73 (a): {} wall frames after the stop: the move's plain, {} plain between, "
+      "the history's first {:.0f} ms after the stop, its 16 frames spanning {:.0f} ms "
+      "({:.1f} "
+      "ms a frame), then {} frames in 5 s; jitters {} ... {}; the edges: {} pixels "
+      "differ "
+      "from the plain picture by more than 1.5/255 ({} off the edge band); the flat "
+      "interiors' {} pixels within {:.2f}/255 (HDR relative {:.4f}); the kept frame's "
+      "LDR "
+      "{} bytes off the 16th's; the targets {} x {} (resolved, feedbacks RGBA16F, "
+      "vectors "
+      "RG16F), render targets {} B; gpu_taa_ms {} rows, median {:.3f}\n",
+      wall.size(),
+      plainBetween,
+      startMs,
+      spanMs,
+      spanMs / 15.0,
+      idleFrames,
+      fmt::join(history.front().jitter, " "),
+      fmt::join(history.back().jitter, " "),
+      differing,
+      differingOffEdge,
+      flat,
+      flatWorst * 255.0f,
+      hdrFlatWorst,
+      heldDiffers,
+      resolvedDesc.width,
+      resolvedDesc.height,
+      account.renderTargetBytes,
+      timedRows,
+      taaMs.empty() ? 0.0 : taaMs[taaMs.size() / 2]);
+    std::filesystem::remove(logPath);
+  }
+
+  SECTION("C73: (b) a camera move, a resize and a texture arrival reset the history")
+  {
+    const auto root = assembleLitRoot(gamePath);
+    REQUIRE_FALSE(root.empty());
+    writeLp65aBake(root);
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    auto frames = std::vector<TaaFrame>{};
+    auto resolvedDesc = nvrhi::TextureDesc{};
+    auto vectorsDesc = nvrhi::TextureDesc{};
+    auto overriddenAt = FrameClock::time_point{};
+    auto resizedAt = FrameClock::time_point{};
+    auto movedAt = FrameClock::time_point{};
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = taaSession(instance, events, *service, root, true, true);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp65aMapText(), root, 7, 1)));
+      const auto wallKey = stageImage(*service, "textures/lp1b/wall", 2);
+      REQUIRE(wallKey);
+      REQUIRE(settledTargets(*session, wallView, {}));
+      REQUIRE(settledTargets(*session, cornerView, {}));
+      REQUIRE(settledTargets(*session, wallView, {}));
+      auto tally = std::make_shared<TaaTally>();
+      tallyTaa(*session, tally);
+      REQUIRE(inFrame(*session, [](RenderFrameAccess&) {}));
+
+      // a camera move while the corner's history accumulates
+      session->setCamera(cornerView);
+      REQUIRE(taaAccumulates(*session, 4));
+      auto mark = session->framesPresented();
+      movedAt = FrameClock::now();
+      session->setCamera(wallView);
+      REQUIRE(taaSettles(*session, mark, 17));
+
+      // a resize while the corner's history accumulates
+      session->setCamera(cornerView);
+      REQUIRE(taaAccumulates(*session, 4));
+      mark = session->framesPresented();
+      resizedAt = FrameClock::now();
+      session->resizeHeadlessForTesting(200, 150);
+      REQUIRE(waitFor(
+        [&] { return session->renderTargetGenerationForTesting() == 2u; },
+        5000ms,
+        false));
+      REQUIRE(taaSettles(*session, mark, 17));
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        resolvedDesc = access.frame.find(fr::TaaResolved)->texture->getDesc();
+        vectorsDesc = access.frame.find(fr::TaaMotionVectors)->texture->getDesc();
+      }));
+
+      // a texture arrival while the wall's history accumulates: the wall's diffuse image
+      // answered again (the feed's override of its slot)
+      session->setCamera(wallView);
+      REQUIRE(taaAccumulates(*session, 4));
+      mark = session->framesPresented();
+      overriddenAt = FrameClock::now();
+      REQUIRE(
+        service->setImageOverride(wallKey->name, constantOverride(64, 64, {90, 160, 220}))
+          .is_success());
+      REQUIRE(waitForFeed(*service));
+      REQUIRE(waitFor(
+        [&] {
+          const auto lock = std::scoped_lock{tally->mutex};
+          return std::ranges::any_of(tally->frames, [&](const TaaFrame& frame) {
+            return frame.start >= overriddenAt && frame.startUploads > 0;
+          });
+        },
+        10000ms,
+        false));
+      REQUIRE(taaSettles(*session, mark, 17));
+      REQUIRE(inFrame(*session, [](RenderFrameAccess&) {}));
+      session->setEveryFrameHookForTesting({});
+      frames = tally->copy();
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      CHECK(events.count(SessionEvent::Warning) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+    messages.print("LP6.6 C73 (b), validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+
+    // each reset's frame: plain (index 0, no resolve, the tonemap on the HDR target), its
+    // history 0, after accumulated frames; then a history of 16 again
+    const auto resetAfter = [&](const FrameClock::time_point at, const auto& isReset) {
+      for (std::size_t i = 0; i < frames.size(); ++i)
+      {
+        if (frames[i].start >= at && isReset(frames[i]))
+        {
+          return std::optional{i};
+        }
+      }
+      return std::optional<std::size_t>{};
+    };
+    const auto move =
+      resetAfter(movedAt, [&](const TaaFrame& f) { return f.camera == wallView; });
+    const auto resize =
+      resetAfter(resizedAt, [](const TaaFrame& f) { return f.width == 200u; });
+    const auto arrival =
+      resetAfter(overriddenAt, [](const TaaFrame& f) { return f.startUploads > 0; });
+    auto lines = std::vector<std::string>{};
+    for (const auto& [name, at] :
+         {std::pair{"a camera move", move},
+          std::pair{"a resize", resize},
+          std::pair{"a texture arrival", arrival}})
+    {
+      CAPTURE(name);
+      REQUIRE(at);
+      REQUIRE(*at > 0u);
+      const auto& before = frames[*at - 1];
+      const auto& reset = frames[*at];
+      CHECK(before.index >= 4u);
+      CHECK(before.history >= 4u);
+      CHECK(reset.index == 0u);
+      CHECK_FALSE(reset.taaRan);
+      CHECK(reset.history == 0u);
+      CHECK(reset.jitter == std::array<float, 2>{0.0f, 0.0f});
+      CHECK_FALSE(reset.tonemapResolved);
+      CHECK_FALSE(reset.settled);
+      const auto again = historyAfter(frames, *at);
+      checkHistory(again, true);
+      lines.push_back(fmt::format(
+        "{}: the frame after history {} drew plain (index {}, history {}), the history's "
+        "first {} frames later, its 16th {:.0f} ms after the reset",
+        name,
+        before.history,
+        reset.index,
+        reset.history,
+        again.empty()
+          ? 0
+          : std::ranges::find_if(
+              frames, [&](const TaaFrame& f) { return f.start == again.front().start; })
+              - frames.begin() - std::ptrdiff_t(*at),
+        again.empty() ? 0.0 : msBetween(reset.start, again.back().start)));
+    }
+    // the resize remade the targets at the new extent
+    CHECK(resolvedDesc.width == 200u);
+    CHECK(resolvedDesc.height == 150u);
+    CHECK(vectorsDesc.width == 200u);
+    std::cout << fmt::format(
+      "LP6.6 C73 (b): {}; the TAA targets after the resize {} x {}\n",
+      fmt::join(lines, "; "),
+      resolvedDesc.width,
+      resolvedDesc.height);
+  }
+
+  SECTION("C73: (b) the shadows' settle resets the history; (d) K57's LODs and scissors")
+  {
+    const auto root = assembleLp3Root(gamePath);
+    REQUIRE_FALSE(root.empty());
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    auto frames = std::vector<TaaFrame>{};
+    auto firings = std::uint64_t{0};
+    auto turnedAt = FrameClock::time_point{};
+    const auto ahead = litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1});
+    const auto behind = litCamera({-200, 0, 128}, {-1, 0, 0}, {0, 0, 1});
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session =
+        taaSession(instance, events, *service, root, true, false, {}, true, true);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(
+        lp3Snapshot(lp3MapText("lp3_vacated.map"), root, "lp3_vacated.map", 1)));
+      REQUIRE(settledShadowFrame(*session, ahead, 2, false));
+      std::this_thread::sleep_for(300ms);
+      const auto before = session->stillTimerFiringsForTesting();
+      auto tally = std::make_shared<TaaTally>();
+      tallyTaa(*session, tally);
+      REQUIRE(inFrame(*session, [](RenderFrameAccess&) {}));
+      // turned round: the moving frames hold the layout, the still timer's settles it
+      turnedAt = FrameClock::now();
+      session->setCamera(behind);
+      REQUIRE(waitFor(
+        [&] { return session->stillTimerFiringsForTesting() == before + 1; },
+        5000ms,
+        false));
+      // the still timer's frame, drawn or about to be, and the history after it
+      REQUIRE(taaSettles(*session, session->framesPresented(), 16));
+      REQUIRE(inFrame(*session, [](RenderFrameAccess&) {}));
+      session->setEveryFrameHookForTesting({});
+      firings = session->stillTimerFiringsForTesting() - before;
+      frames = tally->copy();
+      teardown(*session, std::nullopt);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      CHECK(events.count(SessionEvent::Warning) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+    messages.print("LP6.6 C73 (b) the shadows' settle, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+
+    CHECK(firings == 1u);
+    auto turned = std::vector<TaaFrame>{};
+    for (const auto& frame : frames)
+    {
+      if (frame.camera == behind && frame.start >= turnedAt)
+      {
+        turned.push_back(frame);
+      }
+    }
+    REQUIRE(turned.size() >= 18u);
+    // the moving frames: plain, the shadows held
+    CHECK(turned.front().shadowsMoving);
+    CHECK(turned.front().index == 0u);
+    // the still timer's frame (the first that settles the shadows): plain, history 0
+    const auto settle =
+      std::ranges::find_if(turned, [](const TaaFrame& f) { return !f.shadowsMoving; });
+    REQUIRE(settle != turned.end());
+    const auto settleAt = std::size_t(settle - turned.begin());
+    CHECK(settle->index == 0u);
+    CHECK(settle->history == 0u);
+    CHECK_FALSE(settle->taaRan);
+    CHECK(settle->tilesDrawn + settle->tilesRelocated > 0u);
+    CHECK(settle->exact);
+    for (std::size_t i = 0; i < settleAt; ++i)
+    {
+      CHECK(turned[i].index == 0u);
+      CHECK(turned[i].shadowsMoving);
+    }
+    // then the history: its tiles cached, its LODs and scissors the settle's (K57)
+    const auto history = historyAfter(turned, settleAt);
+    checkHistory(history, false);
+    CHECK(history.front().lods == settle->lods);
+    CHECK(history.front().scissors == settle->scissors);
+    CHECK_FALSE(history.front().lods.empty());
+    std::cout << fmt::format(
+      "LP6.6 C73 (b) the shadows' settle: {} moving frames (plain), the still timer's "
+      "frame plain with {} tiles drawn and {} relocated, the history's first {} frame(s) "
+      "after it, its 16 frames with LODs ({}) and {} scissors unchanged, no tile drawn; "
+      "the still timer fired {} time(s)\n",
+      settleAt,
+      settle->tilesDrawn,
+      settle->tilesRelocated,
+      historyAfter(turned, settleAt).empty()
+        ? 0
+        : std::size_t(
+            std::ranges::find_if(
+              turned, [&](const TaaFrame& f) { return f.start == history.front().start; })
+            - turned.begin())
+            - settleAt,
+      fmt::join(history.front().lods, " "),
+      history.front().scissors.size(),
+      firings);
+  }
+
+  SECTION("C73: (c) the pending rule: the plain picture, unconverged until 89 is made")
+  {
+    const auto root = assembleLitRoot(gamePath);
+    REQUIRE_FALSE(root.empty());
+    writeLp65aBake(root);
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    auto control = std::optional<TargetFrame>{};
+    auto heldFrame = std::optional<TargetFrame>{};
+    auto again = std::optional<TargetFrame>{};
+    auto released = std::optional<TargetFrame>{};
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      {
+        auto events = Events{};
+        auto session = taaSession(instance, events, *service, root, false, false);
+        session->setExposed(true);
+        REQUIRE(waitFor(
+          [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+          5000ms,
+          false));
+        REQUIRE(session->offerSnapshot(lp22aSnapshot(lp65aMapText(), root, 7, 1)));
+        control = settledTargets(
+          *session, wallView, {fr::CurrentRenderHdr, fr::CurrentRenderLdr});
+        REQUIRE(control);
+        teardown(*session);
+      }
+      auto events = Events{};
+      auto session = taaSession(instance, events, *service, root, true, false, {}, false);
+      auto* compiler = session->pipelineCompilerForTesting();
+      REQUIRE(compiler);
+      // every pipeline the frames draw with asked for first, so that the held resolve,
+      // asked for by the first frame, is the queue's last
+      const auto depth = session->deviceFacts().d24s8Supported ? nvrhi::Format::D24S8
+                                                               : nvrhi::Format::D32S8;
+      auto keys = litStartPipelineKeys(depth, false);
+      keys.push_back(tonemapPipelineKey(depth));
+      keys.push_back(blitPipelineKey(nvrhi::Format::RGBA8_UNORM));
+      compiler->request(
+        keys, {TonemapComputePrograms.begin(), TonemapComputePrograms.end()});
+      auto gate = std::make_shared<ParseGate>();
+      gate->close();
+      const auto openGate = OpenAtExit{gate};
+      compiler->setBeforeCreateProgramForTesting([gate](const int program) {
+        if (program == EngineBuiltinTaaResolve)
+        {
+          gate->pass();
+        }
+      });
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp65aMapText(), root, 7, 1)));
+      // a frame that waits for nothing but the resolve's pipeline
+      const auto waitsForResolve = [](const RenderFrameAccess& access) {
+        auto rest = access.convergence;
+        rest.pipelinesPending = false;
+        return access.passes.lastStats().taaPendingPipelines == 1u
+               && access.convergence.pipelinesPending && rest.otherTermsHold()
+               && access.images.pending() == 0 && !access.images.hasLoading()
+               && !access.arenas.pending();
+      };
+      heldFrame = frameTargets(
+        *session,
+        wallView,
+        {fr::CurrentRenderHdr, fr::CurrentRenderLdr},
+        waitsForResolve);
+      REQUIRE(heldFrame);
+      again = frameTargets(*session, wallView, {fr::CurrentRenderHdr}, waitsForResolve);
+      REQUIRE(again);
+      gate->open();
+      released = settledTargets(*session, wallView, {fr::CurrentRenderLdr});
+      REQUIRE(released);
+      teardown(*session);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      CHECK(events.count(SessionEvent::Warning) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+    messages.print("LP6.6 C73 (c), validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+
+    for (const auto* frame : {&*heldFrame, &*again})
+    {
+      CHECK(frame->frame.lit.taaPendingPipelines == 1u);
+      CHECK(frame->frame.lit.pendingPipelines >= 1u);
+      CHECK(frame->frame.lit.taaIndex == 0u);
+      CHECK_FALSE(frame->frame.lit.taaRan);
+      CHECK(frame->frame.convergence.taaHistory == 0u);
+      CHECK_FALSE(frame->frame.settled);
+      CHECK_FALSE(frame->frame.tonemap.taaResolved);
+      // the plain picture: the TAA-off session's exactly
+      CHECK(
+        frame->image(fr::CurrentRenderHdr).values
+        == control->image(fr::CurrentRenderHdr).values);
+    }
+    CHECK(released->frame.settled);
+    CHECK(released->frame.convergence.taaHistory == 16u);
+    CHECK(released->frame.tonemap.taaResolved);
+    CHECK(released->frame.lit.taaPendingPipelines == 0u);
+    std::cout << fmt::format(
+      "LP6.6 C73 (c) held: pending_pipelines {} (the resolve's 1), the plain picture, "
+      "unsettled; released: settled with a history of {}\n",
+      heldFrame->frame.lit.pendingPipelines,
+      released->frame.convergence.taaHistory);
+  }
+
+  std::cout << fmt::format(
+    "LP6.6 [litgpu4] case: {:.1f} s\n",
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
 }
 

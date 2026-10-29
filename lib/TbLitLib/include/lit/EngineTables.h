@@ -588,6 +588,9 @@ EngineConstantBlock engineBlitBlock();
 // LP6.5a (C70, SC812): SsaoConstants (SsaoPass_cb.h, the struct of the three SSAO
 // shaders' c_Ssao at b1), 272 bytes
 EngineConstantBlock engineSsaoBlock();
+// LP6.6 (C73, SC821): TemporalAntiAliasingConstants (TemporalAntiAliasingPass_cb.h:25-47,
+// taa.cs.hlsl's g_TemporalAA at b0), 148 bytes
+EngineConstantBlock engineTaaBlock();
 
 /**
  * The block a binding layout's uniforms item holds: the layout's renderparm set
@@ -1157,5 +1160,25 @@ struct EngineFrameDefaults
   bool useMaskedOcclusionCulling = true;
 };
 inline constexpr auto EngineFrame = EngineFrameDefaults{};
+
+/**
+ * LP6.6 (C73, D181, SC818-SC823): the progressive TAA's values. The engine's cvars at
+ * their defaults (RenderSystem_init.cpp:311-315): r_taaJitter "1" (the MSAA table),
+ * r_taaEnableHistoryClamping "1", r_taaClampingFactor "1.0", r_taaNewFrameWeight "0.1",
+ * r_taaMaxRadiance "10000"; r_antiAliasing "2" (TAA, :86: on in sessions, D21). The
+ * preview's own (A53, Q46): a history accumulates historyFrames jittered frames after the
+ * camera stops and then settles (0.9^15, about 21 % of the first frame, remains), where
+ * the engine's never converges; parity keeps r_antiAliasing 0 and r_taaJitter 0 (K57).
+ */
+struct EngineTaaDefaults
+{
+  int taaJitter = 1;
+  bool enableHistoryClamping = true;
+  float clampingFactor = 1.0f;
+  float newFrameWeight = 0.1f;
+  float maxRadiance = 10000.0f;
+  std::size_t historyFrames = 16;
+};
+inline constexpr auto EngineTaa = EngineTaaDefaults{};
 
 } // namespace tb::lit

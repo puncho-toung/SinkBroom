@@ -107,9 +107,11 @@ static_assert(sizeof(EngineSsaoConstants) == 272);
  * SsaoPass.cpp:65) whose viewport is the whole target (x1 = y1 = 0, x2 = width - 1, y2 =
  * height - 1): viewportOrigin (x1, y1), viewportSize (w, h); pixelOffset (0, 0), the
  * r_taaJitter 0 picture (GetCurrentPixelOffset, TemporalAntiAliasingPass.cpp:304-307:
- * the preview has no tr.frameCount % 8 sample-window jitter, K54); matClipToView
- * idRenderMatrix::Inverse of the projection matrix's 16 floats (unjittered: no TAA before
- * LP6.6); matWorldToView the view's modelViewMatrix bytes (Transpose twice);
+ * the preview has no tr.frameCount % 8 sample-window jitter, K54), or (LP6.6, C70, C73,
+ * P8.20) the frame's TAA jitter on a frame that accumulates a history, whose view is then
+ * the jittered one (engineJitteredView); matClipToView idRenderMatrix::Inverse of the
+ * view's projection matrix's 16 floats; matWorldToView the view's modelViewMatrix bytes
+ * (Transpose twice);
  * matViewToWorld 0 (unused); clipToView (P[2·4+3] / P[0], P[2·4+3] / P[1·4+1]);
  * invQuantizedGbufferSize 1 / (4 ceil(w / 4), 4 ceil(h / 4)); quantizedViewportOrigin
  * the quarter origin × 4 (0, 0); amount r_ssaoAmount 4, invBackgroundViewDepth 1 /
@@ -118,7 +120,10 @@ static_assert(sizeof(EngineSsaoConstants) == 272);
  * radiusToScreen 0.5 · h · |P[1·4+1]|. Pure.
  */
 EngineSsaoConstants engineSsaoConstants(
-  const LitView& view, std::uint32_t width, std::uint32_t height);
+  const LitView& view,
+  std::uint32_t width,
+  std::uint32_t height,
+  const std::array<float, 2>& pixelOffset = {0.0f, 0.0f});
 
 /**
  * LP6.5a (C70, SC812): SsaoPass::Render's dispatches for a target of width × height: the
@@ -128,6 +133,84 @@ EngineSsaoConstants engineSsaoConstants(
  */
 std::array<std::array<std::uint32_t, 3>, 3> engineSsaoDispatches(
   std::uint32_t width, std::uint32_t height);
+
+/**
+ * LP6.6 (C73, SC821): TemporalAntiAliasingConstants
+ * (TemporalAntiAliasingPass_cb.h:25-47), the 148 bytes taa.cs.hlsl reads at b0
+ * (engineTaaBlock's offsets): idRenderMatrix its row-major float4x4, idVec2 its float2.
+ */
+struct EngineTaaConstants
+{
+  std::array<float, 16> reprojectionMatrix = {};
+  std::array<float, 2> inputViewOrigin = {0.0f, 0.0f};
+  std::array<float, 2> inputViewSize = {0.0f, 0.0f};
+  std::array<float, 2> outputViewOrigin = {0.0f, 0.0f};
+  std::array<float, 2> outputViewSize = {0.0f, 0.0f};
+  std::array<float, 2> inputPixelOffset = {0.0f, 0.0f};
+  std::array<float, 2> outputTextureSizeInv = {0.0f, 0.0f};
+  std::array<float, 2> inputOverOutputViewSize = {0.0f, 0.0f};
+  std::array<float, 2> outputOverInputViewSize = {0.0f, 0.0f};
+  float clampingFactor = 0.0f;
+  float newFrameWeight = 0.0f;
+  float pqC = 0.0f;
+  float invPqC = 0.0f;
+  std::uint32_t stencilMask = 0;
+
+  bool operator==(const EngineTaaConstants&) const = default;
+};
+static_assert(sizeof(EngineTaaConstants) == 148);
+
+/**
+ * LP6.6 (C73, SC818, Q46): GetCurrentPixelOffset's MSAA table (r_taaJitter 1,
+ * TemporalAntiAliasingPass.cpp:281-287), in pixels: the offset of a history's frame
+ * index (1-16), offsets[( index - 1 ) % 8]; (0, 0) for index 0 (a plain frame, the None
+ * case :304-307). Pure.
+ */
+std::array<float, 2> engineTaaPixelOffset(std::size_t index);
+
+/**
+ * LP6.6 (C73, SC821): TemporalResolve's constants (TemporalAntiAliasingPass.cpp:189-216)
+ * for a view whose viewport is the whole width × height target and whose render size is
+ * the target's: reprojectionMatrix 0 (never set), the input and output view origins (0,
+ * 0) and sizes (w, h) (viewport.width() + 1), inputPixelOffset the frame's jitter,
+ * outputTextureSizeInv 1 / (w, h), the two size ratios (1, 1), clampingFactor 1
+ * (r_taaEnableHistoryClamping 1, r_taaClampingFactor 1), newFrameWeight
+ * r_taaNewFrameWeight 0.1 or 1 on a history's first frame (the feedback not valid), pqC
+ * r_taaMaxRadiance 10000 clamped to [1e-4, 1e8] and invPqC its inverse, stencilMask 0.
+ * Pure.
+ */
+EngineTaaConstants engineTaaConstants(
+  std::uint32_t width,
+  std::uint32_t height,
+  const std::array<float, 2>& pixelOffset,
+  bool firstFrame);
+
+// LP6.6 (C73): the resolve's dispatch over the target, ( w + 15 ) / 16 × ( h + 15 ) / 16
+// groups (TemporalAntiAliasingPass.cpp:235-238). Pure.
+std::array<std::uint32_t, 2> engineTaaDispatch(std::uint32_t width, std::uint32_t height);
+
+/**
+ * LP6.6 (C73, P8.20, K57): R_SetupProjectionMatrix's jitter (GLMatrix.cpp:446-450:
+ * xoffset -2 jx / W and yoffset -2 jy / H at P[2·4+0] and P[2·4+1]) applied to a
+ * row-major clip matrix of the view (an MVP, the projection render matrix) whose row 3 is
+ * the projection's ( 0, 0, -1, 0 ) times the model-view: row 0 += ( 2 jx / W ) · row 3
+ * and row 1 += ( 2 jy / H ) · row 3, which is ( P + E ) · MV in exact arithmetic. Pure.
+ */
+EngineMat4 engineJitteredClipMatrix(
+  const EngineMat4& matrix,
+  const std::array<float, 2>& pixelOffset,
+  int width,
+  int height);
+
+/**
+ * LP6.6 (C73): the view with R_SetupProjectionMatrix( viewDef, true )'s jittered
+ * projection: projectionMatrix[2·4+0] = -2 jx / W and [2·4+1] = -2 jy / H, and
+ * projectionRenderMatrix and worldMvp made from it again (tr_frontend_main.cpp:904-907);
+ * every other field the view's. The draws' parms read it (PROJMATRIX, TG_SCREEN's planes,
+ * bumpyenvironment2's matrices, SSAO's matClipToView); the lists, their scissors and the
+ * shadow LODs read the unjittered view (K57). Pure.
+ */
+LitView engineJitteredView(const LitView& view, const std::array<float, 2>& pixelOffset);
 
 // what one frame's lit passes read and record into (render thread)
 struct LitFrameInputs
@@ -208,6 +291,19 @@ struct LitFrameInputs
   // ssaoForTesting): pass 3 fills the G-buffer's normals for pass 4, whose _ao0 the
   // ambient pass reads at t4; off: the frame is LP6.4b's
   bool ssao = false;
+  // ----- LP6.6 (C73, D181, the director's reading (3)): the progressive TAA -----
+  // the frame's index in the history the render thread keeps: 0 a plain frame (no
+  // jitter, no resolve); 1-16 an accumulated frame, whose draws take the jitter
+  // engineTaaPixelOffset( index ) and whose pass 11 resolves it into _taaResolved (1 the
+  // history's first, weight 1); taaHold: a settled history of 16 kept (the frame draws
+  // plain and resolves nothing: the tonemap reads the kept _taaResolved)
+  std::size_t taaIndex = 0;
+  bool taaHold = false;
+  // P8.12: the session's TAA is on and the resolve's pipeline is pending (the frame
+  // draws plain, unconverged by pendingPipelines)
+  bool taaPending = false;
+  // pass 11's timer (TimedPass::Taa), or null
+  nvrhi::ITimerQuery* taaTimer = nullptr;
 };
 
 // C16's columns of the lit passes, per frame (LP2.2b logs them)
@@ -531,6 +627,21 @@ struct LitFrameStats
   // LP6.2 (C66): the caster sets the lists build made this frame (0 when the lists were
   // kept or every set was: FrontendLists::casterSetsBuilt)
   std::size_t casterSetsBuilt = 0;
+  // ----- LP6.6 (C73, D181, P8.12, P8.20): the progressive TAA, pass 11 -----
+  // the frame's history index (LitFrameInputs::taaIndex), the pixel offset its draws took
+  // ((0, 0) on a plain or kept frame), whether pass 11 ran (the constants written, the
+  // dispatch recorded into _taaResolved and the feedback), its timer, its pipeline
+  // pending this frame (also in pendingPipelines), whether a failed pipeline, binding set
+  // or target disabled it (D9, disabledReason), its CPU record time (inside
+  // record_other_ms) and the constants it wrote
+  std::size_t taaIndex = 0;
+  std::array<float, 2> taaJitter = {0.0f, 0.0f};
+  bool taaRan = false;
+  bool taaTimed = false;
+  std::size_t taaPendingPipelines = 0;
+  bool taaDisabled = false;
+  double taaRecordMs = 0.0;
+  EngineTaaConstants taaConstants;
 };
 
 // a recorded draw (setDrawLogForTesting)
@@ -885,6 +996,11 @@ private:
   {
     const LitFrameInputs* inputs = nullptr;
     LitView view;
+    // LP6.6 (C73, P8.20, K57): on a frame that accumulates a TAA history, the pixel
+    // offset and the jittered view (engineJitteredView) the draws' parms take; the lists,
+    // their scissors and the shadow LODs read view
+    std::optional<std::array<float, 2>> jitter;
+    LitView drawView;
     nvrhi::IFramebuffer* framebuffer = nullptr;
     FramebufferFormats formats;
     // LP3.1 (C59): a pass's own viewport (pass 6's tile), else the view's
@@ -1011,6 +1127,17 @@ private:
   std::uint64_t m_ssaoSetsGeneration = 0;
   nvrhi::BufferHandle m_ssaoConstants;
   nvrhi::ITexture* m_ssaoImage = nullptr;
+  // LP6.6 (C73, the director's reading (1)): pass 11's two binding sets (the feedbacks
+  // swapped between them: TemporalAntiAliasingPass.cpp:166-168) and the render-target
+  // generation and resolved target they were made for, its TemporalAntiAliasingConstants
+  // volatile buffer (16 versions, CreateParameters::numConstantBufferVersions) and its
+  // border-0 bilinear sampler (:120-123); made at the first resolve, released in
+  // releaseAll
+  std::array<nvrhi::BindingSetHandle, 2> m_taaSets;
+  std::uint64_t m_taaSetsGeneration = 0;
+  const nvrhi::ITexture* m_taaSetsTarget = nullptr;
+  nvrhi::BufferHandle m_taaConstants;
+  nvrhi::SamplerHandle m_taaSampler;
   // LP6.1 (C64): the frame's ambient view sets, and AMBIENT_LIGHTING_IBL's layouts (every
   // ambient program's, kept at the first ambient record's resolution) they are made for
   std::vector<AmbientViewSet> m_ambientViewSets;
@@ -1295,6 +1422,20 @@ private:
    * made. Render thread.
    */
   bool recordSsao(Frame& frame, const std::array<ComputePipelineLookup, 3>& pipelines);
+  /**
+   * LP6.6 (C73, SC821): pass 11, TemporalAAPass (RenderBackend.cpp:5237-5285) on a frame
+   * that accumulates: blob 89 through the compile thread's compute pipeline, the four
+   * targets made at its first run (FrameResources::ensureTaaTargets), the motion vectors
+   * cleared once, the constants (engineTaaConstants) into the volatile buffer, the set of
+   * the frame's index (the feedbacks swapped per accumulated frame), one dispatch.
+   * Whether it ran; a pending pipeline counts as pending (the frame unconverged), a
+   * failed one disables it (D9).
+   */
+  bool recordTaa(Frame& frame);
+  // LP6.6 (C73, P8.20): RB_SetMVP of a lit pass's draw: the frame's jitter applied in
+  // clip space (engineJitteredClipMatrix) on a frame that accumulates, the matrix as it
+  // is otherwise; pass 6 and the full-screen identity draws call setMvp directly
+  void setDrawMvp(const Frame& frame, const EngineMat4& mvp);
   /**
    * LP3.1 (C59, D142, D145, D147, SC714-SC720): ShadowAtlasPass (RenderBackend.cpp:
    * 3603-3922): nothing under r_skipShadows (the test's stand-in) or without view lights
