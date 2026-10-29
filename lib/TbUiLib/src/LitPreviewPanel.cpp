@@ -84,6 +84,7 @@ constexpr auto StatusTimerName = "LitPreviewPanel_StatusTimer";
 constexpr auto DebugViewName = "LitPreviewPanel_DebugView";
 // LP6.6 (C74, D182): the overrides' controls and their settings' suffixes; Force ambient
 // in steps of 0.05 (the director's reading (2))
+constexpr auto OverridesName = "LitPreviewPanel_Overrides";
 constexpr auto SsaoName = "LitPreviewPanel_Ssao";
 constexpr auto ProgressiveAaName = "LitPreviewPanel_ProgressiveAa";
 constexpr auto ForceAmbientName = "LitPreviewPanel_ForceAmbient";
@@ -611,7 +612,14 @@ void LitPreviewPanel::createGui()
   overridesLayout->addWidget(forceAmbientLabel);
   overridesLayout->addWidget(m_forceAmbientSlider, 1);
   overridesLayout->addWidget(m_forceAmbientValue);
-  surfacePageLayout->addLayout(overridesLayout);
+  // one row of a fixed height, as the status line: a value shown never resizes the
+  // surface (which would draw frames)
+  auto* overridesRow = new QWidget{};
+  overridesRow->setObjectName(OverridesName);
+  overridesRow->setLayout(overridesLayout);
+  overridesRow->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+  overridesRow->setFixedHeight(overridesRow->sizeHint().height());
+  surfacePageLayout->addWidget(overridesRow);
   restoreOverrides();
   connect(m_ssaoBox, &QCheckBox::toggled, this, [this] { overridesChanged(); });
   connect(m_progressiveAaBox, &QCheckBox::toggled, this, [this] { overridesChanged(); });

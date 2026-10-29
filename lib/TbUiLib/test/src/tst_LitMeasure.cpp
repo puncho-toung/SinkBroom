@@ -1241,9 +1241,10 @@ constexpr auto TonemapCpuMs = std::size_t{101};
 constexpr auto UploadMs = std::size_t{102};
 constexpr auto SubmitMs = std::size_t{103};
 constexpr auto RecordOtherMs = std::size_t{104};
-// LP6.0 (C65): the reserved GPU columns LP6.5a fills (passes 3 and 4)
+// LP6.0 (C65): the reserved GPU columns LP6.5a fills (passes 3 and 4) and LP6.6 (pass 11)
 constexpr auto GpuGbufferMs = std::size_t{105};
 constexpr auto GpuSsaoMs = std::size_t{106};
+constexpr auto GpuTaaMs = std::size_t{107};
 // LP6.1 (C64): the draw records held and resolved, after LP6.0's reserved GPU columns
 constexpr auto RecordsHeld = std::size_t{108};
 constexpr auto RecordResolves = std::size_t{109};
@@ -1548,22 +1549,25 @@ struct StartMeasure
     return r ? std::chrono::duration<double, std::milli>(r->at - pressed).count() : -1.0;
   }
 
-  // the D77 frames, from the records
+  // the D77 frames, from the records; LP6.6 (C73, P8.14): the exact ones, whose every
+  // term but the progressive TAA's holds (SessionStatus::exactSettled), so that a Start's
+  // settle is its exact picture's and the 16 frames of the history after it are not
+  // counted (the Progressive AA row has them)
   void findSettled()
   {
     const auto first =
-      std::ranges::find_if(records, [](const auto& r) { return r.status.settled; });
+      std::ranges::find_if(records, [](const auto& r) { return r.status.exactSettled; });
     if (first != records.end())
     {
       firstSettledFrame = first->status.frames;
       firstSettledMs = msOf(firstSettledFrame);
     }
-    if (records.empty() || !records.back().status.settled)
+    if (records.empty() || !records.back().status.exactSettled)
     {
       return;
     }
     auto index = records.size() - 1;
-    while (index > 0 && records[index - 1].status.settled)
+    while (index > 0 && records[index - 1].status.exactSettled)
     {
       --index;
     }
@@ -1696,8 +1700,9 @@ public:
 
   /**
    * Sizes the window so that the surface page's container will be SurfaceWidth ×
-   * SurfaceHeight device pixels: the page's height less the status line and the page
-   * layout's spacing, measured on the Start page, which has the stack's size.
+   * SurfaceHeight device pixels: the page's height less the status line, (LP6.6) the
+   * overrides' row and the page layout's spacing between them, measured on the Start
+   * page, which has the stack's size.
    */
   void sizeForSurface()
   {
@@ -1707,15 +1712,19 @@ public:
     auto* startPage = panel->findChild<QWidget*>("LitPreviewPanel_StartPage");
     auto* surfacePage = panel->findChild<QWidget*>("LitPreviewPanel_SurfacePage");
     auto* status = panel->findChild<QLabel*>("LitPreviewPanel_Status");
+    auto* overrides = panel->findChild<QWidget*>("LitPreviewPanel_Overrides");
     REQUIRE(startPage != nullptr);
     REQUIRE(surfacePage != nullptr);
     REQUIRE(status != nullptr);
+    REQUIRE(overrides != nullptr);
     const auto spacing = std::max(surfacePage->layout()->spacing(), 0);
     for (auto i = 0; i < 3; ++i)
     {
       QApplication::processEvents();
       const auto page = startPage->size();
-      const auto wantedPage = QSize{width, height + status->maximumHeight() + spacing};
+      const auto wantedPage = QSize{
+        width,
+        height + status->maximumHeight() + overrides->maximumHeight() + 2 * spacing};
       if (page == wantedPage)
       {
         break;
@@ -2250,14 +2259,16 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
   }
   REQUIRE(sampler.runUntil([&] { return sampler.quietlySettled(false); }, 60s));
   // §10's settled exact frame: from the last camera move to the first frame after it
-  // that is settled and stays so (every frame of the orbit may be settled already)
+  // that is settled and stays so (every frame of the orbit may be settled already);
+  // LP6.6 (C73, P8.14): settled without the TAA term (exactSettled), the first frame
+  // whose other terms hold, as before LP6.6
   const auto afterLastMove =
     std::ranges::find_if(sampler.frames, [&](const auto& r) { return r.at > lastMove; });
   REQUIRE(afterLastMove != sampler.frames.end());
   auto settledAfterMove = afterLastMove;
   for (auto it = afterLastMove; it != sampler.frames.end(); ++it)
   {
-    if (!it->status.settled)
+    if (!it->status.exactSettled)
     {
       settledAfterMove = std::next(it);
     }
@@ -2266,6 +2277,30 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
   const auto settleAfterMoveMs = millisecondsBetween(lastMove, settledAfterMove->at);
   const auto framesToSettle =
     std::size_t(std::distance(afterLastMove, settledAfterMove)) + 1;
+  // LP6.6 (C73, §10's "Progressive AA"): the history after the exact frame, its first and
+  // its 16th (settled) as the sampler saw them
+  auto taaFirst = sampler.frames.end();
+  auto taaLast = sampler.frames.end();
+  for (auto it = settledAfterMove; it != sampler.frames.end(); ++it)
+  {
+    if (it->status.taaHistory == 1 && taaFirst == sampler.frames.end())
+    {
+      taaFirst = it;
+    }
+    if (it->status.taaHistory == 16 && it->status.settled)
+    {
+      taaLast = it;
+      break;
+    }
+  }
+  REQUIRE(taaFirst != sampler.frames.end());
+  REQUIRE(taaLast != sampler.frames.end());
+  const auto taaFirstFrame = taaFirst->status.frames;
+  const auto taaLastFrame = taaLast->status.frames;
+  const auto taaFirstMs = millisecondsBetween(lastMove, taaFirst->at);
+  const auto taaLastMs = millisecondsBetween(lastMove, taaLast->at);
+  const auto taaStatus = taaLast->status;
+  const auto exactStatus = settledAfterMove->status;
 
   // idle: no trigger, no frame
   const auto framesBeforeIdle = sampler.lastFrames;
@@ -3078,10 +3113,75 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     interval.p95,
     pass(rate <= 30.5));
   summary += fmt::format(
-    "| Settled exact frame after the camera stops | {} ({} frames) | ≤ 250 ms | {} |\n",
+    "| Settled exact frame after the camera stops (the TAA term excluded, P8.14) | {} "
+    "({} "
+    "frames) | ≤ 250 ms | {} |\n",
     msText(settleAfterMoveMs),
     framesToSettle,
     pass(settleAfterMoveMs <= 250.0));
+  // LP6.6 (C73, §10): the history's 16 frames after the exact one, gpu_taa_ms each, the
+  // idle after; the orbit's frames plain (no history, no resolve); the TAA targets on the
+  // render-target line (C68 (e): _taaResolved and the two feedbacks RGBA16F, the vectors
+  // RG16F at the surface's size)
+  {
+    auto taaMs = std::vector<double>{};
+    for (auto frame = taaFirstFrame; frame <= taaLastFrame && frame <= firstRows.size();
+         ++frame)
+    {
+      if (const auto ms = firstRows[frame - 1].number(column::GpuTaaMs))
+      {
+        taaMs.push_back(*ms);
+      }
+    }
+    std::sort(taaMs.begin(), taaMs.end());
+    auto orbitTaa = std::size_t{0};
+    for (auto i = orbitBegin; i <= orbitEnd; ++i)
+    {
+      orbitTaa += firstRows[i].number(column::TaaHistory).value_or(0.0) > 0.0
+                      || firstRows[i].number(column::GpuTaaMs)
+                    ? 1
+                    : 0;
+    }
+    const auto w = std::uint64_t(SurfaceWidth);
+    const auto h = std::uint64_t(SurfaceHeight);
+    const auto taaTargets = w * h * 8 * 3 + w * h * 4;
+    const auto frames = taaLastFrame - taaFirstFrame + 1;
+    summary += fmt::format(
+      "| Progressive AA (LP6.6, C73) | after the orbit's last move: the exact frame at "
+      "{}, "
+      "the history's first at {} and its 16th (settled) at {}: {} frames over {:.0f} ms "
+      "({:.1f} ms a frame), gpu_taa_ms median {:.3f} (min {:.3f}, max {:.3f}, {} timed); "
+      "then {} frames in {} s; the orbit's {} frames: {} with a history or a resolve; "
+      "the "
+      "render targets {} at the exact frame, {} at the 16th (_taaResolved, two feedbacks "
+      "and the vectors {} at {} x {}), the account {}, the live figure {} | 16 frames "
+      "after the camera stops, then idle | {} |\n",
+      msText(settleAfterMoveMs),
+      msText(taaFirstMs),
+      msText(taaLastMs),
+      frames,
+      taaLastMs - taaFirstMs,
+      frames > 1 ? (taaLastMs - taaFirstMs) / double(frames - 1) : 0.0,
+      taaMs.empty() ? 0.0 : taaMs[taaMs.size() / 2],
+      taaMs.empty() ? 0.0 : taaMs.front(),
+      taaMs.empty() ? 0.0 : taaMs.back(),
+      taaMs.size(),
+      idleFrames,
+      std::chrono::duration_cast<std::chrono::seconds>(IdleTime).count(),
+      orbitEnd - orbitBegin + 1,
+      orbitTaa,
+      mb(double(exactStatus.vramRenderTargetBytes)),
+      mb(double(taaStatus.vramRenderTargetBytes)),
+      mb(double(taaTargets)),
+      w,
+      h,
+      mb(double(taaStatus.vramBytes)),
+      mb(double(taaStatus.vramLiveBytes)),
+      pass(frames == 16 && idleFrames == 0 && orbitTaa == 0));
+    CHECK(frames == 16u);
+    CHECK(orbitTaa == 0u);
+    CHECK(taaStatus.taaOn);
+  }
   summary += fmt::format(
     "| Device memory allocations | peak {} / {} / {} (first, second, third Start); "
     "after Stop {} / {} / {} | in the tens: the textures in heaps (LP6.4a), < 1024 "

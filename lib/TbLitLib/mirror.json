@@ -33268,7 +33268,160 @@
           "symbol": "FrameResources::makeTargets (_ao0, SSAO/DeinterleavedDepth, SSAO/DeinterleavedOcclusion)"
         }
       ],
-      "note": "LP6.5a (C70, D177, K54, P8.13, P8.20): the engine's SSAO samples its window with pixelOffset = GetCurrentPixelOffset( taaFrameCount ), which with r_taaJitter 1 (its default) is the MSAA pattern's offsets[ tr.frameCount % 8 ] even with TAA off, so its picture moves from frame to frame; the preview's pixelOffset is (0, 0), the r_taaJitter 0 picture, and its matClipToView the unjittered inverse projection (no TAA before LP6.6, then P8.20's rule). The parity shots (LP6.5c) run the engine with r_useSSAO 1 and r_taaJitter 0 (A55). The three compute shaders are found by name, not through the builtins table: the preview's named-program table (rows EngineNamedProgramBase + place, the FindShader defines in their order without USE_PUSH_CONSTANTS, the pass's own binding layouts after EngineBindingLayout::Num) goes through the compile thread as a builtin does (the blob by name, the permutation by the defines, D9's reflection against engineExpectedLayout); a missing blob or a mismatch disables the program with one warning naming the blob, and the pass with it (M-PASS-DIFF-05). The engine builds the layouts and pipelines in the pass's constructor and its sets with the pass; the preview's layouts and pipelines are the compile thread's (C20), its three sets the render thread's, made again on a new render-target generation and let go in teardown step 2 (not BindingSetCache's). _ao1 is not made (the new pass never reads it). The pass runs only in a session with SSAO (D177): the panel's switch is LP6.6's (C74)"
+      "note": "LP6.5a (C70, D177, K54, P8.13, P8.20): the engine's SSAO samples its window with pixelOffset = GetCurrentPixelOffset( taaFrameCount ), which with r_taaJitter 1 (its default) is the MSAA pattern's offsets[ tr.frameCount % 8 ] even with TAA off, so its picture moves from frame to frame; the preview's pixelOffset is (0, 0), the r_taaJitter 0 picture, and its matClipToView the unjittered inverse projection, on every frame that does not accumulate a TAA history (LP6.6, P8.20: on a frame that does, the frame's jitter and the jittered inverse projection, as the engine's taaFrameCount offset; parity runs without TAA). The parity shots (LP6.5c) run the engine with r_useSSAO 1 and r_taaJitter 0 (A55). The three compute shaders are found by name, not through the builtins table: the preview's named-program table (rows EngineNamedProgramBase + place, the FindShader defines in their order without USE_PUSH_CONSTANTS, the pass's own binding layouts after EngineBindingLayout::Num) goes through the compile thread as a builtin does (the blob by name, the permutation by the defines, D9's reflection against engineExpectedLayout); a missing blob or a mismatch disables the program with one warning naming the blob, and the pass with it (M-PASS-DIFF-05). The engine builds the layouts and pipelines in the pass's constructor and its sets with the pass; the preview's layouts and pipelines are the compile thread's (C20), its three sets the render thread's, made again on a new render-target generation and let go in teardown step 2 (not BindingSetCache's). _ao1 is not made (the new pass never reads it). The pass runs only in a session with SSAO (D177): the panel's switch is LP6.6's (C74)"
+    },
+    {
+      "id": "M-TAA-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/Passes/TemporalAntiAliasingPass.cpp",
+          "lines": [
+            151,
+            170
+          ],
+          "anchor": "TemporalAntiAliasingPass::Init: the two resolve binding sets",
+          "sha256": "b42475acb5215573790a3b4929a87e0a999e5541791e101dc991d6781421d123"
+        },
+        {
+          "file": "neo/renderer/Passes/TemporalAntiAliasingPass.cpp",
+          "lines": [
+            189,
+            239
+          ],
+          "anchor": "TemporalAntiAliasingPass::TemporalResolve",
+          "sha256": "b843ca6b71e5bf01fe6c7be3f3437413999b3f029fbced97711d9248595df1aa"
+        },
+        {
+          "file": "neo/renderer/Passes/TemporalAntiAliasingPass.cpp",
+          "lines": [
+            241,
+            258
+          ],
+          "anchor": "TemporalAntiAliasingPass::AdvanceFrame",
+          "sha256": "86970e935ff23d2dba5e4f936c70ea26c4caef0caea6b0cb33d4304c635b0a2d"
+        },
+        {
+          "file": "neo/renderer/Passes/TemporalAntiAliasingPass.cpp",
+          "lines": [
+            274,
+            309
+          ],
+          "anchor": "TemporalAntiAliasingPass::GetCurrentPixelOffset",
+          "sha256": "36fc9ee671d74cc8aaae75d567a48556813094e72ea9f154c697f15a640d55d3"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            5237,
+            5285
+          ],
+          "anchor": "idRenderBackend::TemporalAAPass",
+          "sha256": "44616a9647467bec626d04e87f4094889f2d6ed85af7bca654c97756e616cccb"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            5078,
+            5235
+          ],
+          "anchor": "idRenderBackend::DrawMotionVectors",
+          "sha256": "46dc0aac0eb42d46e3cec58f7565668446d5154595022e7cc95069e9d91fe5c7"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            6230,
+            6233
+          ],
+          "anchor": "DrawViewInternal: the tonemap's source while R_UseTemporalAA",
+          "sha256": "12ac4e61ea9aa86daaf3ccc23cfe51e19ee2cbae1037565fd16f6b30bd13eb8b"
+        },
+        {
+          "file": "neo/renderer/GLMatrix.cpp",
+          "lines": [
+            418,
+            466
+          ],
+          "anchor": "R_SetupProjectionMatrix: the jitter's xoffset and yoffset",
+          "sha256": "91ae2e1663f10412b98998ed18cde41fc1736a2fdf4ac0a08194203130b206d9"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            896,
+            910
+          ],
+          "anchor": "R_RenderView: the jittered and unjittered projections and MVPs",
+          "sha256": "d032874487a156191eaf29f252a34ad2d05863d7a424dd26ba7166aa75f08721"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::recordLitPasses (the frame's history index), RenderThread::converge (the TAA term, the reset, the re-trigger), RenderThread::runLoop (the start after the moving window)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordTaa, LitPasses::setDrawMvp, engineTaaPixelOffset, engineTaaConstants, engineTaaDispatch, engineJitteredClipMatrix, engineJitteredView"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineBindingLayoutDescs (TaaResolve), engineTaaBlock, TemporalAntiAliasingConstantsSize"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameResources.cpp",
+          "symbol": "FrameResources::ensureTaaTargets, makeTaaTargets, recordTaaClears"
+        },
+        {
+          "file": "lib/TbLitLib/src/TonemapPasses.cpp",
+          "symbol": "TonemapPasses::record (the source: _taaResolved while a history exists)"
+        }
+      ],
+      "note": "LP6.6 (C73, D181, A53, Q46, K57, K54, P8.4, P8.12, P8.20; SC818-SC823): the engine's TAA at r_antiAliasing 2 never converges: every frame is drawn with the projection jittered by GetCurrentPixelOffset( tr.frameCount ) (r_taaJitter 1: the MSAA table offsets[ frame % 8 ] of +-0.0625 ... +-0.4375 px), and the resolve (BUILTIN_TAA_RESOLVE, builtin/post/taa at SAMPLE_COUNT 1 and USE_CATMULL_ROM_FILTER 1) blends it into an exponential history at r_taaNewFrameWeight 0.1 (1 while prevViewsValid is false, the session's first frame), through camera-only motion vectors (0 while the camera is still) and with the light scissors and shadow LODs taken from the jittered MVP too. The preview's is an accumulation after the camera stops: a frame accumulates when the last frame's other convergence terms held, nothing changed at its start (the camera, cameraMoving's 200 ms window, the still timer's frame, the render-target generation, a snapshot, a chunk batch, the material table, a feed, an override, the uploads or a slot change, the test switches) and blob 89 is ready; its index runs 1 to 16, the jitter offsets[ ( index - 1 ) % 8 ], newFrameWeight 1 on the first and 0.1 after; the 16th settles (the FrameConvergence term taaHistoryShort keeps the frames before it unconverged and draws the next at the pacer's rate, or once the moving window ends), a 17th such frame keeps the history (no jitter, no resolve: the tonemap reads the kept _taaResolved), and a frame whose lists were built again or whose shadow tiles were drawn, cleared, relocated or redrawn while it accumulated (past the first) ends it. The stopped picture is the 16 frames' average by design (0.9^15, about 21 %, of the first remains). The jitter is applied at parm time as a clip-space offset (row 0 += ( 2 jx / W ) row 3, row 1 += ( 2 jy / H ) row 3: ( P + E ) MV of GLMatrix.cpp's P[2*4+0], P[2*4+1]) to every draw MVP but pass 6's and the full-screen identity draws, the prepass and pass 3 alike, and to PROJMATRIX, TG_SCREEN's planes and bumpyenvironment2's matrices through the jittered view; never to ListsKey, the lists' scissors or the shadow LODs, which read the unjittered view (K57: a parity shot of a TAA frame would need the engine's frame phase and history, SC822, so parity keeps r_antiAliasing 0 and r_taaJitter 0). The motion vectors are a cleared RG16F target, never drawn (blob 88 unused); the four targets are made at the first frame that accumulates and kept, remade on a resize; the two binding sets swap the feedbacks per accumulated frame (index 1 the first set), remade on the render-target generation and released in teardown step 2. The resolve's constants are pushed where the device allows 148 bytes (RenderProgs.cpp:398; EngineTables' size was 132 before LP6.6, no device's limit between). A pending 89 draws the plain picture, unconverged (M-PASS-DIFF-05); a failed one turns TAA off for the session (the compile thread's one notice)"
+    },
+    {
+      "id": "M-OVERRIDE-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            288,
+            288
+          ],
+          "anchor": "r_forceAmbient",
+          "sha256": "86c0f491ca67876e9179f5c7d42c10395d1c16c1c2628faae6ddd089d260587d"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            86,
+            86
+          ],
+          "anchor": "r_antiAliasing (TAA's default)",
+          "sha256": "aceaa6110f144218c8d28cad4521688fdfc389cc6d35bb2becc0e7c49a8633ee"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/include/lit/LitSession.h",
+          "symbol": "EngineFrameOverrides, SessionOptions::forceAmbientForTesting, sessionOverrides, LitSession::setOverrides"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "RenderThread::setOverrides (the latest-wins slot), RenderThread::runLoop (taken at a frame's start)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::setAmbientPassParms (AMBIENT_COLOR from LitFrameInputs::forceAmbient)"
+        },
+        {
+          "file": "lib/TbUiLib/src/LitPreviewPanel.cpp",
+          "symbol": "LitPreviewPanel::createGui (the three controls), restoreOverrides, overridesChanged"
+        }
+      ],
+      "note": "LP6.6 (C74, D182, A57, P8.27, D21, Q25, R4-1.13, R5.17): the engine's three settings the preview's panel exposes are archived cvars (r_useSSAO 1, r_antiAliasing 2 for TAA, r_forceAmbient 0.5, a float 0-1); the preview's EngineFrame stays the constexpr defaults table and each session carries a runtime copy of the three (EngineFrameOverrides: SSAO, Progressive AA, Force ambient), its defaults the engine's (asserted against EngineFrame), first from SessionOptions (ssaoForTesting, progressiveAaForTesting, forceAmbientForTesting: the TbLitLib tests' off, off, 0.5; the panel's for its sessions), then live through LitSession::setOverrides, stamped with the session generation (another's dropped) and put into the render thread's latest-wins slot, which the next frame takes at its start: SSAO switches passes 3 and 4 (their targets made at the first frame that needs them), Progressive AA starts or ends the TAA history, Force ambient sets AMBIENT_COLOR's rgb in the ambient pass; every change resets the history. The panel's controls (two check boxes and a slider in steps of 0.05 with its value) are panel state in QSettings through widgetSettingsPath, restored when the panel is made; the parity rows keep the defaults (SSAO on, TAA off, 0.5)"
     },
     {
       "id": "M-PARITY-09",
