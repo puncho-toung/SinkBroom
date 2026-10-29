@@ -23115,7 +23115,7 @@ TEST_CASE("LitSession the progressive TAA on a GPU (LP6.6)", "[.][litgpu4]")
     CHECK(shortSettled == 0);
     CHECK(historyRows >= 16);
     CHECK(timedRows >= 16);
-    std::sort(taaMs.begin(), taaMs.end());
+    std::ranges::sort(taaMs);
     std::cout << fmt::format(
       "LP6.6 C73 (a): {} wall frames after the stop: the move's plain, {} plain between, "
       "the history's first {:.0f} ms after the stop, its 16 frames spanning {:.0f} ms "

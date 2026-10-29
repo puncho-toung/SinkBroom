@@ -2313,13 +2313,15 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     CHECK(noTaa.taaHistory == 0u);
     CHECK(noTaa.overridesApplied == 2u);
     CHECK(darkStatus.overridesApplied == 3u);
-    // a change of the three controls is one live change each (5, 6, 7)
+    // a change of the three controls is one live change each (4, 5 and 6)
     CHECK(back.overridesApplied == 6u);
     const auto sum = [](const lit::LdrImage& image) {
       auto total = std::uint64_t{0};
-      for (std::size_t i = 0; i < image.rgba.size(); i += 4)
+      // red, green and blue; alpha left out
+      auto channel = std::size_t{0};
+      for (const auto value : image.rgba)
       {
-        total += std::uint64_t(image.rgba[i]) + image.rgba[i + 1] + image.rgba[i + 2];
+        total += channel++ % 4 < 3 ? std::uint64_t(value) : 0u;
       }
       return total;
     };

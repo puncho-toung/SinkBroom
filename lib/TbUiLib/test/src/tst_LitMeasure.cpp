@@ -3133,7 +3133,7 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
         taaMs.push_back(*ms);
       }
     }
-    std::sort(taaMs.begin(), taaMs.end());
+    std::ranges::sort(taaMs);
     auto orbitTaa = std::size_t{0};
     for (auto i = orbitBegin; i <= orbitEnd; ++i)
     {
