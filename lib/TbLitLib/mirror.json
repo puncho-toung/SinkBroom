@@ -22503,9 +22503,13 @@
         {
           "file": "lib/TbLitLib/src/LitPasses.cpp",
           "symbol": "LitPasses::bindBumpyEnvironment2 (units 4-6)"
+        },
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "the row O01 (its kind isolated, its reason)"
         }
       ],
-      "note": "LP6.5b (C72): the fork's radiance images are cubes (the probes' CF_NATIVE_HDR _spec images and _defaultUACRadiance; ambient_lighting_IBL samples them as TextureCube), but bumpyenvironment2.ps declares t4-t6 Texture2D and samples them by octahedral coordinates (its retail blob at USE_SSR 0 reflects three 2D images there): the engine binds a cube view in a 2D slot, which Vulkan leaves undefined (a validation error) and NVRHI's validation refuses as a 2D view of a cube. The preview binds _black at t4-t6: no radiance, so a blend-add reflect2 stage adds nothing (the GPU case's box is its control's to the bit). What the engine's GPU makes of the cube views is LP6.5c's engine shot of O01 to show; C72's 'octahedral radiance' has no octahedral image in this engine"
+      "note": "LP6.5b (C72): the fork's radiance images are cubes (the probes' CF_NATIVE_HDR _spec images and _defaultUACRadiance; ambient_lighting_IBL samples them as TextureCube), but bumpyenvironment2.ps declares t4-t6 Texture2D and samples them by octahedral coordinates (its retail blob at USE_SSR 0 reflects three 2D images there): the engine binds a cube view in a 2D slot, which Vulkan leaves undefined (a validation error) and NVRHI's validation refuses as a 2D view of a cube. The preview binds _black at t4-t6: no radiance, so a blend-add reflect2 stage adds nothing (the GPU case's box is its control's to the bit). What the engine's GPU makes of the cube views is LP6.5c's engine shot of O01 to show: the parity row O01 (M-PARITY-10, the ambient map's room O01, a reflect2-with-bump panel under its probe and a point light, r_skipAmbient 0 for its shot) is isolated under K59 with its recorded figures and the reason M-STAGE-DIFF-07 / E-LIT-19 (the reflect2 radiance black in the preview; the engine's cube-in-2D bind undefined); its engine shot is kept for the user's judgement; C72's 'octahedral radiance' has no octahedral image in this engine"
     },
     {
       "id": "M-PASS-11",
@@ -33265,6 +33269,192 @@
         }
       ],
       "note": "LP6.5a (C70, D177, K54, P8.13, P8.20): the engine's SSAO samples its window with pixelOffset = GetCurrentPixelOffset( taaFrameCount ), which with r_taaJitter 1 (its default) is the MSAA pattern's offsets[ tr.frameCount % 8 ] even with TAA off, so its picture moves from frame to frame; the preview's pixelOffset is (0, 0), the r_taaJitter 0 picture, and its matClipToView the unjittered inverse projection (no TAA before LP6.6, then P8.20's rule). The parity shots (LP6.5c) run the engine with r_useSSAO 1 and r_taaJitter 0 (A55). The three compute shaders are found by name, not through the builtins table: the preview's named-program table (rows EngineNamedProgramBase + place, the FindShader defines in their order without USE_PUSH_CONSTANTS, the pass's own binding layouts after EngineBindingLayout::Num) goes through the compile thread as a builtin does (the blob by name, the permutation by the defines, D9's reflection against engineExpectedLayout); a missing blob or a mismatch disables the program with one warning naming the blob, and the pass with it (M-PASS-DIFF-05). The engine builds the layouts and pipelines in the pass's constructor and its sets with the pass; the preview's layouts and pipelines are the compile thread's (C20), its three sets the render thread's, made again on a new render-target generation and let go in teardown step 2 (not BindingSetCache's). _ao1 is not made (the new pass never reads it). The pass runs only in a session with SSAO (D177): the panel's switch is LP6.6's (C74)"
+    },
+    {
+      "id": "M-PARITY-09",
+      "kind": "constant",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            290,
+            290
+          ],
+          "anchor": "r_useSSAO 1, ARCHIVE",
+          "sha256": "adbaa0f0d052e7e98c390b04635244990fce37db24c6f976810a489e16f00242"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            48,
+            48
+          ],
+          "anchor": "r_useNewSSAOPass 1",
+          "sha256": "a94ed8d18d955208a94be3deec2b984a21d245938b22b5cb0b7f63815e00a975"
+        },
+        {
+          "file": "neo/renderer/Passes/SsaoPass.cpp",
+          "lines": [
+            33,
+            38
+          ],
+          "anchor": "the new SSAO pass's cvars: r_ssaoBackgroundViewDepth .. r_ssaoAmount",
+          "sha256": "37396c0dfa7b9829f61bd67d046c58f9dfbf0fe7a8871e6728012e0eb013e3b5"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            311,
+            311
+          ],
+          "anchor": "r_taaJitter 1 (MSAA offsets)",
+          "sha256": "3d464b1940676ea3fb4e7db1681d4249b143e6e10349162d95e6c15f6963f6af"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            293,
+            293
+          ],
+          "anchor": "r_useHierarchicalDepthBuffer 1",
+          "sha256": "4a480c8c65a67113194130afddd555178b20dd0e877da4418273dc0bf17b7590"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "SWITCHES: r_taaJitter 0 (r_useSSAO 0 gone); MIRRORED: r_useSSAO 1, r_useNewSSAOPass 1, r_ssaoAmount, r_ssaoRadiusWorld, r_ssaoSurfaceBias, r_ssaoPowerExponent, r_ssaoBackgroundViewDepth; PRINTED: r_useHierarchicalDepthBuffer; BLOBS: the G-buffer's, the three SSAO compute programs', bumpyenvironment2's and heathaze's; cmd_selftest's checks of them"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineFrameDefaults::useSsao and its five ssao members"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession parity rows (SessionOptions::ssaoForTesting)"
+        }
+      ],
+      "note": "LP6.5c (C76, A55, D185; SC814, SC817, SC855; K2, K51, A51), test only: parity.cfg's cvar blocks for the run with SSAO. D19's r_useSSAO 0 leaves SWITCHES: MIRRORED gains r_useSSAO 1 and r_useNewSSAOPass 1 (the engine's ambient pass binds _ao0 with both on, the preview's since LP6.5a, M-SSAO-DIFF-01) and the new pass's five cvars at the engine's defaults (r_ssaoAmount 4, r_ssaoRadiusWorld 1.0, set as 1, r_ssaoSurfaceBias 0.05, r_ssaoPowerExponent 2, r_ssaoBackgroundViewDepth 100; r_ssaoBlurSharpness, SSP:37, is never read), each printed and checked for every map; SWITCHES gains r_taaJitter 0, because the pass's sample window follows GetCurrentPixelOffset( taaFrameCount ), the MSAA pattern's offsets at r_taaJitter's default 1 even with TAA off (SC814), and (0, 0) at 0, the preview's pixelOffset; nothing else reads r_taaJitter at r_antiAliasing 0. PRINTED gains r_useHierarchicalDepthBuffer 1, printed and not mirrored (A51: nothing at the parity pins reads the Hi-Z; bumpyenvironment2's t3 is a stand-in, D178). r_useSSR 0, r_useFilmicPostFX 0, r_antiAliasing 0 (the command line and PRINTED) and r_useMaskedOcclusionCulling 0 stay (K2, K51). BLOBS gains the nine blobs the preview root carries from LP6.5c's run on: builtin/gbuffer.{vs,ps}, builtin/SSAO/ssao_{deinterleave,compute,blur}.cs, builtin/legacy/bumpyenvironment2.{vs,ps} and heathaze.{vs,ps} (the [.][parity] case read the first five from a copy of the game folder's until then). parity.cfg 57,332 bytes under its 57,344 bound (MAX_CMD_BUFFER 64 KB). SSAO reaches the picture through the ambient pass's t4 alone, black on every unbaked map (SC817): only the baked ambient map's 24 rows move, under K59 (M-PARITY-DIFF-03)"
+    },
+    {
+      "id": "M-PARITY-10",
+      "kind": "function",
+      "testOnly": true,
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            4271,
+            4278
+          ],
+          "anchor": "DrawShaderPasses: r_skipAmbient returns at once in a view",
+          "sha256": "02a9dc9e7ab0601264884dab03b7c430d2621047d9299bfd212a9ea7130bec4a"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            393,
+            524
+          ],
+          "anchor": "PrepareStageTexturing: TG_REFLECT_CUBE2 with a bump stage, bumpyenvironment2 (59)",
+          "sha256": "8c450ddfdc48c3f4b5e68451e8ce7ec52f62474718e117d878664cce5c3097e4"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            3199,
+            3230
+          ],
+          "anchor": "a stage naming _currentRender (a newStage fragment map) sorts SS_POST_PROCESS, MC_TRANSLUCENT",
+          "sha256": "5aee56426656ce30a6c3d5e7945fdcf25a2c00f855555c774f7620a1219f1ab0"
+        },
+        {
+          "file": "neo/shaders/heathaze.vs.hlsl",
+          "lines": [
+            68,
+            88
+          ],
+          "anchor": "heathaze.vs: texcoord1 = min( 0.43 P[1][1] / w, 0.02 ) x rpUser1",
+          "sha256": "cad26fc8ac50b7a8dcf5ef4872230c0f36f92d235ef0fa7f4ff861cce8c4eb7a"
+        },
+        {
+          "file": "neo/shaders/heathaze.ps.hlsl",
+          "lines": [
+            51,
+            64
+          ],
+          "anchor": "heathaze.ps: the copy sampled at the screen position plus bumpMap.wy x texcoord1",
+          "sha256": "64b892a8e754dffab34402d410e28b4299210c00408ed4e1b393e3443ffabf53"
+        },
+        {
+          "file": "neo/d3xp/Game_local.cpp",
+          "lines": [
+            1279,
+            1293
+          ],
+          "anchor": "PopulateEnvironmentProbes: one placed env_probe switches the automatic probes off",
+          "sha256": "cfdd5090003acdd5b22bb721e719bffc0d57868ee168517b227441f4cf2a20cb"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "AMB_ROOMS' O01 and O01_PANEL, ST_ROOMS' O02 and O02b and O02_PANEL, st_s_room_extras, LP6_MTR, lp6_textures, the rows O01, O02, O02b (O_LIT_EXPECT), row_skip_ambient and its use in parity_cfg, one_engine_run and cmd_run, shot_rows' ambient_shot, o02_panel_rects and cmd_selftest's O02 / O02b check, MAPS (materials/lp6_parity.mtr, textures/lp6)"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/maps/test/litpreview_ambient.map",
+          "symbol": "the room O01 (parity.py fixtures)"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/maps/test/litpreview_stages.map",
+          "symbol": "the rooms O02 and O02b (parity.py fixtures)"
+        },
+        {
+          "file": "lib/TbLitLib/test/fixture/lit/materials/lp6_parity.mtr",
+          "symbol": "textures/lp6/reflect2bump, haze, haze_still, haze_wall"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession parity rows: the row .json's stage_copies, stage_post_process_draws and bumpy_environment2_draws and their expectations"
+        }
+      ],
+      "note": "LP6.5c (55-LP6-PACKAGES.md section 5, C71, C72, C76, D148; P8.5, P8.6, P8.24), test only: the rows of the copy, the second stage call and bumpyenvironment2. O01 on the baked ambient map: a sealed room at x -2048 (A33's z 32..224, the probe path; its own area, so its own automatic probe: the map holds no env_probe entity, one would switch the automatic probes off map-wide, Game_local.cpp:1279-1293), A01's shell and cut, a point light (noshadows 1) between the camera and a func_static panel 200 ahead of textures/lp6/reflect2bump (a diffuse and a bump stage and a blend add cubeMap texGen reflect2 stage: 59); no ambient-only shot and no control (A40's none, P8.6: the room stays lit by its probe with the light off); isolated under K59 with its recorded figures, the reflect2 radiance black in the preview (M-STAGE-DIFF-07, E-LIT-19). O01's reflect2 stage is a DrawShaderPasses draw, which r_skipAmbient 1 skips on both sides (RB:4274-4277, A40); the ambient map's block keeps 1, because A07's materials have SL_AMBIENT stages (its opaque shell and its blend add panel draw at 0: the dress rehearsal's A07 and A07a read-backs differed on every pixel at 0, A01-A06 and G01-G05 were equal), so O01's row carries its own r_skipAmbient 0 (\"skip_ambient\"), which parity.cfg sets and prints before its shot and restores (1, printed) after it, both checked, and rows.json gives it, the [.][parity] case then drawing the preview's shader passes for that row alone. O02 and O02b on the stages map: S-room shells at x -2048 and -4096 with walls of a 16-texel white and black checker, R14's head-on parallel light, a func_static heat-haze panel 80 from the camera (480 x 480 pixels at 1280 x 720): program heathaze, vertexParm 0 0, 0 (no time), vertexParm 1 8 (O02; the deform 0.0764 of the screen at the panel's depth, 98 pixels across and 55 down; the clamp 0.02 x 8, 205 x 115) or 0 (O02b, P8.5's control: the copy sampled at its own pixel), fragmentMap 0 _currentRender, fragmentMap 1 a quadrant normal map (TD_BUMP, CFM_NORMAL_DXT5: the source's red in alpha; cached #__0300); both exact, their controls CO02 and CO02b black; the exposure's 80th to 95th percentile is the checker's white, clamped at r_hdrMaxLuminance, so the panel moves no pixel outside it. The engine-side proof of the deform (P8.5): O02's engine shot differs from O02b's on a fifth of the panel's pixels or more and nowhere outside it (parity.py selftest, once rows.json holds them). The new rooms lie at negative x because dmap numbers the areas in descending x (its x block splits walked front first): every earlier area keeps its number. \"expect\" adds stage_copies (1), stage_post_process_draws (1) and bumpy_environment2_draws (at least 1)"
+    },
+    {
+      "id": "M-PARITY-DIFF-03",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/shaders/builtin/SSAO/ssao_deinterleave.cs.hlsl",
+          "lines": [
+            63,
+            98
+          ],
+          "anchor": "ssao_deinterleave: the depth buffer read per pixel into view depth",
+          "sha256": "c0c12d459e23869d4d415a10604cc476fef06f413c773df639fcc37a7a7e2ffe"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            5634,
+            5677
+          ],
+          "anchor": "DrawScreenSpaceAmbientOcclusion2",
+          "sha256": "434d962a0fa0d5af2a3a97e071fa54aabfdd2cb43aef07c1b3eb7c2e77ecc45c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordSsao (the preview's own depth, _currentDepth)"
+        },
+        {
+          "file": "TOOLS/lit-preview/parity.py",
+          "symbol": "ROWS: the 24 ambient rows' classes (exact or isolated, LP6.5c)"
+        }
+      ],
+      "note": "K59 (LP6.5c, P8.7; K28 and K33's family): the new SSAO pass reads absolute depth, the first parity-visible reader of it (until LP6.5a depth was tested against itself alone): its deinterleave converts each pixel's depth to view depth, and the occlusion of a pixel depends on its neighbours' depths. Those depths ride on the triangulation wherever the preview's triangles are not the .proc's (an edited face, an unmatched or a curved island: K28's family; LP7.4 adopts the .proc's triangles where its islands match the editor's faces, M-PARITY-DIFF-01) and on the interpolants' last bits where they are (K33). The 24 rows of the baked ambient map (A01-A07, G01-G05 and their ambient-only shots) are compared under recorded classes from LP6.5c's run on: exact where the run's max is 0, else A34's isolated class (the recorded max, mean, p99, the count beyond 1 and the masked pixels beyond their span pinned); A07 and A07a black"
     }
   ],
   "retired": [

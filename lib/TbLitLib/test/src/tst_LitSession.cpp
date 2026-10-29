@@ -7975,8 +7975,12 @@ TEST_CASE("LitSession parity rows: the ambient-only switch (LP4.2b)")
  * extended, SC709): and pass 6's counters (lights_casting, lights_placed,
  * lights_unplaced, tiles_drawn, shadow_draws, perforated_skipped, atlas_bytes_written)
  * and the per-list shadow-atlas interaction draws (sm_draws_local, sm_draws_global,
- * sm_draws_translucent), the .json also the atlas's unshadowed lights by name. Hidden: it
- * needs a GPU and the root of a parity.py run.
+ * sm_draws_translucent), the .json also the atlas's unshadowed lights by name. LP6.5c
+ * (C71, C72, C76): and the _currentRender copy's (stage_copies, the frame's copies of the
+ * HDR target; stage_post_process_draws, the second stage call's draws) and
+ * bumpyenvironment2's (bumpy_environment2_draws, inside stage_draws), the rows O01, O02
+ * and O02b's; a row's skip_ambient may be its own (O01's 0 on the ambient map). Hidden:
+ * it needs a GPU and the root of a parity.py run.
  */
 TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
 {
@@ -8324,7 +8328,9 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           "\"grid_surfaces\": {}, \"ambient_grid_surfaces\": {}, \"entity_grid_areas\": "
           "{{{}}}, "
           "\"entity_grid_area\": {}, \"stage_draws\": {}, \"stage_skipped\": {}, "
-          "\"stage_pending\": {}, \"fog_draws\": {}, \"blend_draws\": {}, "
+          "\"stage_pending\": {}, \"stage_copies\": {}, "
+          "\"stage_post_process_draws\": {}, \"bumpy_environment2_draws\": {}, "
+          "\"fog_draws\": {}, \"blend_draws\": {}, "
           "\"fog_lights\": {}, "
           "\"blend_lights\": {}, \"portals_fogged\": {}, \"model_entities\": {}, "
           "\"model_instances\": {}, \"model_draws\": {}, \"models_pending\": {}, "
@@ -8366,6 +8372,9 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           lit.stageDraws,
           lit.stageSkipped,
           lit.stagePending,
+          lit.stageCopies,
+          lit.stagePostProcessDraws,
+          lit.bumpyEnvironment2Draws,
           lit.fogDraws,
           lit.blendDraws,
           lit.fogLights,
@@ -8459,6 +8468,25 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
             // LP5.2b (C48, D124): the surfaces skipped as pending and the cube draws made
             // with the zero cube (0 on a settled frame)
             CHECK(lit.stagePending == std::size_t(value.number));
+          }
+          else if (key == "stage_copies")
+          {
+            // LP6.5c (C71): the frame's copies of the HDR target into _currentRender
+            // (O02, O02b: one, for their post-process surface)
+            CAPTURE(lit.stageCopies);
+            CHECK(parityCountHolds(value, lit.stageCopies));
+          }
+          else if (key == "stage_post_process_draws")
+          {
+            // the second stage call's draws over the copy
+            CAPTURE(lit.stagePostProcessDraws);
+            CHECK(parityCountHolds(value, lit.stagePostProcessDraws));
+          }
+          else if (key == "bumpy_environment2_draws")
+          {
+            // LP6.5c (C72): the frame's bumpyenvironment2 draws (O01's reflect2 stage)
+            CAPTURE(lit.bumpyEnvironment2Draws);
+            CHECK(parityCountHolds(value, lit.bumpyEnvironment2Draws));
           }
           else if (key == "fog_draws")
           {

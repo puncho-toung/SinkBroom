@@ -23,7 +23,7 @@ textures/lp6/reflect2bump
 
 // O02 (the stages map): a heat-haze newStage over the lit checker wall: heathaze (the
 // material-program table's), sorted SS_POST_PROCESS by its _currentRender (Material.cpp:
-// 3196-3210) and drawn by the second stage call over the frame's copy of the HDR target. vertexParm
+// 3199-3230) and drawn by the second stage call over the frame's copy of the HDR target. vertexParm
 // 0 the scroll, constants (0, 0, 0, 1); vertexParm 1 the deform magnitude, 8 (P8.5; heathaze.vs:
 // texcoord1 = min( 0.43 P[1][1] / w, 0.02 ) x rpUser1: at the panel's depth 80, g_fov 90 at
 // 1280 x 720 (P[1][1] 1.778), 0.0096 x 8 = 0.076 of the screen, 98 pixels across and 55 down; the
