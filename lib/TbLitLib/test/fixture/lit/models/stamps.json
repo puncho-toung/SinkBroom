@@ -54,17 +54,17 @@
    "source": "models/test/n13.glb",
    "engine_path": "generated/rendermodels/models/test/n13.bglb",
    "bytes": 1551,
-   "sha256": "4592eee93d908ec5e63dd7f222a7a91f5ca60c8d46877701814091e650a33d15",
+   "sha256": "83bd05937473efe4a097c7159a84d4328820c66b85296ce0d0d3ff4cf49977c0",
    "run": "run-b",
-   "run_digest": "3f3ef0ffce1ea9a4b3e97b880d47262b01fc0d6689f7a88c49c1a18efcd76524"
+   "run_digest": "c3fdaeee1256c7085a736a7bcf84a50a3b9196be5fff213d693b44da1ca797eb"
   },
   "models/test/n14.bglb": {
    "source": "models/test/n14.glb",
    "engine_path": "generated/rendermodels/models/test/n14.bglb",
    "bytes": 1551,
-   "sha256": "16a6c4ca2bc278303012c3478e91e54b7445a7cb05459869a56fec1bd0d8d95e",
+   "sha256": "f1f58a03c30bb4750bdd66c8b85162293286e1161188fb15a2fb60a87e61aade",
    "run": "run-b",
-   "run_digest": "3f3ef0ffce1ea9a4b3e97b880d47262b01fc0d6689f7a88c49c1a18efcd76524"
+   "run_digest": "c3fdaeee1256c7085a736a7bcf84a50a3b9196be5fff213d693b44da1ca797eb"
   }
  },
  "engine_printed": [

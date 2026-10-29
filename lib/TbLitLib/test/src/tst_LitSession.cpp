@@ -8000,51 +8000,24 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
   const auto out = std::filesystem::path{outValue};
   // LP6.5a (D185, the director's reading (1)): the rows' sessions run with SSAO, so the
   // 24 rows of litpreview_ambient.map (the one baked map, SC817) move on the preview's
-  // side and compare reports them (their thresholds and the engine's side are LP6.5c's).
-  // parity.py's BLOBS (TOOLS) has no gbuffer or SSAO blob until LP6.5c, so the sessions
-  // read their blobs from a copy in the temp folder: the preview root's renderprogs2
-  // tree (every other program as before) and the five blobs of passes 3 and 4 from the
-  // game folder (read only); the preview root and the game folder are never written
-  const auto* gameValue = std::getenv("TB_LIT_GAME_PATH");
-  if (!gameValue || !*gameValue)
+  // side; LP6.5c's engine run shot them with r_useSSAO 1 and recorded their classes.
+  // LP6.5c (C76): parity.py's BLOBS puts the G-buffer's, the SSAO passes',
+  // bumpyenvironment2's and heathaze's blobs in the preview root, which the sessions read
+  // as every other blob (the temp copy of LP6.5a / LP6.5b, with the game folder's five,
+  // is gone)
+  for (const auto& [name, stage] : std::vector<std::pair<std::string, ShaderStage>>{
+         {"builtin/gbuffer", ShaderStage::Vertex},
+         {"builtin/gbuffer", ShaderStage::Pixel},
+         {"builtin/SSAO/ssao_deinterleave", ShaderStage::Compute},
+         {"builtin/SSAO/ssao_compute", ShaderStage::Compute},
+         {"builtin/SSAO/ssao_blur", ShaderStage::Compute},
+         {"builtin/legacy/bumpyenvironment2", ShaderStage::Vertex},
+         {"builtin/legacy/bumpyenvironment2", ShaderStage::Pixel},
+         {"heathaze", ShaderStage::Vertex},
+         {"heathaze", ShaderStage::Pixel}})
   {
-    SKIP("TB_LIT_GAME_PATH is not set: the rows' SSAO blobs come from the game folder");
-  }
-  const auto blobRoot =
-    std::filesystem::temp_directory_path() / "TbLitLibTest-parity-blobs";
-  // the copy goes when the case ends, a failed REQUIRE's end too
-  struct RemoveAtExit
-  {
-    std::filesystem::path path;
-    ~RemoveAtExit()
-    {
-      auto error = std::error_code{};
-      std::filesystem::remove_all(path, error);
-    }
-  };
-  const auto removeBlobs = RemoveAtExit{blobRoot};
-  {
-    std::filesystem::remove_all(blobRoot);
-    const auto spirv = std::filesystem::path{"base"} / "renderprogs2";
-    std::filesystem::create_directories(blobRoot / spirv);
-    std::filesystem::copy(
-      root / spirv, blobRoot / spirv, std::filesystem::copy_options::recursive);
-    const auto game = std::filesystem::path{gameValue};
-    for (const auto& [name, stage] : std::vector<std::pair<std::string, ShaderStage>>{
-           {"builtin/gbuffer", ShaderStage::Vertex},
-           {"builtin/gbuffer", ShaderStage::Pixel},
-           {"builtin/SSAO/ssao_deinterleave", ShaderStage::Compute},
-           {"builtin/SSAO/ssao_compute", ShaderStage::Compute},
-           {"builtin/SSAO/ssao_blur", ShaderStage::Compute}})
-    {
-      const auto relative = std::filesystem::path{"base"} / shaderBlobPath(name, stage);
-      REQUIRE(std::filesystem::exists(game / relative));
-      std::filesystem::create_directories((blobRoot / relative).parent_path());
-      std::filesystem::copy_file(
-        game / relative,
-        blobRoot / relative,
-        std::filesystem::copy_options::overwrite_existing);
-    }
+    CAPTURE(name);
+    REQUIRE(std::filesystem::exists(root / "base" / shaderBlobPath(name, stage)));
   }
   const auto rowsText = readTextFile(root / "parity" / "rows.json");
   const auto record = JsonReader{rowsText}.value();
@@ -8096,8 +8069,7 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
     auto height = std::uint32_t(record->numberOr("height", 720.0));
     auto options = SessionOptions{};
     options.validation = true;
-    // LP6.5a: the blobs' copy (above); every other file through the service, from root
-    options.gamePath = blobRoot;
+    options.gamePath = root;
     options.frameLogPath = frameLog;
     // LP6.5a (D185, the director's reading (1)): SSAO on in the rows' sessions
     options.ssaoForTesting = true;
@@ -8456,8 +8428,10 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           else if (key == "stage_draws")
           {
             // LP5.2a (C46): the stage pass's draws and its SL_AMBIENT stages that drew
-            // nothing
-            CHECK(lit.stageDraws == std::size_t(value.number));
+            // nothing; LP6.5c: a count or a minimum (O01, the ambient map's one row with
+            // its shader passes on: its panel's 59 draw and others that cover no pixel)
+            CAPTURE(lit.stageDraws);
+            CHECK(parityCountHolds(value, lit.stageDraws));
           }
           else if (key == "stage_skipped")
           {
