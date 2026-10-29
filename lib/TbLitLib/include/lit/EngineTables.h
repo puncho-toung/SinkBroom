@@ -502,6 +502,49 @@ inline constexpr auto EngineParmSet12 = std::array<EngineParmSetMember, 16>{{
   {RenderParm::PsxDistortions, "rpPSXDistortions"},
 }};
 
+/**
+ * LP6.5b (C72, SC829): rpMaximalSet14 (RenderProgs.h:316, its layouts :318
+ * OCTAHEDRON_CUBE and its skinned form) and renderParmSet14_t
+ * (renderParmSet14.inc.hlsl:32-70), 32 float4 = 512 bytes (never pushed: over the
+ * 256-byte budget), the two lists in the same order: bumpyenvironment2 (59). The struct's
+ * last member is the array float4 rpShadowMatrices[2 * 4], named element by element as
+ * reflection lists it.
+ */
+inline constexpr auto EngineParmSet14 = std::array<EngineParmSetMember, 32>{{
+  {RenderParm::WindowCoord, "rpWindowCoord"},
+  {RenderParm::LocalLightOrigin, "rpLocalLightOrigin"},
+  {RenderParm::LocalViewOrigin, "rpLocalViewOrigin"},
+  {RenderParm::Color, "rpColor"},
+  {RenderParm::GlobalEyePos, "rpGlobalEyePos"},
+  {RenderParm::MvpMatrixX, "rpMVPmatrixX"},
+  {RenderParm::MvpMatrixY, "rpMVPmatrixY"},
+  {RenderParm::MvpMatrixZ, "rpMVPmatrixZ"},
+  {RenderParm::MvpMatrixW, "rpMVPmatrixW"},
+  {RenderParm::ModelMatrixX, "rpModelMatrixX"},
+  {RenderParm::ModelMatrixY, "rpModelMatrixY"},
+  {RenderParm::ModelMatrixZ, "rpModelMatrixZ"},
+  {RenderParm::ModelMatrixW, "rpModelMatrixW"},
+  {RenderParm::ProjMatrixZ, "rpProjectionMatrixZ"},
+  {RenderParm::ProjMatrixW, "rpProjectionMatrixW"},
+  {RenderParm::ModelViewMatrixX, "rpModelViewMatrixX"},
+  {RenderParm::ModelViewMatrixY, "rpModelViewMatrixY"},
+  {RenderParm::ModelViewMatrixZ, "rpModelViewMatrixZ"},
+  {RenderParm::WobbleSkyX, "rpWobbleSkyX"},
+  {RenderParm::WobbleSkyY, "rpWobbleSkyY"},
+  {RenderParm::WobbleSkyZ, "rpWobbleSkyZ"},
+  {RenderParm::GlobalLightOrigin, "rpGlobalLightOrigin"},
+  {RenderParm::JitterTexScale, "rpJitterTexScale"},
+  {RenderParm::PsxDistortions, "rpPSXDistortions"},
+  {RenderParm::ShadowMatrix0X, "rpShadowMatrices[0]"},
+  {RenderParm::ShadowMatrix0Y, "rpShadowMatrices[1]"},
+  {RenderParm::ShadowMatrix0Z, "rpShadowMatrices[2]"},
+  {RenderParm::ShadowMatrix0W, "rpShadowMatrices[3]"},
+  {RenderParm::ShadowMatrix1X, "rpShadowMatrices[4]"},
+  {RenderParm::ShadowMatrix1Y, "rpShadowMatrices[5]"},
+  {RenderParm::ShadowMatrix1Z, "rpShadowMatrices[6]"},
+  {RenderParm::ShadowMatrix1W, "rpShadowMatrices[7]"},
+}};
+
 // the number of float4s of each set (the rp*Set<N> lists' lengths), for rpBufSize
 inline constexpr auto EngineParmSetSizes = std::array<int, EngineParmSetCount>{
   8, 7, 5, 16, 16, 16, 14, 12, 13, 45, 25, 68, 16, 12, 32};
@@ -510,8 +553,8 @@ inline constexpr auto EngineParmSetSizes = std::array<int, EngineParmSetCount>{
 // for renderParmNullSet
 int engineParmSetOfLayout(EngineBindingLayout layout);
 
-// the members of a mirrored set (0, 4, 9, 10; LP5.0: 5, 7, 8, 12; LP3.0: 11; LP6.5a: 3);
-// empty for the others
+// the members of a mirrored set (0, 4, 9, 10; LP5.0: 5, 7, 8, 12; LP3.0: 11; LP6.5a: 3;
+// LP6.5b: 14); empty for the others
 std::span<const EngineParmSetMember> engineParmSetMembers(int set);
 
 // ----- the constant blocks of the layouts LP2 uses (C26, P2.19) -----
@@ -1012,6 +1055,17 @@ struct EngineFrameDefaults
   float ssaoSurfaceBias = 0.05f;
   float ssaoPowerExponent = 2.0f;
   float ssaoAmount = 4.0f;
+  // LP6.5b (C72, SC829): r_useSSR is "1" in the engine (RenderSystem_init.cpp:302); the
+  // preview's is 0 (D19: no SSR, K2; parity pins it, A55), as useSsao's is a choice: a
+  // TG_REFLECT_CUBE2 stage with a bump stage binds bumpyenvironment2 59, never 61. Its
+  // SSR parms are set anyway (RenderBackend.cpp:421-435) from r_ssrStride "12",
+  // r_ssrMaxDistance "100" (metres), r_ssrZThickness "2" and r_ssrJitter "0" (:303-307),
+  // read only under USE_SSR
+  bool useSsr = false;
+  float ssrStride = 12.0f;
+  float ssrMaxDistance = 100.0f;
+  float ssrZThickness = 2.0f;
+  float ssrJitter = 0.0f;
   // LP5.0 (C46, C47, C49, D118): the cvars of passes 7-9, each at the engine's default
   // (RenderSystem_init.cpp and RenderBackend.cpp at 285ea4d1)
   // r_skipFogLights "0" (RenderSystem_init.cpp:139): FogAllLights draws the fog lights

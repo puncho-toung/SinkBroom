@@ -36,6 +36,8 @@
 #include "lit/EngineTables.h"
 #include "lit/ImageCache.h"
 
+#include <algorithm>
+
 namespace tb::lit
 {
 namespace
@@ -369,9 +371,23 @@ bool engineStageProgramSamplesCube(const StageProgram program)
   case StageProgram::TextureColor:
   case StageProgram::TextureColorTexgen:
   case StageProgram::Material:
+  // LP6.5b (C72, P8.24): RB:473-500 binds the bump image at unit 0 over the stage's cube
+  case StageProgram::BumpyEnvironment2:
     return false;
   }
   return false;
+}
+
+bool engineHasBumpyEnvironment2Stage(const MaterialEntry& material)
+{
+  if (engineBumpStage(material) < 0)
+  {
+    return false;
+  }
+  return std::ranges::any_of(material.stages, [](const MaterialStage& stage) {
+    return stage.lighting == em::LightingAmbient && !stage.newStage
+           && stage.texgen == em::TexgenReflectCube2;
+  });
 }
 
 namespace
@@ -1164,13 +1180,19 @@ StagePassSurface engineShaderPassDraws(
         draw.bumpStage >= 0 ? StageProgram::BumpyEnvironment : StageProgram::Environment;
       break;
     case em::TexgenReflectCube2:
-      // :393-525: with a bump stage BUMPY_ENVIRONMENT2 (59-62) on _currentRender, the
-      // G-buffer normals, Hi-Z and the view's radiance probes (LP6's inputs); without one
-      // texture_color stays and samples the cube as a Texture2D: neither is drawn
-      // (mirror.json M-STAGE-DIFF-05)
-      ++result.skipped;
-      ++result.texgenLp6;
-      continue;
+      // :393-525: with a bump stage BUMPY_ENVIRONMENT2 (59; LP6.5b, C72, D180: at
+      // r_useSSR 0 it reads the bump image, the G-buffer normals and the view's radiance
+      // images); without one texture_color stays and samples the cube as a Texture2D:
+      // not drawn (mirror.json M-STAGE-DIFF-05, narrowed)
+      draw.bumpStage = engineBumpStage(material);
+      if (draw.bumpStage < 0)
+      {
+        ++result.skipped;
+        ++result.texgenLp6;
+        continue;
+      }
+      draw.program = StageProgram::BumpyEnvironment2;
+      break;
     case em::TexgenSkyboxCube:
       // :526-529
       draw.program = StageProgram::SkyBox;

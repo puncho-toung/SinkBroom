@@ -391,6 +391,14 @@ struct LitFrameStats
   std::size_t stageCopies = 0;
   bool stageSecondCall = false;
   std::size_t stagePostProcessDraws = 0;
+  // LP6.5b (C72, D176, D180): the drawn surfaces whose material has a TG_REFLECT_CUBE2
+  // stage with a bump stage (the lists' count when they were built: pass 3's consumer),
+  // the frame's bumpyenvironment2 (59) draws (inside stageDraws), and its stages not
+  // drawn because pass 3 did not run whole this frame (pending or disabled: inside
+  // stageSkipped; never drawn over stale normals)
+  std::size_t bumpyEnvironment2Listed = 0;
+  std::size_t bumpyEnvironment2Draws = 0;
+  std::size_t bumpyEnvironment2WithoutNormals = 0;
   // of stageSkipped: the TG_REFLECT_CUBE2 stages without a bump stage (LP5.2b, C48;
   // LP6.5b, C72: texture_color would sample the cube as a Texture2D, mirror.json
   // M-STAGE-DIFF-05, narrowed), the stages of a cinematic (D120), of a newStage program
@@ -963,11 +971,21 @@ private:
   // LP5.2a (C46, D115): the drawn surfaces in the stage pass's order (stagePassOrder),
   // made when the lists are built; pointers into m_lists.drawSurfs
   std::vector<const LitSurface*> m_stageOrder;
+  // LP6.5b (C72, D176): of them, those whose material has a bumpyenvironment2 stage
+  // (engineHasBumpyEnvironment2Stage), counted with the order: pass 3's consumer
+  std::size_t m_bumpyEnvironment2Listed = 0;
   // LP6.5b (C71): the draw log marks the second call's draws (LitDrawRecord::postProcess)
   bool m_logPostProcess = false;
   // LP6.5b (C71, K56): _accum (the bloodorb capture family's) bound as _default, said
   // once per session
   bool m_accumWarned = false;
+  // LP6.5b (C72, D178, the director's reading (3)): bumpyenvironment2's t3 stand-in for
+  // _cszBuffer (read only under USE_SSR): a 1 × 1 R32_FLOAT render target (as the
+  // engine's _cszBuffer is, Image_intrinsic.cpp:359-362; NVRHI clears only targets and
+  // UAVs) cleared to 0
+  // and kept a shader resource, made at the first 59 draw of the session and released
+  // in releaseAll
+  nvrhi::TextureHandle m_hiZStandIn;
   // LP6.1 (C64): the draw records of passes 1, 5 and 7, and the lists' links into them:
   // the drawn surfaces' (m_lists.drawSurfs' order) and the lights' (m_lists.lights'
   // order, fog and blend lights and lights without interactions empty); stale after a
@@ -1385,6 +1403,22 @@ private:
    * _currentRender cannot be made (the second call is not drawn then).
    */
   bool copyCurrentRender(Frame& frame);
+  /**
+   * LP6.5b (C72, D178, P8.24, the director's readings (3), (6), (7)):
+   * PrepareStageTexturing's TG_REFLECT_CUBE2 branch with a bump stage at r_useSSR 0
+   * (RB:393-524): the parms (WOBBLESKY_X..Z the probe bounds, TEXGEN_0_S..Q the probe
+   * positions, LOCALLIGHTORIGIN the blends, GLOBALLIGHTORIGIN the SSR parms,
+   * JITTERTEXSCALE ( r_ssrMaxDistance, 0, 0, 0 ), SHADOW_MATRIX_0 the unprojection to
+   * the camera, SHADOW_MATRIX_1 the screen-space matrix) and the units: 0 the bump
+   * stage's image, 1 _default (_currentRender, read only under USE_SSR), 2
+   * _currentNormals by name, 3 the 1 × 1 R32F stand-in (_cszBuffer, read only under
+   * USE_SSR), 4-6 _black (M-STAGE-DIFF-07: the engine's radiance images are cubes in
+   * the shader's Texture2D slots); the stage's own cube is never asked for (unit 0 is the
+   * bump's).
+   * Whether the draw can be made (the bump image answered and written, the normals and
+   * the stand-in made).
+   */
+  bool bindBumpyEnvironment2(Frame& frame, const MaterialEntry& material, int bumpStage);
   /**
    * LP5.3 (C49, D122-D124): FogAllLights (RenderBackend.cpp:5038-5076, from :6136) into
    * hdrFBO with the prepass's depth: nothing under r_skipFogLights (EngineFrame, its

@@ -229,7 +229,13 @@ TEST_CASE("EngineTables")
         == std::size_t(EngineParmSetSizes[std::size_t(set)]));
     }
     CHECK(engineParmSetMembers(6).empty());
-    CHECK(engineParmSetMembers(14).empty());
+    // LP6.5b (C72): set 14, rpMaximalSet14's 32 (512 bytes: never pushed)
+    CHECK(engineParmSetMembers(14).size() == std::size_t(EngineParmSetSizes[14]));
+    CHECK(engineParmSetMembers(14).size() == 32u);
+    CHECK(engineParmSetBlock(14).size == 512u);
+    CHECK(engineParmSetOfLayout(EngineBindingLayout::OctahedronCube) == 14);
+    CHECK(engineParmSetMembers(14)[24].shaderName == "rpShadowMatrices[0]");
+    CHECK(engineParmSetMembers(14)[31].parm == RenderParm::ShadowMatrix1W);
     // LP3.0 (C60): set 11, rpMaximalSet11's 68
     CHECK(engineParmSetMembers(11).size() == std::size_t(EngineParmSetSizes[11]));
     CHECK(engineParmSetMembers(11).size() == 68u);
@@ -722,7 +728,12 @@ TEST_CASE("EngineTables")
     CHECK(setCount(engineBindingLayoutDescs(L::AmbientLightingIbl, false)) == 4u);
     CHECK(setCount(engineBindingLayoutDescs(L::AmbientLightingIblSkinned, true)) == 4u);
     CHECK_FALSE(engineBindingLayoutDescs(L::Debug, false));
-    CHECK_FALSE(engineBindingLayoutDescs(L::OctahedronCube, false));
+    // LP6.5b (C72): OCTAHEDRON_CUBE's three sets (uniforms, t0-t6, s0 s1); its skinned
+    // form is not mirrored
+    CHECK(setCount(engineBindingLayoutDescs(L::OctahedronCube, false)) == 3u);
+    CHECK_FALSE(engineBindingLayoutDescs(L::OctahedronCubeSkinned, false));
+    CHECK_FALSE(enginePushConstantsEnabled(
+      L::OctahedronCube, enginePushConstantLimit(4096), 0x10DE));
     // LP3.0 (C60): DRAW_INTERACTION_SM's four sets; no skinned form (P3.24e)
     CHECK(setCount(engineBindingLayoutDescs(L::DrawInteractionSm, false)) == 4u);
     CHECK_FALSE(engineBindingLayoutDescs(L::DrawInteractionSmSkinned, false));
@@ -1008,7 +1019,10 @@ TEST_CASE("EngineTables")
     }
     CHECK_FALSE(engineBindingSetShape(L::Tonemap));
     CHECK_FALSE(engineBindingSetShape(L::Blit));
-    CHECK_FALSE(engineBindingSetShape(L::OctahedronCube));
+    // LP6.5b (C72): OCTAHEDRON_CUBE's units 0-6 and its two common samplers
+    REQUIRE(engineBindingSetShape(L::OctahedronCube));
+    CHECK((*engineBindingSetShape(L::OctahedronCube))[1].size() == 7u);
+    CHECK((*engineBindingSetShape(L::OctahedronCube))[2].size() == 2u);
 
     // the samplers as the engine creates them (CommonPasses.cpp:71-97): FOG's LinearClamp
     // and BLENDLIGHT's LinearBorder before the leaked Comparison, NORMAL_CUBE's

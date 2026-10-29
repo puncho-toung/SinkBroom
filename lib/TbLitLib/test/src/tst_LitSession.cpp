@@ -22137,6 +22137,363 @@ TEST_CASE(
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
 }
 
+namespace
+{
+
+/**
+ * LP6.5b (C72, D180): on the LP4.2a synthetic bake (constant radiance cubes: 59 is black
+ * without probes, A29), two boxes before the east wall: one of reflect2bump (a bump
+ * stage, the implicit _flat, a diffuse stage so the ambient pass and pass 3 draw it, and
+ * a blend add stage of cubeMap texgen reflect2: bumpyenvironment2) or of its control
+ * without the reflect2 stage, at the view's centre; and one of reflect2plain (the
+ * reflect2 stage alone: no bump stage, not even the implicit _flat a diffuse stage
+ * brings, so still skipped, M-STAGE-DIFF-05). The cube images are never asked for (59
+ * rebinds unit 0; the plain stage is skipped before), so they need no file.
+ */
+const auto Lp65bReflectMaterials = std::string{
+  "textures/lp65b/reflect2bump\n{\n\tbumpmap _flat\n"
+  "\tdiffusemap textures/lp42a/flat.tga\n\t{\n\t\tblend add\n"
+  "\t\tcubeMap textures/lp65b/env\n\t\ttexgen reflect2\n\t}\n}\n"
+  "textures/lp65b/reflect2control\n{\n\tbumpmap _flat\n"
+  "\tdiffusemap textures/lp42a/flat.tga\n}\n"
+  "textures/lp65b/reflect2plain\n{\n\t{\n\t\tblend add\n"
+  "\t\tcubeMap textures/lp65b/env\n\t\ttexgen reflect2\n\t}\n}\n"};
+
+// the LP4.2a map with the centre box (x 250-256, y -10-10, z 54-74) of material and the
+// plain reflect2 box at its left (y 30-50)
+std::string lp65bReflectMapText(const std::string& material)
+{
+  auto map = lp42aMapText();
+  const auto entity1 = map.find("// entity 1");
+  map.insert(
+    map.rfind('}', entity1),
+    boxBrush(250, -10, 54, 256, 10, 74, material)
+      + boxBrush(250, 30, 54, 256, 50, 74, "lp65b/reflect2plain"));
+  return map;
+}
+
+// what every frame did with 59 and pass 3 (an every-frame hook's tally of the frames
+// before it): the stop rules' two
+struct Bumpy2Tally
+{
+  std::mutex mutex;
+  std::size_t frames = 0;
+  std::size_t draws = 0;
+  std::size_t drawnWithoutPass3 = 0;
+  std::size_t settledWithPending = 0;
+  std::size_t withoutNormals = 0;
+};
+
+} // namespace
+
+/**
+ * LP6.5b (C72, D176, D178, D180, P8.24): bumpyenvironment2 for a reflect2 stage with a
+ * bump stage, SSAO off: (d) no pass 3 without such a surface; (a) with one, program 59
+ * drawn, pass 3 run for it (_currentNormals made, its normal on the box), the box's
+ * picture not black and different from its control's; (b) a reflect2 stage without a
+ * bump stage still skipped with its warning; (c) the stage's cube never asked for (no
+ * wait on it: the frame settles); (e) Stop. Hidden: it needs a GPU and the game's blobs.
+ */
+TEST_CASE("LitSession bumpyenvironment2 on a GPU (LP6.5b)", "[.][litgpu4]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto started = std::chrono::steady_clock::now();
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  writeLp65aBake(root);
+  writeTextFile(root / "base" / "materials" / "zz_lp65b.mtr", Lp65bReflectMaterials);
+  // the stage pass's program beyond the root's: bumpyenvironment2 (59)
+  for (const auto stage : {ShaderStage::Vertex, ShaderStage::Pixel})
+  {
+    const auto gamePath = std::filesystem::path{gamePathValue};
+    const auto relative = shaderBlobPath("builtin/legacy/bumpyenvironment2", stage);
+    REQUIRE(std::filesystem::exists(gamePath / "base" / relative));
+    std::filesystem::create_directories((root / "base" / relative).parent_path());
+    std::filesystem::copy_file(
+      gamePath / "base" / relative,
+      root / "base" / relative,
+      std::filesystem::copy_options::overwrite_existing);
+  }
+  namespace fr = frame_resource;
+  // the east wall straight on, the centre box at the view's centre (columns 70-90, rows
+  // 50-70 at 160 x 120), the plain box at its left
+  const auto wallView = litCamera({200, 0, 64}, {1, 0, 0}, {0, 0, 1});
+  const auto logPath =
+    std::filesystem::temp_directory_path() / "TbLitLibTest-lp65b-frame-log.csv";
+  std::filesystem::remove(logPath);
+
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  auto warnings = std::vector<std::string>{};
+  auto controlLdr = std::optional<TargetImage>{};
+  auto controlHdr = std::optional<TargetImage>{};
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto service = rootService(root);
+    auto events = Events{};
+    auto session = lp65aSession(instance, events, *service, root, false, logPath);
+    session->skipShaderPassesForTesting(false);
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+    auto tally = std::make_shared<Bumpy2Tally>();
+    session->setEveryFrameHookForTesting([tally](RenderFrameAccess& access) {
+      const auto& stats = access.passes.lastStats();
+      const auto lock = std::scoped_lock{tally->mutex};
+      ++tally->frames;
+      tally->draws += stats.bumpyEnvironment2Draws;
+      tally->drawnWithoutPass3 +=
+        stats.bumpyEnvironment2Draws > 0
+            && (!stats.gbufferRan || stats.gbufferDisabled || stats.gbufferPendingPipelines > 0)
+          ? 1
+          : 0;
+      tally->settledWithPending +=
+        access.convergence.settled() && stats.pendingPipelines > 0 ? 1 : 0;
+      tally->withoutNormals += stats.bumpyEnvironment2WithoutNormals;
+    });
+    const auto settledWith = [&](
+                               const std::vector<std::string_view>& names,
+                               const std::function<bool(const LitFrameStats&)>& pred) {
+      return frameTargets(
+        *session, wallView, names, [&](const RenderFrameAccess& access) {
+          return access.convergence.settled() && access.images.pending() == 0
+                 && !access.images.hasLoading() && !access.arenas.pending()
+                 && pred(access.passes.lastStats());
+        });
+    };
+
+    // (d) no reflect2-with-bump surface, SSAO off: no pass 3, no G-buffer target; (b) the
+    // plain reflect2 stage skipped
+    REQUIRE(session->offerSnapshot(
+      lp22aSnapshot(lp65bReflectMapText("lp65b/reflect2control"), root, 7, 1)));
+    const auto control = settledWith(
+      {fr::CurrentRenderLdr, fr::CurrentRenderHdr},
+      [](const LitFrameStats& s) { return s.stageTexgenLp6 > 0; });
+    REQUIRE(control);
+    controlLdr = control->image(fr::CurrentRenderLdr);
+    controlHdr = control->image(fr::CurrentRenderHdr);
+    auto normalsMade = true;
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      normalsMade = access.frame.find(fr::CurrentNormals).has_value();
+    }));
+    CHECK_FALSE(normalsMade);
+    CHECK_FALSE(control->frame.lit.gbufferRan);
+    CHECK(control->frame.lit.bumpyEnvironment2Listed == 0u);
+    CHECK(control->frame.lit.bumpyEnvironment2Draws == 0u);
+    // the plain box's faces the view reaches, each one stage skipped
+    const auto plainSkipped = control->frame.lit.stageTexgenLp6;
+    CHECK(plainSkipped >= 1u);
+    CHECK(control->frame.lit.stageSkipped == plainSkipped);
+
+    // (a) the reflect2-with-bump box: 59 drawn, pass 3 run for it
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      access.passes.setDrawLogForTesting(true);
+    }));
+    REQUIRE(session->offerSnapshot(
+      lp22aSnapshot(lp65bReflectMapText("lp65b/reflect2bump"), root, 7, 2)));
+    const auto bumpy = settledWith(
+      {fr::CurrentRenderLdr, fr::CurrentRenderHdr, fr::CurrentNormals},
+      [](const LitFrameStats& s) { return s.bumpyEnvironment2Draws > 0; });
+    REQUIRE(bumpy);
+    const auto& stats = bumpy->frame.lit;
+    // the box's surfaces the view reaches, each drawn with 59
+    CHECK(stats.bumpyEnvironment2Listed >= 1u);
+    CHECK(stats.bumpyEnvironment2Draws == stats.bumpyEnvironment2Listed);
+    CHECK(stats.gbufferRan);
+    CHECK_FALSE(stats.gbufferDisabled);
+    CHECK(stats.gbufferDraws >= 1u);
+    CHECK_FALSE(stats.ssaoRan);
+    CHECK(stats.stageTexgenLp6 == plainSkipped);
+    CHECK(stats.stageSkipped == plainSkipped);
+    CHECK(stats.bumpyEnvironment2WithoutNormals == 0u);
+    auto programs = std::map<std::string, std::set<int>>{};
+    auto states = std::set<std::uint64_t>{};
+    auto cubeAsked = true;
+    auto hiZ = nvrhi::TextureDesc{};
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      for (const auto& record : access.passes.drawLogForTesting())
+      {
+        if (record.pass == LitDrawRecord::Pass::Stage)
+        {
+          programs[record.chunk.material].insert(record.program);
+          if (record.program == EngineBuiltinBumpyEnvironment2)
+          {
+            states.insert(record.state);
+          }
+        }
+      }
+      access.passes.setDrawLogForTesting(false);
+      // (c) the stage's cube was never asked for (P8.24: 59 samples none, so no frame
+      // waits for it)
+      cubeAsked = false;
+      for (const auto& surface : access.passes.lists().drawSurfs)
+      {
+        if (surface.material)
+        {
+          for (const auto& stage : surface.material->stages)
+          {
+            if (stage.image && stage.image->cube != 0)
+            {
+              cubeAsked = cubeAsked || access.images.find(*stage.image).has_value();
+            }
+          }
+        }
+      }
+    }));
+    CHECK(
+      programs["textures/lp65b/reflect2bump"]
+      == std::set<int>{EngineBuiltinBumpyEnvironment2});
+    CHECK_FALSE(programs.contains("textures/lp65b/reflect2plain"));
+    REQUIRE(states.size() == 1u);
+    CHECK(
+      (*states.begin() & (engine_gls::SrcBlendBits | engine_gls::DstBlendBits))
+      == (engine_gls::SrcBlendOne | engine_gls::DstBlendOne));
+    CHECK_FALSE(cubeAsked);
+    CHECK(bumpy->frame.convergence.settled());
+
+    // the box's picture: not black (the ambient pass lit it), and its control's to the
+    // bit, LDR and HDR: 59 adds the radiance of _black at t4-t6, nothing
+    // (M-STAGE-DIFF-07: the engine's radiance images are cubes in the shader's Texture2D
+    // slots, which NVRHI and Vulkan refuse; LP6.5c's engine shot of O01 shows what the
+    // engine's GPU makes of them)
+    const auto& ldr = bumpy->image(fr::CurrentRenderLdr);
+    const auto& hdr = bumpy->image(fr::CurrentRenderHdr);
+    auto hdrDiffering = 0;
+    auto differing = 0;
+    auto darkest = 1.0f;
+    auto boxSum = std::array<double, 3>{};
+    auto controlSum = std::array<double, 3>{};
+    for (std::uint32_t y = 52; y < 68; ++y)
+    {
+      for (std::uint32_t x = 72; x < 88; ++x)
+      {
+        auto same = true;
+        for (std::uint32_t c = 0; c < 3; ++c)
+        {
+          same = same && ldr.at(x, y, c) == controlLdr->at(x, y, c);
+          boxSum[c] += ldr.at(x, y, c);
+          controlSum[c] += controlLdr->at(x, y, c);
+        }
+        differing += same ? 0 : 1;
+        darkest = std::min(
+          darkest, std::max({ldr.at(x, y, 0), ldr.at(x, y, 1), ldr.at(x, y, 2)}));
+        auto hdrSame = true;
+        for (std::uint32_t c = 0; c < 4; ++c)
+        {
+          hdrSame = hdrSame && hdr.at(x, y, c) == controlHdr->at(x, y, c);
+        }
+        hdrDiffering += hdrSame ? 0 : 1;
+      }
+    }
+    CHECK(differing == 0);
+    CHECK(hdrDiffering == 0);
+    CHECK(darkest > 0.0f);
+    // the normals on the box: its face's -x as n · 0.5 + 0.5 (the implicit _flat's DXT5
+    // green: within 2.5 / 255, LP6.5a's tolerance)
+    const auto& normals = bumpy->image(fr::CurrentNormals);
+    const auto expected = std::array<float, 4>{0.0f, 0.5f, 0.5f, 1.0f};
+    auto worst = 0.0f;
+    for (std::uint32_t c = 0; c < 4; ++c)
+    {
+      worst = std::max(worst, std::abs(normals.at(80, 60, c) - expected[c]));
+    }
+    CHECK(worst <= 2.5f / 255.0f);
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      normalsMade = access.frame.find(fr::CurrentNormals).has_value();
+    }));
+    CHECK(normalsMade);
+    {
+      const auto lock = std::scoped_lock{tally->mutex};
+      CHECK(tally->draws > 0u);
+      CHECK(tally->drawnWithoutPass3 == 0u);
+      CHECK(tally->settledWithPending == 0u);
+    }
+    session->setEveryFrameHookForTesting({});
+    saveTargetPng(*controlLdr, "lp65b-reflect2-control.png");
+    saveTargetPng(ldr, "lp65b-reflect2-bump.png");
+    std::cout << fmt::format(
+      "LP6.5b C72 (a) 59 drawn ({} draws over {} frames, {} without pass 3, {} settled "
+      "with a pending pipeline, {} held for the normals); pass 3 {} draws with SSAO off; "
+      "the box's 256 pixels: {} differ from the control in the LDR, {} in the HDR, "
+      "darkest channel max {:.4f}, "
+      "means ({:.4f} {:.4f} {:.4f}) vs ({:.4f} {:.4f} {:.4f}); its normal ({:.6f} "
+      "{:.6f} {:.6f} {:.6f}), {:.2f}/255 at most from (0 0.5 0.5 1); (c) the cube asked "
+      "for: {}\n",
+      tally->draws,
+      tally->frames,
+      tally->drawnWithoutPass3,
+      tally->settledWithPending,
+      tally->withoutNormals,
+      stats.gbufferDraws,
+      differing,
+      hdrDiffering,
+      darkest,
+      boxSum[0] / 256.0,
+      boxSum[1] / 256.0,
+      boxSum[2] / 256.0,
+      controlSum[0] / 256.0,
+      controlSum[1] / 256.0,
+      controlSum[2] / 256.0,
+      normals.at(80, 60, 0),
+      normals.at(80, 60, 1),
+      normals.at(80, 60, 2),
+      normals.at(80, 60, 3),
+      worst * 255.0f,
+      cubeAsked);
+
+    // (e) Stop
+    teardown(*session);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    {
+      const auto lock = std::scoped_lock{events.mutex};
+      for (const auto& [event, message, generation] : events.events)
+      {
+        if (event == SessionEvent::Warning)
+        {
+          warnings.push_back(message);
+        }
+      }
+    }
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  CHECK(resetDispatcher());
+  CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+  messages.print("LP6.5b C72, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+  // (b) one warning: the reflect2 stage without a bump stage
+  REQUIRE(warnings.size() == 1u);
+  CHECK(warnings[0].find("reflect2") != std::string::npos);
+
+  // pass 3's GPU time filled on the frames that ran it, SSAO off
+  const auto rows = readCsv(logPath);
+  REQUIRE(rows.size() >= 2u);
+  const auto gbufferColumn = frameLogColumn(rows, "gpu_gbuffer_ms");
+  REQUIRE(gbufferColumn < FrameLogFields);
+  auto timed = 0;
+  for (std::size_t i = 1; i < rows.size(); ++i)
+  {
+    timed += rows[i].size() == FrameLogFields && !rows[i][gbufferColumn].empty() ? 1 : 0;
+  }
+  CHECK(timed > 0);
+  std::cout << fmt::format(
+    "LP6.5b C72: the warning \"{}\"; {} frame rows with gpu_gbuffer_ms; case {:.1f} s\n",
+    warnings[0],
+    timed,
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+}
+
 } // namespace tb::lit
 
 #endif

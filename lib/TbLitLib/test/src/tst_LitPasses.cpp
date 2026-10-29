@@ -164,8 +164,9 @@ TEST_CASE("LitPasses: RenderParms mirror SetUniformValue and SelectUniforms (SC2
     CHECK(parms.changed(EngineBindingLayout::DrawInteraction));
     CHECK(parms.changed(EngineBindingLayout::ConstantBufferOnly));
     CHECK(parms.changed(EngineBindingLayout::Texture));
-    // LP4.2a (C35): GLOBALEYEPOS is in set 9 alone (AMBIENT_LIGHTING_IBL and its skinned
-    // form); OVERBRIGHT is in none of the mirrored sets
+    // LP4.2a (C35): GLOBALEYEPOS is in set 9 (AMBIENT_LIGHTING_IBL and its skinned form)
+    // and, LP6.5b (C72), set 14 (OCTAHEDRON_CUBE and its skinned form); OVERBRIGHT is in
+    // none of the mirrored sets
     for (const auto layout :
          {EngineBindingLayout::ConstantBufferOnly,
           EngineBindingLayout::Texture,
@@ -177,9 +178,7 @@ TEST_CASE("LitPasses: RenderParms mirror SetUniformValue and SelectUniforms (SC2
     parms.set(RenderParm::GlobalEyePos, {1, 2, 3, 1});
     CHECK_FALSE(parms.changed(EngineBindingLayout::DrawInteraction));
     CHECK(parms.changed(EngineBindingLayout::AmbientLightingIbl));
-    CHECK(
-      engineLayoutsOfParm(RenderParm::GlobalEyePos)
-      == ((std::uint64_t{1} << int(EngineBindingLayout::AmbientLightingIbl)) | (std::uint64_t{1} << int(EngineBindingLayout::AmbientLightingIblSkinned))));
+    CHECK(engineLayoutsOfParm(RenderParm::GlobalEyePos) == ((std::uint64_t{1} << int(EngineBindingLayout::AmbientLightingIbl)) | (std::uint64_t{1} << int(EngineBindingLayout::AmbientLightingIblSkinned)) | (std::uint64_t{1} << int(EngineBindingLayout::OctahedronCube)) | (std::uint64_t{1} << int(EngineBindingLayout::OctahedronCubeSkinned))));
     parms.clearChanged(EngineBindingLayout::AmbientLightingIbl);
     parms.set(RenderParm::Overbright, {1, 1, 1, 1});
     CHECK_FALSE(parms.changed(EngineBindingLayout::AmbientLightingIbl));
@@ -545,7 +544,9 @@ TEST_CASE(
       std::abs(draws[0].wobbleSky[2][0] - std::sin(0.5f * 3.14159265f / 180.0f)) < 1e-6f);
   }
 
-  SECTION("reflect2: not drawn (LP6's inputs, M-STAGE-DIFF-05), and no solid draw")
+  SECTION(
+    "reflect2: an alpha-tested stage not drawn by the prepass (M-STAGE-DIFF-05: LP6.5b "
+    "draws 59 in the stage pass alone), and no solid draw")
   {
     CHECK(engineGenericDepthDraws(materialOf(em::TexgenReflectCube2, false), registers)
             .empty());

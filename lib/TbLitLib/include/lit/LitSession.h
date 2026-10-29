@@ -165,6 +165,10 @@ struct SessionStatus
   // LP6.5b (C71, the director's reading (9)): the frame's copies of the HDR target into
   // _currentRender (0 or 1: a post-process surface was left for the second stage call)
   std::size_t stageCopies = 0;
+  // LP6.5b (C72): the frame's bumpyenvironment2 draws and the surfaces with such a stage
+  // in its lists (pass 3's consumer)
+  std::size_t bumpyEnvironment2Draws = 0;
+  std::size_t bumpyEnvironment2Listed = 0;
   std::size_t skippedDraws = 0;
   std::size_t pendingPipelines = 0;
   // the session's arenas, textures and targets (GpuMemoryAccount::total)

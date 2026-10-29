@@ -867,4 +867,101 @@ TEST_CASE(
   CHECK(set3Blocks > 0);
 }
 
+TEST_CASE("Retail shaders: bumpyenvironment2 and set 14 (LP6.5b)", "[.][retail]")
+{
+  const auto gamePath = retailGamePath();
+  if (!gamePath)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the shader test needs the game folder");
+  }
+
+  // C72 (SC829, D178): builtin/legacy/bumpyenvironment2 (59), USE_SSR 0, set 14's 512
+  // bytes never pushed (pcEnabled false); both stages reflect equal to OCTAHEDRON_CUBE's
+  // table (set 0 the block by name and offset, set 1 t0-t6, set 2 s0 s1); at USE_SSR 0
+  // the pixel shader declares no t1 (t_ScreenColor) and no t3 (t_Depth): read only
+  // under USE_SSR (BE2:394-483), so the layout's t1 and t3 are the items no stage
+  // declares, and every other item is declared
+  using L = EngineBindingLayout;
+  const auto table = engineParmSetBlock(14);
+  REQUIRE(table.members.size() == 32u);
+  REQUIRE(table.size == 512u);
+  const auto& builtin = *engineBuiltin(EngineBuiltinBumpyEnvironment2);
+  REQUIRE(builtin.bindingLayout == L::OctahedronCube);
+  REQUIRE_FALSE(builtin.requireGPUSkinningSupport);
+  REQUIRE_FALSE(
+    enginePushConstantsEnabled(L::OctahedronCube, enginePushConstantLimit(4096), 0x10DE));
+  const auto expected = engineExpectedLayout(builtin, false);
+  REQUIRE(expected);
+
+  auto stages = std::vector<ShaderReflection>{};
+  auto blocks = 0;
+  for (const auto stage : stagesOf(builtin))
+  {
+    CAPTURE(shaderStageSuffix(stage));
+    const auto blob = readShaderBlob(*gamePath, builtin.name, stage);
+    REQUIRE(blob.is_success());
+    const auto defines = engineBuiltinDefines(builtin, false);
+    const auto keys = shaderBlobKeys(blob.value());
+    CHECK(std::ranges::find(keys, shaderPermutationKey(defines)) != keys.end());
+    const auto code = findShaderPermutation(blob.value(), defines);
+    REQUIRE(code.is_success());
+    const auto reflection = reflectSpirv(code.value());
+    REQUIRE(reflection.is_success());
+    const auto difference = compareReflection(reflection.value(), *expected);
+    CHECK_FALSE(difference);
+    if (difference)
+    {
+      std::cout << builtin.name << "." << shaderStageSuffix(stage) << ": " << *difference
+                << "\n";
+    }
+    CHECK_FALSE(reflection.value().pushConstants);
+    for (const auto& binding : reflection.value().bindings)
+    {
+      std::cout << "LP6.5b: " << shaderStageSuffix(stage) << " set " << binding.set
+                << " binding " << binding.binding << " "
+                << describeDescriptorKind(binding.kind) << " " << binding.name << "\n";
+      if (binding.set == 0 && binding.binding == 256 && binding.block)
+      {
+        const auto& uniforms = *binding.block;
+        REQUIRE(uniforms.members.size() == table.members.size());
+        for (std::size_t i = 0; i < table.members.size(); ++i)
+        {
+          CHECK(uniforms.members[i].name == table.members[i].name);
+          CHECK(uniforms.members[i].offset == table.members[i].offset);
+        }
+        CHECK(uniforms.size == 512u);
+        ++blocks;
+      }
+    }
+    stages.push_back(reflection.value());
+  }
+  CHECK(blocks == 2);
+
+  // the coverage: t1 first, then (without it) t3, then (without both) nothing
+  const auto uncovered = compareLayoutCoverage(stages, *expected);
+  REQUIRE(uncovered);
+  CHECK(
+    *uncovered
+    == "the table's set 1 binding 1 (a sampled image) is declared by no stage");
+  auto withoutSsr = *expected;
+  withoutSsr.sets[1].bindings.resize(0);
+  for (const auto& item : expected->sets[1].bindings)
+  {
+    if (
+      nvrhi::ResourceType(item.type) != nvrhi::ResourceType::Texture_SRV
+      || (item.slot != 1u && item.slot != 3u))
+    {
+      withoutSsr.sets[1].bindings.push_back(item);
+    }
+  }
+  const auto rest = compareLayoutCoverage(stages, withoutSsr);
+  CHECK_FALSE(rest);
+  if (rest)
+  {
+    std::cout << builtin.name << ": " << *rest << "\n";
+  }
+  std::cout << "LP6.5b: bumpyenvironment2 reflected (two stages, " << blocks
+            << " set 14 blocks); the layout's items no stage declares: t1, t3\n";
+}
+
 } // namespace tb::lit

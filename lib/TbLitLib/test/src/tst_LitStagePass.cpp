@@ -549,8 +549,9 @@ TEST_CASE(
   }
 
   SECTION(
-    "LP5.2b (C48): the cube and sky texgens on 55, 57, 69 and 70; reflect2 skipped; "
-    "normal and glassWarp on 15 with a warning")
+    "LP5.2b (C48): the cube and sky texgens on 55, 57, 69 and 70; reflect2 skipped "
+    "without a bump stage, on 59 with one (LP6.5b); normal and glassWarp on 15 with a "
+    "warning")
   {
     // TG_REFLECT_CUBE without a bump stage: environment (55)
     const auto reflect = drawsOf("textures/lp5t/reflect", WhiteParms);
@@ -586,15 +587,34 @@ TEST_CASE(
         == em::LightingAmbient);
     }
 
-    // TG_REFLECT_CUBE2, with or without a bump stage: not drawn (LP6's inputs; a cube in
-    // texture_color's Texture2D), counted
-    for (const auto* name : {"textures/lp5t/reflect2", "textures/lp5t/bumpy_reflect2"})
+    // TG_REFLECT_CUBE2 without a bump stage: not drawn (a cube in texture_color's
+    // Texture2D, M-STAGE-DIFF-05), counted
     {
-      CAPTURE(name);
-      const auto result = drawsOf(name, WhiteParms);
+      const auto result = drawsOf("textures/lp5t/reflect2", WhiteParms);
       CHECK(result.draws.empty());
       CHECK(result.skipped == 1u);
       CHECK(result.texgenLp6 == 1u);
+      CHECK_FALSE(
+        engineHasBumpyEnvironment2Stage(*parsed(decls, "textures/lp5t/reflect2")));
+    }
+    // LP6.5b (C72, D180): with a bump stage, bumpyenvironment2 (59), the bump stage's
+    // index carried for unit 0; it samples no cube at t0 (P8.24)
+    {
+      const auto material = parsed(decls, "textures/lp5t/bumpy_reflect2");
+      const auto bump = engineBumpStage(*material);
+      REQUIRE(bump >= 0);
+      const auto result = drawsOf("textures/lp5t/bumpy_reflect2", WhiteParms);
+      REQUIRE(result.draws.size() == 1u);
+      CHECK(result.skipped == 0u);
+      CHECK(result.texgenLp6 == 0u);
+      CHECK(result.draws[0].program == StageProgram::BumpyEnvironment2);
+      CHECK(result.draws[0].bumpStage == bump);
+      CHECK_FALSE(engineStageProgramSamplesCube(result.draws[0].program));
+      CHECK(blendOf(result.draws[0].state) == (gls::SrcBlendOne | gls::DstBlendOne));
+      CHECK(engineHasBumpyEnvironment2Stage(*material));
+      // TG_REFLECT_CUBE with a bump stage is 57's, not a consumer of the normals
+      CHECK_FALSE(
+        engineHasBumpyEnvironment2Stage(*parsed(decls, "textures/lp5t/bumpy_reflect")));
     }
 
     // TG_SKYBOX_CUBE: skybox (69); one stage, not blended: opaque, EQUAL

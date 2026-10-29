@@ -2804,6 +2804,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         status.ssaoRan = litStats.ssaoRan;
         // LP6.5b (C71): the copy for the second stage call
         status.stageCopies = litStats.stageCopies;
+        // LP6.5b (C72): bumpyenvironment2's draws and its stages listed
+        status.bumpyEnvironment2Draws = litStats.bumpyEnvironment2Draws;
+        status.bumpyEnvironment2Listed = litStats.bumpyEnvironment2Listed;
         status.skippedDraws = litStats.skippedDraws;
         status.pendingPipelines = litStats.pendingPipelines + tonemap.pendingPipelines;
         const auto account = accountGpuMemory(

@@ -318,6 +318,8 @@ std::span<const EngineParmSetMember> engineParmSetMembers(const int set)
     return EngineParmSet11;
   case 12:
     return EngineParmSet12;
+  case 14:
+    return EngineParmSet14;
   default:
     return {};
   }
@@ -654,6 +656,25 @@ std::optional<std::vector<nvrhi::BindingLayoutDesc>> engineBindingLayoutDescs(
       layoutDesc(S::Pixel, {Item::Texture_SRV(0), Item::Texture_SRV(1)}),
       layoutDesc(S::Pixel, {Item::Sampler(0)}),
     };
+  case L::OctahedronCube:
+    // LP6.5b (C72): :667-681: uniforms (set 14, 512 bytes: a volatile buffer); the normal
+    // map, the HDR _currentRender, _currentNormals, _currentDepth (Hi-Z) and three
+    // radiance images at t0-t6 (octahedronCubeBindingLayout); s0 s1
+    // (samplerTwoBindingLayout). Its skinned form (:683-686, row 60) is not mirrored: no
+    // skinned model
+    return std::vector{
+      uniforms(false),
+      layoutDesc(
+        S::Pixel,
+        {Item::Texture_SRV(0),
+         Item::Texture_SRV(1),
+         Item::Texture_SRV(2),
+         Item::Texture_SRV(3),
+         Item::Texture_SRV(4),
+         Item::Texture_SRV(5),
+         Item::Texture_SRV(6)}),
+      layoutDesc(S::Pixel, {Item::Sampler(0), Item::Sampler(1)}),
+    };
   case L::PostProcessIngame:
     // LP5.0 (C47): :588-602: one set of the uniforms and t0 t1 t2 (_currentRender, the
     // normal map, the mask), visibility All; s0
@@ -877,6 +898,13 @@ std::optional<std::vector<std::vector<EngineBindingSetItem>>> engineBindingSetSh
     // :1677-1734 (PointWrap only under R_UsePixelatedLook): m_LinearWrapSampler, made
     // after the leaked Comparison reduction (CommonPasses.cpp:87-91, D68)
     return Sets{{uniforms}, {unit(0), unit(1)}, {common(0, C::LinearWrap)}};
+  case L::OctahedronCube:
+    // LP6.5b (C72): :1797-1888: units 0-6 at t0-t6 (GetImageAt), AnisotropicWrap
+    // (PointWrap only under R_UsePixelatedLook) and LinearBorder
+    return Sets{
+      {uniforms},
+      {unit(0), unit(1), unit(2), unit(3), unit(4), unit(5), unit(6)},
+      {common(0, C::AnisotropicWrap), common(1, C::LinearBorder)}};
   default:
     return std::nullopt;
   }

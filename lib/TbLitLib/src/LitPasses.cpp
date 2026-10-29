@@ -153,6 +153,29 @@ PassDesc ssaoPassDesc()
   return pass;
 }
 
+/**
+ * The probe path's view parms (RenderBackend.cpp:1308-1333; LP6.5b: TG_REFLECT_CUBE2's,
+ * :395-419, are the same): WOBBLESKY_X the probe bounds' mins with their validity (0 when
+ * cleared), _Y their maxs, _Z their centre, TEXGEN_0_S..Q the three probe positions,
+ * LOCALLIGHTORIGIN the radiance blends. Pure.
+ */
+std::array<std::pair<RenderParm, Vec4>, 7> viewProbeParms(const ViewProbes& probes)
+{
+  const auto& bounds = probes.globalProbeBounds;
+  const auto cleared = engineBoundsIsCleared(bounds);
+  const auto centre = engineBoundsCenter(bounds);
+  return {{
+    {RenderParm::WobbleSkyX,
+     Vec4{bounds[0][0], bounds[0][1], bounds[0][2], cleared ? 0.0f : 1.0f}},
+    {RenderParm::WobbleSkyY, Vec4{bounds[1][0], bounds[1][1], bounds[1][2], 0.0f}},
+    {RenderParm::WobbleSkyZ, Vec4{centre[0], centre[1], centre[2], 1.0f}},
+    {RenderParm::TexGen0S, probes.probePositions[0]},
+    {RenderParm::TexGen0T, probes.probePositions[1]},
+    {RenderParm::TexGen0Q, probes.probePositions[2]},
+    {RenderParm::LocalLightOrigin, probes.blends},
+  }};
+}
+
 // LP6.5b (C1's case rule): idStr::Icmp == 0, ASCII letters compared without case
 bool icmpEqual(const std::string_view a, const std::string_view b)
 {
@@ -445,17 +468,27 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
   // disabled program (a missing blob, a reflection mismatch: the compile thread's one
   // notice) disables the pass, the frame converges without SSAO
   m_ssaoImage = nullptr;
-  if (inputs.ssao && !m_lists.drawSurfs.empty())
+  // LP6.5b (C72, D176, the director's reading (2)): pass 3's other consumer, a
+  // bumpyenvironment2 stage of the lists (its t2), with SSAO off too
+  m_stats.bumpyEnvironment2Listed = m_bumpyEnvironment2Listed;
+  const auto normalsForStages = m_bumpyEnvironment2Listed > 0;
+  if ((inputs.ssao || normalsForStages) && !m_lists.drawSurfs.empty())
   {
     auto& pipelines = *inputs.pipelines;
-    // copies: a lookup is valid until the next call (RenderPipelines)
-    const auto ssaoPipelines = std::array<ComputePipelineLookup, 3>{
-      pipelines.compute(EngineNamedSsaoDeinterleave),
-      pipelines.compute(EngineNamedSsaoCompute),
-      pipelines.compute(EngineNamedSsaoBlur)};
-    auto ready = true;
+    // copies: a lookup is valid until the next call (RenderPipelines); asked for only in
+    // a session with SSAO
+    const auto ssaoPipelines = inputs.ssao ? std::array<ComputePipelineLookup, 3>{
+                                               pipelines.compute(EngineNamedSsaoDeinterleave),
+                                               pipelines.compute(EngineNamedSsaoCompute),
+                                               pipelines.compute(EngineNamedSsaoBlur)}
+                                           : std::array<ComputePipelineLookup, 3>{};
+    auto ready = inputs.ssao;
     for (const auto& lookup : ssaoPipelines)
     {
+      if (!inputs.ssao)
+      {
+        break;
+      }
       if (lookup.state == ComputePipelineLookup::State::Pending)
       {
         ++m_stats.ssaoPendingPipelines;
@@ -476,15 +509,30 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
       m_stats.pendingPipelines += m_stats.ssaoPendingPipelines;
       m_stats.unconverged = true;
     }
-    if (!m_stats.ssaoDisabled)
+    // pass 3 when a consumer needs it: pass 4 not disabled, or a bumpyenvironment2 stage
+    // listed; its targets made at the first frame that needs them (an SSAO session made
+    // them at Start)
+    if ((inputs.ssao && !m_stats.ssaoDisabled) || normalsForStages)
     {
-      const auto start = FrameClock::now();
-      beginTimer(frame, inputs.gbufferTimer);
-      recordGbuffer(frame);
-      m_stats.gbufferTimed = endTimer(frame, inputs.gbufferTimer);
-      m_stats.gbufferRecordMs = recordMsSince(start);
+      if (!inputs.frame->ensureNormals())
+      {
+        m_stats.gbufferDisabled = true;
+        if (m_stats.disabledReason.empty())
+        {
+          m_stats.disabledReason = "the G-buffer's targets cannot be made";
+        }
+      }
+      else
+      {
+        const auto start = FrameClock::now();
+        beginTimer(frame, inputs.gbufferTimer);
+        recordGbuffer(frame);
+        m_stats.gbufferTimed = endTimer(frame, inputs.gbufferTimer);
+        m_stats.gbufferRecordMs = recordMsSince(start);
+      }
       // pass 4 reads what pass 3 wrote: not over a disabled pass 3 nor a pending one
-      m_stats.ssaoDisabled = m_stats.gbufferDisabled;
+      m_stats.ssaoDisabled =
+        inputs.ssao && (m_stats.ssaoDisabled || m_stats.gbufferDisabled);
     }
     if (
       ready && m_stats.gbufferRan && !m_stats.gbufferDisabled
@@ -797,6 +845,7 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
     const auto linksStart = FrameClock::now();
     m_lists = FrontendLists{};
     m_stageOrder.clear();
+    m_bumpyEnvironment2Listed = 0;
     linkRecords();
     m_records.endBuild();
     m_stats.linksMs = recordMsSince(linksStart);
@@ -892,6 +941,11 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
     });
   // LP5.2a (D115): R_SortDrawSurfs' order of the new lists, kept with them
   m_stageOrder = stagePassOrder(m_lists.drawSurfs, m_lists.spaces);
+  // LP6.5b (C72, D176): the surfaces with a bumpyenvironment2 stage, pass 3's consumer
+  m_bumpyEnvironment2Listed =
+    std::size_t(std::ranges::count_if(m_stageOrder, [](const LitSurface* surface) {
+      return surface->material && engineHasBumpyEnvironment2Stage(*surface->material);
+    }));
   // LP6.1 (C64): the new lists' links into the records, then the sweep
   linkRecords();
   m_records.endBuild();
@@ -2461,19 +2515,7 @@ void LitPasses::recordAmbient(Frame& frame)
   // probe bounds with their validity, the three probe positions, the radiance blends and
   // the blended SH (SetVertexParms of nine contiguous float4s)
   const auto& probes = m_viewProbes;
-  const auto& bounds = probes.globalProbeBounds;
-  const auto cleared = engineBoundsIsCleared(bounds);
-  const auto centre = engineBoundsCenter(bounds);
-  const auto probeParms = std::array<std::pair<RenderParm, Vec4>, 7>{{
-    {RenderParm::WobbleSkyX,
-     Vec4{bounds[0][0], bounds[0][1], bounds[0][2], cleared ? 0.0f : 1.0f}},
-    {RenderParm::WobbleSkyY, Vec4{bounds[1][0], bounds[1][1], bounds[1][2], 0.0f}},
-    {RenderParm::WobbleSkyZ, Vec4{centre[0], centre[1], centre[2], 1.0f}},
-    {RenderParm::TexGen0S, probes.probePositions[0]},
-    {RenderParm::TexGen0T, probes.probePositions[1]},
-    {RenderParm::TexGen0Q, probes.probePositions[2]},
-    {RenderParm::LocalLightOrigin, probes.blends},
-  }};
+  const auto probeParms = viewProbeParms(probes);
   auto sh = std::array<float, 36>{};
   for (std::size_t i = 0; i < 9; ++i)
   {
@@ -4258,12 +4300,13 @@ std::size_t LitPasses::recordStages(
     m_stats.stageCinematic += surfaceDraws.cinematic;
     if (surfaceDraws.texgenLp6 > 0 && !m_texgenLp6Warned && inputs.warn)
     {
-      // C48, P6.18 (mirror.json M-STAGE-DIFF-05)
+      // C48, P6.18 (mirror.json M-STAGE-DIFF-05, narrowed by LP6.5b: a reflect2 stage
+      // with a bump stage draws bumpyenvironment2)
       m_texgenLp6Warned = true;
       inputs.warn(
-        "The lit preview does not draw texGen reflect2 stages (their programs need the "
-        "G-buffer, Hi-Z and probe inputs of a later package): some material stages are "
-        "not drawn");
+        "The lit preview does not draw texGen reflect2 stages without a bump stage (the "
+        "engine samples their cube image as a 2D texture): some material stages are not "
+        "drawn");
     }
 
     for (const auto& stageDraw : surfaceDraws.draws)
@@ -4348,6 +4391,9 @@ std::size_t LitPasses::recordStages(
         case StageProgram::WobbleSky:
           program = EngineBuiltinWobbleSky;
           break;
+        case StageProgram::BumpyEnvironment2:
+          program = EngineBuiltinBumpyEnvironment2;
+          break;
         case StageProgram::TextureColor:
         case StageProgram::Material:
           program = EngineBuiltinTextureVertexColor;
@@ -4365,7 +4411,26 @@ std::size_t LitPasses::recordStages(
             "about and draws as a plain stage (\"Please contact Brian!\")");
         }
 
-        if (engineStageProgramSamplesCube(stageDraw.program))
+        if (stageDraw.program == StageProgram::BumpyEnvironment2)
+        {
+          // LP6.5b (C72, the director's reading (7)): never over normals pass 3 did not
+          // write whole this frame: a pending pass 3 leaves the frame unconverged, a
+          // disabled one (its notice given) leaves the stage undrawn
+          if (
+            !m_stats.gbufferRan || m_stats.gbufferDisabled
+            || m_stats.gbufferPendingPipelines > 0)
+          {
+            ++m_stats.stageSkipped;
+            ++m_stats.bumpyEnvironment2WithoutNormals;
+            if (!m_stats.gbufferDisabled)
+            {
+              m_stats.unconverged = true;
+            }
+            continue;
+          }
+          drawable = bindBumpyEnvironment2(frame, material, stageDraw.bumpStage);
+        }
+        else if (engineStageProgramSamplesCube(stageDraw.program))
         {
           // LP5.2b (C48): BindVariableStageImage binds the stage's cube image at unit 0
           // (its _default when not loaded or defaulted, a 2D image in the TextureCube
@@ -4463,6 +4528,8 @@ std::size_t LitPasses::recordStages(
       {
       case DrawOutcome::Drawn:
         ++m_stats.stageDraws;
+        m_stats.bumpyEnvironment2Draws +=
+          program == EngineBuiltinBumpyEnvironment2 ? 1 : 0;
         log(frame, LitDrawRecord::Pass::Stage, *surface.chunk, program, stageDraw.state);
         break;
       case DrawOutcome::Disabled:
@@ -4523,6 +4590,106 @@ bool LitPasses::copyCurrentRender(Frame& frame)
   m_state.valid = false;
   ++m_stats.stageCopies;
   return true;
+}
+
+bool LitPasses::bindBumpyEnvironment2(
+  Frame& frame, const MaterialEntry& material, const int bumpStage)
+{
+  const auto& inputs = *frame.inputs;
+  auto& images = *inputs.images;
+  const auto& view = frame.view;
+
+  // RB:395-419: the probe bounds with their validity and centre, the probe positions and
+  // the specular cubemap blend weights, as the ambient pass's probe path sets them
+  for (const auto& [parm, value] : viewProbeParms(m_viewProbes))
+  {
+    m_parms.set(parm, value);
+  }
+
+  // RB:421-435: the general SSR parms ( stride, max distance, z thickness, jitter ) and
+  // rpJitterTexScale ( max distance, 0, 0, 0 ) at the cvars' defaults
+  m_parms.set(
+    RenderParm::JitterTexScale, Vec4{EngineFrame.ssrMaxDistance, 0.0f, 0.0f, 0.0f});
+  m_parms.set(
+    RenderParm::GlobalLightOrigin,
+    Vec4{
+      EngineFrame.ssrStride,
+      EngineFrame.ssrMaxDistance,
+      EngineFrame.ssrZThickness,
+      EngineFrame.ssrJitter});
+
+  // RB:438: SHADOW_MATRIX_0 the unprojection to camera space (R_SetupUnprojection: the
+  // projection matrix's full inverse, transposed into an idRenderMatrix; zero when it has
+  // none, as the engine's allocation is)
+  auto unprojection = EngineMat4{};
+  if (const auto inverse = engineMatrixInverse(view.projectionMatrix))
+  {
+    unprojection = engineMatrixTranspose(*inverse);
+  }
+  m_parms.set(RenderParm::ShadowMatrix0X, unprojection);
+  // RB:446-471: SHADOW_MATRIX_1 = screenScale( w, h ) · matClipToUvzw ·
+  // projectionRenderMatrix, w and h the render size
+  const auto w = float(view.width);
+  const auto h = float(view.height);
+  // clang-format off
+  const auto clipToUvzw = EngineMat4{
+    0.5f,  0.0f, 0.0f, 0.5f,
+    0.0f, -0.5f, 0.0f, 0.5f,
+    0.0f,  0.0f, 1.0f, 0.0f,
+    0.0f,  0.0f, 0.0f, 1.0f};
+  const auto screenScale = EngineMat4{
+    w,    0.0f, 0.0f, 0.0f,
+    0.0f, h,    0.0f, 0.0f,
+    0.0f, 0.0f, 1.0f, 0.0f,
+    0.0f, 0.0f, 0.0f, 1.0f};
+  // clang-format on
+  m_parms.set(
+    RenderParm::ShadowMatrix1X,
+    engineMatrixMultiply(
+      engineMatrixMultiply(screenScale, clipToUvzw), view.projectionRenderMatrix));
+
+  // RB:473-500: unit 0 the bump stage's image (the stage's cube, which
+  // BindVariableStageImage bound there first, is never sampled: P8.24), 1
+  // currentRenderImage (read only under USE_SSR: _default), 2 the G-buffer's normals
+  // (by name), 3 the Hi-Z (read only under USE_SSR: the stand-in), 4-6 the view's
+  // radiance images (below)
+  const auto& bump = material.stages[std::size_t(bumpStage)];
+  setUnit(images, 0, bumpImage(images, bump.image));
+  setUnit(images, 1, Intrinsic::Default);
+  const auto normals = inputs.frame->find(frame_resource::CurrentNormals);
+  setUnitTarget(2, normals ? normals->texture : nullptr);
+  if (!m_hiZStandIn)
+  {
+    m_hiZStandIn = inputs.device->createTexture(
+      nvrhi::TextureDesc{}
+        .setDebugName("_cszBuffer stand-in")
+        .setDimension(nvrhi::TextureDimension::Texture2D)
+        .setWidth(1)
+        .setHeight(1)
+        .setFormat(nvrhi::Format::R32_FLOAT)
+        .setIsRenderTarget(true)
+        .setInitialState(nvrhi::ResourceStates::ShaderResource)
+        .setKeepInitialState(true));
+    if (m_hiZStandIn)
+    {
+      inputs.commandList->clearTextureFloat(
+        m_hiZStandIn, nvrhi::AllSubresources, nvrhi::Color{0.0f});
+      // nvrhi rule 7: a clear ends the render pass
+      m_state.valid = false;
+    }
+  }
+  setUnitTarget(3, m_hiZStandIn.Get());
+  // M-STAGE-DIFF-07: the engine binds the view's radiance images at t4-t6
+  // (viewDef->radianceImages, cubes in this fork: CF_NATIVE_HDR probes and the default
+  // cube), which bumpyenvironment2.ps declares Texture2D and samples by octahedral
+  // coordinates: a cube view in a 2D slot, undefined (a Vulkan validation error, and
+  // NVRHI binds no 2D view of a cube). The preview binds _black there: no radiance, so
+  // the stage adds nothing it cannot know
+  for (const auto unit : {std::size_t{4}, std::size_t{5}, std::size_t{6}})
+  {
+    setUnit(images, unit, Intrinsic::Black);
+  }
+  return hasUnit(0) && m_unitTargets[2] != nullptr && m_unitTargets[3] != nullptr;
 }
 
 void LitPasses::recordFogLights(Frame& frame)
@@ -5286,6 +5453,7 @@ bool LitPasses::bindingSets(
                         : layout == EngineBindingLayout::Fog                ? 3u
                         : layout == EngineBindingLayout::Blendlight         ? 3u
                         : layout == EngineBindingLayout::PostProcessIngame  ? 2u
+                        : layout == EngineBindingLayout::OctahedronCube     ? 3u
                                                                             : 1u;
   if (layouts.size() != expected)
   {
@@ -5706,6 +5874,33 @@ bool LitPasses::bindingSets(
     sets[2] = acquire(2, samplerKey, [&] {
       return device.createBindingSet(
         nvrhi::BindingSetDesc{}.addItem(Item::Sampler(0, common->linearWrap)),
+        layouts[2]);
+    });
+    return sets[2] != nullptr;
+  }
+  case EngineBindingLayout::OctahedronCube: {
+    // LP6.5b (C72): OCTAHEDRON_CUBE (RenderBackend_NVRHI.cpp:1797-1888): t0-t6 the units
+    // 0-6 (bindBumpyEnvironment2), s0 AnisotropicWrap (compare-enabled, D68; PointWrap
+    // only under R_UsePixelatedLook) and s1 LinearBorder (the shader's s_LinearClamp)
+    if (!textureSet(1, {0, 1, 2, 3, 4, 5, 6}, 0))
+    {
+      return false;
+    }
+    const auto* common = inputs.samplers->common(device)
+                         | kdl::value_or(static_cast<const SamplerSet::Common*>(nullptr));
+    if (!common)
+    {
+      return false;
+    }
+    auto samplerKey = BindingSetKey{};
+    samplerKey.layout = layouts[2].Get();
+    samplerKey.samplers = 9;
+    samplerKey.resources = {common->anisotropicWrap.Get(), common->linearBorder.Get()};
+    sets[2] = acquire(2, samplerKey, [&] {
+      return device.createBindingSet(
+        nvrhi::BindingSetDesc{}
+          .addItem(Item::Sampler(0, common->anisotropicWrap))
+          .addItem(Item::Sampler(1, common->linearBorder)),
         layouts[2]);
     });
     return sets[2] != nullptr;
@@ -6353,6 +6548,10 @@ void LitPasses::releaseAll()
   m_constantBuffers.clear();
   m_lists = FrontendLists{};
   m_stageOrder.clear();
+  m_bumpyEnvironment2Listed = 0;
+  // LP6.5b (C72): the t3 stand-in goes with the session's device objects
+  m_hiZStandIn = nullptr;
+  m_unitTargets = {};
   m_materialPrograms.clear();
   m_viewProbes = ViewProbes{};
   m_listsKey.reset();

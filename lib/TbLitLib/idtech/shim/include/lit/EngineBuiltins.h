@@ -1499,6 +1499,10 @@ inline constexpr int EngineBuiltinEnvironment = 55;
 inline constexpr int EngineBuiltinBumpyEnvironment = 57;
 inline constexpr int EngineBuiltinSkyBox = 69;
 inline constexpr int EngineBuiltinWobbleSky = 70;
+// LP6.5b (C72, D180): BUILTIN_BUMPY_ENVIRONMENT2 (RenderProgs.h:473), which
+// PrepareStageTexturing binds for TG_REFLECT_CUBE2 with a bump stage at r_useSSR 0 (60
+// its skinned form, never selected: no skinned model; 61 and 62 the USE_SSR forms, K2)
+inline constexpr int EngineBuiltinBumpyEnvironment2 = 59;
 inline constexpr int EngineBuiltinDepth = 63;
 // LP5.3 (C49): FogAllLights' programs (RenderProgs.h:481-484): BUILTIN_BLENDLIGHT,
 // "builtin/fog/blendlight" (BLENDLIGHT), and BUILTIN_FOG, "builtin/fog/fog" (FOG)
