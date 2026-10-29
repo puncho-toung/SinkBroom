@@ -734,7 +734,9 @@ TEST_CASE(
     CHECK(blendOf(result.draws[0].state) == (gls::SrcBlendOne | gls::DstBlendOne));
   }
 
-  SECTION("a fragmentMap of _currentRender: SS_POST_PROCESS and translucent (K38)")
+  SECTION(
+    "a fragmentMap of _currentRender: SS_POST_PROCESS and translucent (the second stage "
+    "call draws it, LP6.5b)")
   {
     const auto haze = parsed(decls, "textures/lp5t/haze");
     // MAT:3199-3230

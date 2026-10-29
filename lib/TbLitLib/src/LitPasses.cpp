@@ -701,12 +701,12 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
   }
 
   // LP6.5b (C71, D179, the director's readings (4), (5)): now draw any screen warping
-  // post-process effects using _currentRender (RB:6141-6200, r_skipPostProcess 0 not
-  // mirrored): one copy of the HDR target per frame (one sample: the blit, no resolve),
+  // post-process effects using _currentRender (RB:6141-6200, r_skipPostProcess at its
+  // default 0): one copy of the HDR target per frame (one sample: the blit, no resolve),
   // rpScreenCorrectionFactor ( 1, 1, 0, 1 ) and rpWindowCoord ( 1 / w, 1 / h, w, h ) of
   // the viewport (the whole target), then DrawShaderPasses( drawSurfs + processed, ... )
   // into hdrFBO under the stages' query
-  if (processed < m_stageOrder.size())
+  if (processed < m_stageOrder.size() && !EngineFrame.skipPostProcess)
   {
     if (m_stats.stoppedEarly || (inputs.stopRequested && inputs.stopRequested()))
     {

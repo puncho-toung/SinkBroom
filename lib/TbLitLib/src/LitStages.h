@@ -463,7 +463,8 @@ std::optional<std::array<MaterialImageKey, 2>> engineLightStageUnits(
 
 // ----- the stage pass (LP5.2a, C46, C47, SC519-SC523) -----
 
-// materialSort_t SS_POST_PROCESS (Material.h:319): the stage pass stops at it (K38)
+// materialSort_t SS_POST_PROCESS (Material.h:319): the first stage call stops at it, the
+// second (LP6.5b, C71) draws from it over the frame's _currentRender copy
 inline constexpr float EngineSortPostProcess = 100.0f;
 
 // cullType_t (Material.h:329-334)

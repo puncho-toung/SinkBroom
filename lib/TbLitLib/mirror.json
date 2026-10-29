@@ -21345,7 +21345,7 @@
           "symbol": "LitStagePass: the stage pass's sorted list (the 64-bit key transcribed)"
         }
       ],
-      "note": "LP5.2a step 1 (C46, D115, K37): pass 8 draws the view's drawn surfaces in R_SortDrawSurfs' order: the engine's key is the bits of float( SS_POST_PROCESS - sort ) in the high dword, Ftoui16( min * 0xFFFF ) of DepthBoundsForBounds( space->mvp, bounds ) above the low 16 bits and ( numDrawSurfs - i ) in them, sorted descending: the sort value ascending as the float bits order it (a sort above 100 is a negative float whose bits sort first, and the pass then stops at once: K38), the farthest first (the comment's \"depth smallest first\" is wrong, SC522), then creation order, which is ChunkKey's operator< here (entity, cell, area, material, part: the order buildFrontendLists makes the surfaces in, the leading SS_SUBVIEW ones first, which sort first anyway; the brief's (area, entity, material, cell, part) was the field order, not the comparison's). The preview compares the three levels one by one (no 16-bit index, so no limit at 65535 surfaces); a pending material sorts as SS_OPAQUE (pass 8 skips it). The order is made with the lists (rebuildLists), not every frame: kept lists keep it. K37: the engine sorts dmap's model surfaces (one per area and material, drawn in triangle order), the preview its chunks, so overlapping translucent pieces of one material in one area can blend in another order, and the depth key is a chunk's bounds', not the model surface's. Cost (Debug, 4096 surfaces): 10.9 ms a sort, made once per list build"
+      "note": "LP5.2a step 1 (C46, D115, K37): pass 8 draws the view's drawn surfaces in R_SortDrawSurfs' order: the engine's key is the bits of float( SS_POST_PROCESS - sort ) in the high dword, Ftoui16( min * 0xFFFF ) of DepthBoundsForBounds( space->mvp, bounds ) above the low 16 bits and ( numDrawSurfs - i ) in them, sorted descending: the sort value ascending as the float bits order it (a sort above 100 is a negative float whose bits sort first, and the first call then stops at once; LP6.5b: the second call draws them, M-STAGE-09), the farthest first (the comment's \"depth smallest first\" is wrong, SC522), then creation order, which is ChunkKey's operator< here (entity, cell, area, material, part: the order buildFrontendLists makes the surfaces in, the leading SS_SUBVIEW ones first, which sort first anyway; the brief's (area, entity, material, cell, part) was the field order, not the comparison's). The preview compares the three levels one by one (no 16-bit index, so no limit at 65535 surfaces); a pending material sorts as SS_OPAQUE (pass 8 skips it). The order is made with the lists (rebuildLists), not every frame: kept lists keep it. K37: the engine sorts dmap's model surfaces (one per area and material, drawn in triangle order), the preview its chunks, so overlapping translucent pieces of one material in one area can blend in another order, and the depth key is a chunk's bounds', not the model surface's. Cost (Debug, 4096 surfaces): 10.9 ms a sort, made once per list build"
     },
     {
       "id": "M-STAGE-PURE-01",
@@ -21486,7 +21486,7 @@
           "symbol": "FrameLog: the 54 columns"
         }
       ],
-      "note": "LP5.2a step 2 (C46, D116, D118): DrawShaderPasses' first call, recorded after DrawInteractions' two phases (the preview has no SSR copy, r_useSSR 0, D19) into hdrFBO with the prepass's depth, unless r_skipShaderPasses (EngineFrame.skipShaderPasses) or the test switch that stands in for r_skipAmbient (skipShaderPassesForTesting, D118: the panel never sets it); r_skipInteractions skips the interactions alone (M-TEST-AMB-01). Per surface of the sorted list (M-STAGE-01): a surface whose material or registers are pending is skipped and counted (stagePending, D124, M-PASS-DIFF-05), one without an SL_AMBIENT stage, a portal sky, an empty one and a suppressInSubview one are passed over (the preview's view is no xray subview and every stereo eye is 0), and the pass stops at the first sort of SS_POST_PROCESS or more (K38, M-STAGE-DIFF-01; stagePostProcess counts the surfaces with an SL_AMBIENT stage left there); on a space change MVP, LOCALVIEWORIGIN, MODELMATRIX_X..W and MODELVIEWMATRIX_X..W transposed (AmbientPass' four, setAmbientSpace), the scissor of the surface (M-STAGE-03), the cull (M-STAGE-DEFECT-01), MF_POLYGONOFFSET's GL_PolygonOffset( r_offsetFactor 0, r_offsetUnits -600 * polygonOffset ) in the pipeline key with GLS_POLYGON_OFFSET; at the end GL_Color( 1, 1, 1 ) (alpha 1) and GLS_DEFAULT, which changes no draw (every key carries its whole state, D75). r_skipTranslucent is read by DrawInteractionsPass alone (RB:4145): DrawShaderPasses has no translucent switch, so pass 8 reads none (the brief's \"sibling\" does not exist). The pass has its own timer (gpu_stages_ms) and the frame log three columns after ambient_lights (stage_draws, stage_skipped, gpu_stages_ms: 54); stage_skipped counts the SL_AMBIENT stages of the surfaces the pass reached that drew nothing, every reason summed (a condition of 0, ZERO / ONE, a black add, a transparent blend, r_skipNewAmbient, a cinematic, a cube or sky texgen, a missing program, a stage without an image or with a cube image, an image not written yet, a pending pipeline, the budget). A failed pipeline of 15 or 18 disables the pass (D9); a material program's disables its stages alone"
+      "note": "LP5.2a step 2 (C46, D116, D118): DrawShaderPasses' first call, recorded after DrawInteractions' two phases (the preview has no SSR copy, r_useSSR 0, D19) into hdrFBO with the prepass's depth, unless r_skipShaderPasses (EngineFrame.skipShaderPasses) or the test switch that stands in for r_skipAmbient (skipShaderPassesForTesting, D118: the panel never sets it); r_skipInteractions skips the interactions alone (M-TEST-AMB-01). Per surface of the sorted list (M-STAGE-01): a surface whose material or registers are pending is skipped and counted (stagePending, D124, M-PASS-DIFF-05), one without an SL_AMBIENT stage, a portal sky, an empty one and a suppressInSubview one are passed over (the preview's view is no xray subview and every stereo eye is 0), and the first call stops at the first sort of SS_POST_PROCESS or more (stagePostProcess counts the surfaces with an SL_AMBIENT stage left there, a statistic since LP6.5b, whose second call draws them: M-STAGE-09); on a space change MVP, LOCALVIEWORIGIN, MODELMATRIX_X..W and MODELVIEWMATRIX_X..W transposed (AmbientPass' four, setAmbientSpace), the scissor of the surface (M-STAGE-03), the cull (M-STAGE-DEFECT-01), MF_POLYGONOFFSET's GL_PolygonOffset( r_offsetFactor 0, r_offsetUnits -600 * polygonOffset ) in the pipeline key with GLS_POLYGON_OFFSET; at the end GL_Color( 1, 1, 1 ) (alpha 1) and GLS_DEFAULT, which changes no draw (every key carries its whole state, D75). r_skipTranslucent is read by DrawInteractionsPass alone (RB:4145): DrawShaderPasses has no translucent switch, so pass 8 reads none (the brief's \"sibling\" does not exist). The pass has its own timer (gpu_stages_ms) and the frame log three columns after ambient_lights (stage_draws, stage_skipped, gpu_stages_ms: 54); stage_skipped counts the SL_AMBIENT stages of the surfaces the pass reached that drew nothing, every reason summed (a condition of 0, ZERO / ONE, a black add, a transparent blend, r_skipNewAmbient, a cinematic, a cube or sky texgen, a missing program, a stage without an image or with a cube image, an image not written yet, a pending pipeline, the budget). A failed pipeline of 15 or 18 disables the pass (D9); a material program's disables its stages alone"
     },
     {
       "id": "M-STAGE-03",
@@ -21855,7 +21855,7 @@
           "symbol": "LitSession pass 8, the material stage pass, on a GPU (LP5.2a): vornoipattern, fogwithlights, heathaze"
         }
       ],
-      "note": "LP5.2a steps 2-3 (C47, D9, D121): a stage with a newStage block (unless r_skipNewAmbient) draws once on the material-program table's row of its fragmentProgram (the vertex program's when it names only one; a \"program\" keyword names both with one name, Material.cpp:2184-2193), looked up once per name with both blobs (engineMaterialProgram): a name not in the table or with a blob missing disables the stage, warned once per name, counted in stageProgramMissing; its layout POST_PROCESS_INGAME holds the uniforms and t0-t2 in set 0 and LinearClamp in s0. vertexParm j sets USER0 + j to the four registers (a single expression for all four, two give z 0 and w 1, three w 1); no colour, vertex colour or texture matrix is set; GL_State( stageGLState ) without privatePolygonOffset (the engine applies it after the newStage branch only). Set 8's other members are what the preview's parms hold, as the engine's: WINDOWCOORD the view's (the ambient pass writes the same value), PROJMATRIX_Y the view's, MODELVIEWMATRIX_Z the space's (the space change), ALPHA_TEST 0 (the interactions'), ENABLE_SKINNING 0 (no joints). The fragment images at units 0-2 where not null (M-STAGE-DIFF-03). A material whose stage image or fragment map is _currentRender is SS_POST_PROCESS and translucent by the copied parser (MAT:3199-3230, the CPU test with a heathaze material) and never reaches the pass (K38), whatever program it names; fogwithlights samples no texture, so a material of it without _currentRender is SS_MEDIUM and drawn (the S14 row)"
+      "note": "LP5.2a steps 2-3 (C47, D9, D121): a stage with a newStage block (unless r_skipNewAmbient) draws once on the material-program table's row of its fragmentProgram (the vertex program's when it names only one; a \"program\" keyword names both with one name, Material.cpp:2184-2193), looked up once per name with both blobs (engineMaterialProgram): a name not in the table or with a blob missing disables the stage, warned once per name, counted in stageProgramMissing; its layout POST_PROCESS_INGAME holds the uniforms and t0-t2 in set 0 and LinearClamp in s0. vertexParm j sets USER0 + j to the four registers (a single expression for all four, two give z 0 and w 1, three w 1); no colour, vertex colour or texture matrix is set; GL_State( stageGLState ) without privatePolygonOffset (the engine applies it after the newStage branch only). Set 8's other members are what the preview's parms hold, as the engine's: WINDOWCOORD the view's (the ambient pass writes the same value), PROJMATRIX_Y the view's, MODELVIEWMATRIX_Z the space's (the space change), ALPHA_TEST 0 (the interactions'), ENABLE_SKINNING 0 (no joints). The fragment images at units 0-2 where not null (M-STAGE-DIFF-03). A material whose stage image or fragment map is _currentRender is SS_POST_PROCESS and translucent by the copied parser (MAT:3199-3230, the CPU test with a heathaze material): the first call stops before it and (LP6.5b, M-STAGE-09) the second draws it over the frame's copy, whatever program it names, its _currentRender (and _currentNormals) fragment map bound by name, its _accum _default (K56); fogwithlights samples no texture, so a material of it without _currentRender is SS_MEDIUM and drawn (the S14 row)"
     },
     {
       "id": "M-STAGE-DEFECT-02",
@@ -21891,28 +21891,6 @@
         }
       ],
       "note": "LP5.2a (C47, engine facts against the plan): the fork's vornoipattern vertex shader writes its clip position to a POSITION output (vornoipattern.vs.hlsl:50) where every other program writes SV_Position, so its blob gives the rasterizer no clip position and draws nothing (the [litgpu2] case: 0 pixels differ; the draw is made and counted); the preview binds the same blob and mirrors it. S13 keeps vornoipattern (both sides draw nothing over an unlit wall); S14 adds fogwithlights, which samples no texture, so a material naming it without a _currentRender fragment map is not SS_POST_PROCESS and draws its clouds from SV_Position and USER0 (iTime, iResolution)"
-    },
-    {
-      "id": "M-STAGE-DIFF-01",
-      "kind": "difference",
-      "engine": [
-        {
-          "file": "neo/renderer/RenderBackend.cpp",
-          "lines": [
-            6136,
-            6198
-          ],
-          "anchor": "DrawViewInternal: FogAllLights, the _currentRender copy and the second DrawShaderPasses call",
-          "sha256": "891f282e979b2ea56b989e096c8e48c7b6444956ebff1cb3ed02881e073040bc"
-        }
-      ],
-      "sinkbroom": [
-        {
-          "file": "lib/TbLitLib/src/LitPasses.cpp",
-          "symbol": "LitPasses::recordStages (the stop at SS_POST_PROCESS)"
-        }
-      ],
-      "note": "LP5.2a (K38, K12 restated, D116, Q30): the first call stops at the first SS_POST_PROCESS surface (currentRenderCopied is false there) and the engine draws the rest after the fog lights over a copy of the HDR target with LESS and depth writes; the preview has no _currentRender copy in LP5 and draws nothing from the stop on: the surface behind shows where the engine draws the post-process stage. Every retail newStage program but vornoipattern and fogwithlights reads _currentRender (LP5.0); a material is in this class by its stage image or fragment map _currentRender, whatever its program"
     },
     {
       "id": "M-STAGE-DIFF-02",
@@ -22251,6 +22229,171 @@
       "note": "LP5.2b step 1 (C48, P6.5, P6.19): pass 8 binds PrepareStageTexturing's program over texture_color: TG_REFLECT_CUBE environment (55, DEFAULT, set 0: LOCALVIEWORIGIN, COLOR, MVP), or with a bump stage (GetBumpStage: the material's first SL_BUMP stage, the implicit _flat of a lit material included) bumpyenvironment (57, NORMAL_CUBE, set 5: MODELMATRIX_X..Z too) with the bump stage's image raw at unit 1; TG_SKYBOX_CUBE skybox (69, LEGACY, set 5); TG_WOBBLESKY_CUBE wobblesky (70, LEGACY, set 5) with WOBBLESKY_X..Z from the three texGenRegisters (tilt degrees, wobble and rotate rates per minute) through the registers, transcribed on the copied idMath and idVec3 (engineWobbleSkyTransform); TG_DIFFUSE_CUBE and TG_GLASSWARP keep texture_color with the engine's warning, said once. K5, D119: the transform's time is renderView.time[0] (milliseconds, times 0.001), which no renderparm carries (it reaches the shader only through the three rows): the preview passes 0, so a wobbleSky stage with a rate is drawn at time 0. The shaders: environment's colour is sRGBAToLinearRGBA( rpColor ) and its output sRGBToLinear( cube ) times it; bumpyenvironment's colour rpColor (not linearised) and its normal map sampled through s0; skybox's texcoord position - LOCALVIEWORIGIN and colour rpColor; wobblesky's texcoord ( position - LOCALVIEWORIGIN ) through the three rows and colour the vertex colour times modulate plus add (RB_SetVertexColorParms of the stage), not rpColor; every texcoord is affine per vertex, so the rows are exact, not K28 (P6.5). The texture matrix is loaded for every stage (RB_LoadShaderTextureMatrix) and TEXGEN_0_ENABLED written 0; FinishStageTexturing's Unbind has no NVRHI counterpart (the next draw's pipeline replaces the program). DEFAULT and LEGACY bind the cube with its own sampler, a cube image's repeat being TR_CLAMP from its load on (Image_load.cpp:587-591); NORMAL_CUBE's s0 is CommonPasses' LinearWrap with the leaked Comparison reduction (D68, D20: mirrored). P6.19, the validation layer's answer on the first frames that drew 57 (the LP5.2b [.][litgpu2] case: a colour cube at t0 and _flat at t1 sampled with Sample() through the compare-enabled s0): 0 messages (0 errors, 0 warnings beyond M-PIPE-DEFECT-01's mirrored ones), a mirrored engine fact; the sampler is the engine's"
     },
     {
+      "id": "M-STAGE-09",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            6136,
+            6198
+          ],
+          "anchor": "DrawViewInternal: FogAllLights, the _currentRender copy and the second DrawShaderPasses call",
+          "sha256": "891f282e979b2ea56b989e096c8e48c7b6444956ebff1cb3ed02881e073040bc"
+        },
+        {
+          "file": "neo/renderer/NVRHI/Framebuffer_NVRHI.cpp",
+          "lines": [
+            150,
+            152
+          ],
+          "anchor": "postProcFBO = { _currentRender }",
+          "sha256": "783eb66dddf3d1fd8e8a38ab8d44ed2377e124b77990ee5a3475385bd32ce02e"
+        },
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            6550,
+            6600
+          ],
+          "anchor": "idRenderBackend::CopyRender (RC_COPY_RENDER): not mirrored",
+          "sha256": "554ccb722b6c28a0e0a20f538abb25aa465cc5223ed4f5adb162e09866b9f2b4"
+        },
+        {
+          "file": "neo/renderer/Material.cpp",
+          "lines": [
+            1250,
+            1254
+          ],
+          "anchor": "ParseFragmentMap: unit 1 is the normal map (TD_BUMP)",
+          "sha256": "7dec957db5cb490b7fccbc676d91b2d260d3f7c4bac28cb4b81c049b74266dba"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::recordFrame (the copy and the second call after the fog lights), LitPasses::recordStages (first, copied), LitPasses::copyCurrentRender, LitPasses::namedTarget, LitPasses::setUnitTarget, LitPasses::bindingSets (keyUnit)"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameResources.cpp",
+          "symbol": "FrameResources::ensureCurrentRender, makeCurrentRender, makeTargets, renderTargetBytes"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.h",
+          "symbol": "LitFrameStats::stageCopies, stageSecondCall, stagePostProcessDraws; LitDrawRecord::postProcess"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/LitSession.h",
+          "symbol": "SessionStatus::stagePostProcess, stageCopies"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession the _currentRender copy and the second stage call on a GPU (LP6.5b)"
+        }
+      ],
+      "note": "LP6.5b (C71, D179, A56, P8.5, P8.8, P8.25, SC824-SC828): the first DrawShaderPasses call stops at the first SS_POST_PROCESS surface and answers its index (stagePostProcess counts what is left); after FogAllLights, when a surface is left (processed < numDrawSurfs) and r_skipPostProcess is 0 (its default, EngineFrameDefaults::skipPostProcess: never set), the engine blits hdrFBO's colour 0 into postProcFBO (one sample: no resolve), once per view; the preview makes one copyTexture of the whole _currentRenderHDR into _currentRender (RGBA16F, the HDR target's extent, a render target with keepInitialState, made at the first frame that copies, kept, remade with the targets on a new extent and in renderTargetBytes from then on: 16.6 MB at 1920 x 1080), NVRHI tracking the HDR target CopySource and back and _currentRender CopyDest then ShaderResource (stageCopies, 0 or 1). Then rpScreenCorrectionFactor ( 1, 1, 0, 1 ) and rpWindowCoord ( 1 / w, 1 / h, w, h ) and the second call over the rest of the sorted list from the index, into hdrFBO (the blit leaves the backend's framebuffer as it was), currentSpace forced again and currentScissor carried from the fog lights; the Stages timer query stays open across the fog lights and the copy (one query per pass and frame: gpu_stages_ms then spans them). With r_skipAmbient's stand-in (skipShaderPassesForTesting) the engine's call returns numDrawSurfs: no copy, no second call. A newStage fragment map _currentRender or _currentNormals (Icmp) binds the frame resource at its unit with the render-target generation in the set key, never the slot table (which answers Default, _default); _accum (the bloodorb capture family's, K56) binds _default with one notice per session. RC_COPY_RENDER's CopyRender (an LDR copy into _currentRender or _accum) is issued by game code only (SC825): not mirrored. ParseFragmentMap loads fragmentMap 1 as TD_BUMP (CFM_NORMAL_DXT5: the source's red read as .w): a heat-haze normal map's pattern is in red and green, its cache name #__0300"
+    },
+    {
+      "id": "M-STAGE-10",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            393,
+            524
+          ],
+          "anchor": "PrepareStageTexturing: TG_REFLECT_CUBE2: the probes, the SSR parms, the matrices and, with a bump stage, BUMPY_ENVIRONMENT2's units",
+          "sha256": "8c450ddfdc48c3f4b5e68451e8ce7ec52f62474718e117d878664cce5c3097e4"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.cpp",
+          "lines": [
+            667,
+            686
+          ],
+          "anchor": "OCTAHEDRON_CUBE's binding layouts",
+          "sha256": "217da92e66db2f101b8e542fa20a85e8e8b9be3728d5cdb0d9c45f80b358a785"
+        },
+        {
+          "file": "neo/renderer/RenderProgs.h",
+          "lines": [
+            316,
+            318
+          ],
+          "anchor": "rpMaximalSet14 and its layout types",
+          "sha256": "33ef486a5f2ffa464c3e91a842882dc7c04e5a2be21587944ac2f57358304044"
+        },
+        {
+          "file": "neo/shaders/renderParmSet14.inc.hlsl",
+          "lines": [
+            32,
+            70
+          ],
+          "anchor": "renderParmSet14_t",
+          "sha256": "dae6355f2fe2302f3ca34e3b52753bcc145184522079a7d087c19a67c62fe57a"
+        },
+        {
+          "file": "neo/renderer/NVRHI/RenderBackend_NVRHI.cpp",
+          "lines": [
+            1797,
+            1888
+          ],
+          "anchor": "GetCurrentBindingLayout: OCTAHEDRON_CUBE (units 0-6, AnisotropicWrap, LinearBorder)",
+          "sha256": "9bb703e3c4482e1b1e739759c04fecf2390fa8eb109b2b3501f6938de21851b1"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            303,
+            308
+          ],
+          "anchor": "r_useSSR \"1\" and the r_ssr* cvars",
+          "sha256": "662f9cc8b788aa98bc71233c46faeaa37931d606c6cad6b5ebe5e4aff8384322"
+        },
+        {
+          "file": "neo/renderer/Image_intrinsic.cpp",
+          "lines": [
+            359,
+            362
+          ],
+          "anchor": "R_HierarchicalZBufferImage_ResNative (_cszBuffer)",
+          "sha256": "a2567da952312917adc4c7e0a02b46ad2285f881e16fe6c6e7eca1b352aa5069"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineShaderPassDraws (TexgenReflectCube2 with a bump stage: StageProgram::BumpyEnvironment2), engineHasBumpyEnvironment2Stage"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::rebuildLists (m_bumpyEnvironment2Listed), LitPasses::recordFrame (pass 3's second consumer), LitPasses::recordStages, LitPasses::bindBumpyEnvironment2, LitPasses::bindingSets (OctahedronCube), viewProbeParms"
+        },
+        {
+          "file": "lib/TbLitLib/include/lit/EngineTables.h",
+          "symbol": "EngineParmSet14, EngineFrameDefaults::useSsr, ssrStride, ssrMaxDistance, ssrZThickness, ssrJitter"
+        },
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineParmSetMembers (14), engineBindingLayoutDescs (OctahedronCube), engineBindingSetShape (OctahedronCube)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineBuiltins.h",
+          "symbol": "EngineBuiltinBumpyEnvironment2"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_RetailShaders.cpp",
+          "symbol": "Retail shaders: bumpyenvironment2 and set 14 (LP6.5b)"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession bumpyenvironment2 on a GPU (LP6.5b)"
+        }
+      ],
+      "note": "LP6.5b (C72, D176, D178, D180, P8.8, P8.24, SC826, SC829): a TG_REFLECT_CUBE2 SL_AMBIENT stage with a bump stage draws bumpyenvironment2 (59; 60, its skinned form, never: no skinned model; 61 and 62, the USE_SSR forms, are K2: the preview's r_useSSR is 0, the engine's default 1, parity pins 0, D19). Its parms as RB:395-471: WOBBLESKY_X..Z the probe bounds (validity in mins.w) and centre, TEXGEN_0_S..Q the probe positions, LOCALLIGHTORIGIN the radiance blends (the ambient pass's probe parms, viewProbeParms), GLOBALLIGHTORIGIN ( r_ssrStride 12, r_ssrMaxDistance 100, r_ssrZThickness 2, r_ssrJitter 0 ), JITTERTEXSCALE ( 100, 0, 0, 0 ), SHADOW_MATRIX_0 the projection's inverse transposed (R_SetupUnprojection; the preview's idRenderMatrix::Inverse where the engine's R_MatrixFullInverse inverts: read only under USE_SSR), SHADOW_MATRIX_1 screenScale( w, h ) x clipToUvzw x projectionRenderMatrix; set 14's 512 bytes (never pushed) in a volatile buffer; the stage's colour, blend and state as any old-style stage's. Units: t0 the bump stage's image (bumpImage: _flat for a defaulted one), t1 _default (the engine's currentRenderImage, read only under USE_SSR: the blob declares no t1 at USE_SSR 0), t2 _currentNormals bound by name (the set keyed with the render-target generation), t3 a 1 x 1 R32F render target cleared to 0 made once per session (the engine's _cszBuffer Hi-Z, read only under USE_SSR, D178), t4-t6 see M-STAGE-DIFF-07; s0 AnisotropicWrap, s1 LinearBorder. The stage's own cube is never asked for (RB:473-500 rebinds unit 0; P8.24: no frame waits for it). The lists count such surfaces (bumpyEnvironment2Listed) and pass 3 runs for them, SSAO off included (M-PASS-DIFF-06); 59 is never drawn over normals pass 3 did not write whole that frame (pending: unconverged; disabled: not drawn). 59's pipelines are not start keys: a pending one skips the draw and leaves the frame unconverged (M-PASS-DIFF-05)"
+    },
+    {
       "id": "M-STAGE-DIFF-04",
       "kind": "difference",
       "engine": [
@@ -22293,14 +22436,14 @@
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/src/LitStages.cpp",
-          "symbol": "engineShaderPassDraws (TexgenReflectCube2), engineGenericDepthDraws (TexgenReflectCube2)"
+          "symbol": "engineShaderPassDraws (TexgenReflectCube2 without a bump stage), engineGenericDepthDraws (TexgenReflectCube2)"
         },
         {
           "file": "lib/TbLitLib/src/LitPasses.cpp",
           "symbol": "LitPasses::recordStages (stageTexgenLp6, warned once)"
         }
       ],
-      "note": "LP5.2b (C48, P6.18): a TG_REFLECT_CUBE2 stage with a bump stage binds bumpyenvironment2 (59-62) on _currentRender, the G-buffer normals, Hi-Z and the view's three radiance probes, LP6's inputs; without one PrepareStageTexturing changes no program and texture_color samples the cube as a Texture2D (undefined, and a validation message against the 0-messages exit). The preview draws neither: pass 8 skips the stage (counted in stageTexgenLp6, in stageSkipped, with one warning), and the prepass does not draw such an alpha-tested stage (the stage tried, so the surface is not drawn solid either), where the engine writes the surface's depth through 59/61, or an alpha-tested texture_color draw of the cube"
+      "note": "LP5.2b (C48, P6.18), narrowed by LP6.5b (C72, D180, P8.8): a TG_REFLECT_CUBE2 stage with a bump stage (GetBumpStage, the implicit _flat of a diffuse-only material included) binds bumpyenvironment2, which the preview now draws (M-STAGE-10); without one PrepareStageTexturing changes no program and texture_color samples the stage's cube as a Texture2D (undefined, and a validation message against the 0-messages exit): pass 8 still skips such a stage (counted in stageTexgenLp6, in stageSkipped, with one warning). The prepass does not draw an alpha-tested reflect2 stage either way (the stage tried, so the surface is not drawn solid either), where the engine writes the surface's depth through 59/61 with a bump stage, or an alpha-tested texture_color draw of the cube without one: LP6.5b mirrors 59 in the stage pass alone"
     },
     {
       "id": "M-STAGE-DIFF-06",
@@ -22323,6 +22466,46 @@
         }
       ],
       "note": "LP5.2b (C48, P6.17): 57 binds the bump stage's image raw at unit 1 (Bind(), no defaulted test): a defaulted bump image samples the engine's default image there. The preview binds _flat for a Default bump slot (and for a bump stage without an image), the stand-in a pending interaction's bump has (M-IMG-DIFF-11); a Pending bump slot, or one Loading without a level, skips the draw and keeps the frame unconverged as a 2D stage image does (M-STAGE-05)"
+    },
+    {
+      "id": "M-STAGE-DIFF-07",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderBackend.cpp",
+          "lines": [
+            491,
+            498
+          ],
+          "anchor": "PrepareStageTexturing: viewDef->radianceImages[0..2] at units 4-6",
+          "sha256": "05f2e4db224acb624ea07cc8e5c5005f02f4555104951c437e6a4481c1ad9020"
+        },
+        {
+          "file": "neo/shaders/builtin/legacy/bumpyenvironment2.ps.hlsl",
+          "lines": [
+            35,
+            41
+          ],
+          "anchor": "bumpyenvironment2.ps: Texture2D t0-t6",
+          "sha256": "1405d7bf782ed2aa270c2b14edc88655f8465d713cc383272072b7ddec352a33"
+        },
+        {
+          "file": "neo/shaders/builtin/lighting/ambient_lighting_IBL.ps.hlsl",
+          "lines": [
+            45,
+            47
+          ],
+          "anchor": "ambient_lighting_IBL.ps: TextureCube radiance t8-t10",
+          "sha256": "28ce7c814a035133e88790fe10d6790688a6f55640373173a48bfc4490497227"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::bindBumpyEnvironment2 (units 4-6)"
+        }
+      ],
+      "note": "LP6.5b (C72): the fork's radiance images are cubes (the probes' CF_NATIVE_HDR _spec images and _defaultUACRadiance; ambient_lighting_IBL samples them as TextureCube), but bumpyenvironment2.ps declares t4-t6 Texture2D and samples them by octahedral coordinates (its retail blob at USE_SSR 0 reflects three 2D images there): the engine binds a cube view in a 2D slot, which Vulkan leaves undefined (a validation error) and NVRHI's validation refuses as a 2D view of a cube. The preview binds _black at t4-t6: no radiance, so a blend-add reflect2 stage adds nothing (the GPU case's box is its control's to the bit). What the engine's GPU makes of the cube views is LP6.5c's engine shot of O01 to show; C72's 'octahedral radiance' has no octahedral image in this engine"
     },
     {
       "id": "M-PASS-11",
@@ -32996,9 +33179,13 @@
         {
           "file": "lib/TbLitLib/include/lit/LitSession.h",
           "symbol": "SessionOptions::ssaoForTesting"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameResources.cpp",
+          "symbol": "FrameResources::ensureNormals, makeNormals"
         }
       ],
-      "note": "LP6.5a (C69, D176, K55): the engine fills the G-buffer (AmbientPass( fillGbuffer true ): _currentNormals cleared to 0, GL_Clear's (0, 0, 0, 1), the ambient loop's stage groups with builtin/gbuffer, ONE / ZERO or ONE / ONE for a vertex-colour group, DEPTHMASK, DEPTHFUNC_EQUAL) in every 3D view; the preview runs pass 3 only when a consumer needs its normals: a session with SSAO (SessionOptions::ssaoForTesting, on in the host's sessions, off in TbLitLib tests) whose pass 4 is not disabled (LP6.5b adds the bumpyenvironment2 consumer). No picture differs: the engine's other readers of _currentNormals are off (filmic, the old SSAO: K2) or LP6.5b's (bumpyenvironment2's t2). Only such a session makes _currentNormals and geometryBufferFBO and asks for gbuffer's two pipelines at Start, so a session without SSAO is LP6.4b's. Its draws are records of their own (AmbientRecord::gbuffer, C64), drawn with the prepass's MVPs (EQUAL passes); the skinned program 13 is never selected (no skinned model)"
+      "note": "LP6.5a (C69, D176, K55): the engine fills the G-buffer (AmbientPass( fillGbuffer true ): _currentNormals cleared to 0, GL_Clear's (0, 0, 0, 1), the ambient loop's stage groups with builtin/gbuffer, ONE / ZERO or ONE / ONE for a vertex-colour group, DEPTHMASK, DEPTHFUNC_EQUAL) in every 3D view; the preview runs pass 3 only when a consumer needs its normals: a session with SSAO (SessionOptions::ssaoForTesting, on in the host's sessions, off in TbLitLib tests) whose pass 4 is not disabled, or (LP6.5b, C72, D176) a frame whose lists hold a bumpyenvironment2 stage (LitFrameStats::bumpyEnvironment2Listed), SSAO off included, whose _currentNormals and geometryBufferFBO are then made at its first such frame (FrameResources::ensureNormals). No picture differs: the engine's other readers of _currentNormals are off (filmic, the old SSAO: K2) or LP6.5b's (bumpyenvironment2's t2). Only an SSAO session makes _currentNormals and geometryBufferFBO and asks for gbuffer's two pipelines at Start, so a session without SSAO and without a bumpyenvironment2 stage is LP6.4b's. Its draws are records of their own (AmbientRecord::gbuffer, C64), drawn with the prepass's MVPs (EQUAL passes); the skinned program 13 is never selected (no skinned model)"
     },
     {
       "id": "M-SSAO-DIFF-01",
@@ -33135,6 +33322,11 @@
       "id": "M-SHADOW-DIFF-06",
       "commit": "6f033953f",
       "reason": "LP3.4 step 2 (D155): perforated casters are drawn into the tiles (M-SHADOW-COPY-08); perforatedCastersSkipped counts only the stages pass 6 cannot draw"
+    },
+    {
+      "id": "M-STAGE-DIFF-01",
+      "commit": "1c28150da",
+      "reason": "LP6.5b (C71, D179, A56): the _currentRender copy and the second DrawShaderPasses call are mirrored (M-STAGE-09); K38 and K12 narrow to K56 (the bloodorb capture family's _accum)"
     }
   ]
 }

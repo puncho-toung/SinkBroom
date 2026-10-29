@@ -3251,7 +3251,7 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       "3; "
       "the compile thread by the first lit frame {} / {} / {} jobs ({} / {} / {} "
       "pipelines, {:.0f} / {:.0f} / {:.0f} ms busy) | pass 3's draws = the ambient "
-      "pass's, pass 4 ran | {} |\n\n",
+      "pass's, pass 4 ran | {} |\n",
       first.settledFrame,
       second.settledFrame,
       third.settledFrame,
@@ -3295,6 +3295,101 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     CHECK(s1.ssaoRan);
     CHECK(s1.gbufferDraws > 0u);
     CHECK(ssaoPrograms(first) == 3);
+  }
+  // LP6.5b (C71, C72, D179, D180): the copy and bumpyenvironment2 at the three Starts'
+  // settled frames and over the first Start's orbit (its frames the GUI thread saw): the
+  // surfaces the first stage call left at SS_POST_PROCESS, the copies (one per frame that
+  // has one left), _currentRender's bytes on the render-target line once a copy made it
+  // (1920 × 1080 RGBA16F), the reflect2-with-bump stages listed and drawn with 59, pass
+  // 3's draws (SSAO on: it runs anyway), and the orbit's moving p95s against LP6.5a's
+  {
+    const auto statusAt = [](const StartMeasure& measure) {
+      const auto* settled = measure.record(measure.settledFrame);
+      return settled ? settled->status : lit::SessionStatus{};
+    };
+    const auto s1 = statusAt(first);
+    const auto s2 = statusAt(second);
+    const auto s3 = statusAt(third);
+    auto orbitSeen = std::size_t{0};
+    auto orbitCopyFrames = std::size_t{0};
+    auto orbitMostCopies = std::size_t{0};
+    auto orbitMostPost = std::size_t{0};
+    auto orbitMostListed = std::size_t{0};
+    auto orbitMost59 = std::size_t{0};
+    auto orbitMismatch = std::size_t{0};
+    for (const auto& record : first.records)
+    {
+      if (record.at <= orbitStart || record.at > lastMove + 40ms)
+      {
+        continue;
+      }
+      const auto& s = record.status;
+      ++orbitSeen;
+      orbitCopyFrames += s.stageCopies > 0 ? 1 : 0;
+      orbitMostCopies = std::max(orbitMostCopies, s.stageCopies);
+      orbitMostPost = std::max(orbitMostPost, s.stagePostProcess);
+      orbitMostListed = std::max(orbitMostListed, s.bumpyEnvironment2Listed);
+      orbitMost59 = std::max(orbitMost59, s.bumpyEnvironment2Draws);
+      // a copy exactly when a post-process surface is left (D179)
+      orbitMismatch += (s.stageCopies > 0) != (s.stagePostProcess > 0) ? 1 : 0;
+    }
+    auto anyCopy = false;
+    for (const auto* measure : {&first, &second, &third})
+    {
+      for (const auto& record : measure->records)
+      {
+        anyCopy = anyCopy || record.status.stageCopies > 0;
+      }
+    }
+    const auto copyBytes = std::uint64_t(SurfaceWidth) * SurfaceHeight * 8;
+    const auto settledMatch = [](const lit::SessionStatus& s) {
+      return (s.stageCopies > 0) == (s.stagePostProcess > 0);
+    };
+    summary += fmt::format(
+      "| The copy and bumpyenvironment2 (LP6.5b, C71, C72) | at the settled frames "
+      "(frames {} / {} / {}): post-process surfaces left by the first stage call {} / {} "
+      "/ {}, copies {} / {} / {}; over the first Start's orbit ({} frames seen): {} "
+      "frames with a copy, at most {} copies and {} post-process surfaces in a frame, {} "
+      "frames where a copy and a post-process surface disagree; _currentRender {}; "
+      "bumpyenvironment2: stages listed {} / {} / {} and 59 draws {} / {} / {} at the "
+      "settled frames, at most {} listed and {} drawn over the orbit; pass 3's draws {} "
+      "/ "
+      "{} / {} (SSAO on: it runs anyway); the orbit's moving CPU p95 {:.2f} ms (LP6.5a "
+      "10.35 / 9.29), GPU p95 {:.2f} ms (LP6.5a 11.90 / 10.75) | a copy exactly where a "
+      "post-process surface is left (step 0 (e): 0 expected on admin) | {} |\n\n",
+      first.settledFrame,
+      second.settledFrame,
+      third.settledFrame,
+      s1.stagePostProcess,
+      s2.stagePostProcess,
+      s3.stagePostProcess,
+      s1.stageCopies,
+      s2.stageCopies,
+      s3.stageCopies,
+      orbitSeen,
+      orbitCopyFrames,
+      orbitMostCopies,
+      orbitMostPost,
+      orbitMismatch,
+      anyCopy ? fmt::format("made: {} on the render-target line", mb(double(copyBytes)))
+              : std::string{"not made (no frame copied)"},
+      s1.bumpyEnvironment2Listed,
+      s2.bumpyEnvironment2Listed,
+      s3.bumpyEnvironment2Listed,
+      s1.bumpyEnvironment2Draws,
+      s2.bumpyEnvironment2Draws,
+      s3.bumpyEnvironment2Draws,
+      orbitMostListed,
+      orbitMost59,
+      s1.gbufferDraws,
+      s2.gbufferDraws,
+      s3.gbufferDraws,
+      cpu.p95,
+      gpu.p95,
+      pass(
+        settledMatch(s1) && settledMatch(s2) && settledMatch(s3) && orbitMismatch == 0));
+    CHECK(orbitMismatch == 0u);
+    CHECK(orbitMostCopies <= 1u);
   }
 
   summary += "Camera moving, per frame (median / p95 / max, count):\n\n";

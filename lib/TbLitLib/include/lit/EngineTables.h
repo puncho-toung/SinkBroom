@@ -1055,11 +1055,11 @@ struct EngineFrameDefaults
   float ssaoSurfaceBias = 0.05f;
   float ssaoPowerExponent = 2.0f;
   float ssaoAmount = 4.0f;
-  // LP6.5b (C72, SC829): r_useSSR is "1" in the engine (RenderSystem_init.cpp:302); the
+  // LP6.5b (C72, SC829): r_useSSR is "1" in the engine (RenderSystem_init.cpp:303); the
   // preview's is 0 (D19: no SSR, K2; parity pins it, A55), as useSsao's is a choice: a
   // TG_REFLECT_CUBE2 stage with a bump stage binds bumpyenvironment2 59, never 61. Its
   // SSR parms are set anyway (RenderBackend.cpp:421-435) from r_ssrStride "12",
-  // r_ssrMaxDistance "100" (metres), r_ssrZThickness "2" and r_ssrJitter "0" (:303-307),
+  // r_ssrMaxDistance "100" (metres), r_ssrZThickness "2" and r_ssrJitter "0" (:304-308),
   // read only under USE_SSR
   bool useSsr = false;
   float ssrStride = 12.0f;
@@ -1084,8 +1084,8 @@ struct EngineFrameDefaults
   // r_skipShaderPasses "0" (RenderBackend.cpp:55): the first DrawShaderPasses call runs
   // (:6108)
   bool skipShaderPasses = false;
-  // r_skipPostProcess "0" (RenderSystem_init.cpp:128): the post-process stages would draw
-  // after the copy (RenderBackend.cpp:6141); the preview stops before them (K38)
+  // r_skipPostProcess "0" (RenderSystem_init.cpp:128): the post-process stages draw after
+  // the copy (RenderBackend.cpp:6141; LP6.5b, C71: the second stage call)
   bool skipPostProcess = false;
   // r_skipNewAmbient "0", ARCHIVE (:137): newStage stages draw (RenderBackend.cpp:4517)
   bool skipNewAmbient = false;

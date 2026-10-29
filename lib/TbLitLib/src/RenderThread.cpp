@@ -2803,6 +2803,7 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         status.gbufferDraws = litStats.gbufferDraws;
         status.ssaoRan = litStats.ssaoRan;
         // LP6.5b (C71): the copy for the second stage call
+        status.stagePostProcess = litStats.stagePostProcess;
         status.stageCopies = litStats.stageCopies;
         // LP6.5b (C72): bumpyenvironment2's draws and its stages listed
         status.bumpyEnvironment2Draws = litStats.bumpyEnvironment2Draws;
