@@ -23604,7 +23604,9 @@ TEST_CASE("LitSession the overrides' live path on a GPU (LP6.6)", "[.][litgpu4]"
     REQUIRE(waitFor(
       [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
     REQUIRE(session->offerSnapshot(lp22aSnapshot(lp65aMapText(), root, 7, 1)));
-    first = settledTargets(*session, cornerView, {fr::CurrentRenderHdr});
+    // the settled picture is _taaResolved (the 16th frame's, or a kept frame's after it,
+    // whose own HDR target is drawn without a jitter)
+    first = settledTargets(*session, cornerView, {fr::CurrentRenderHdr, fr::TaaResolved});
     REQUIRE(first);
     statuses.push_back(session->status());
     auto tally = std::make_shared<TaaTally>();
@@ -23635,7 +23637,7 @@ TEST_CASE("LitSession the overrides' live path on a GPU (LP6.6)", "[.][litgpu4]"
       ambientParms.push_back(access.passes.parms().value(RenderParm::AmbientColor)[0]);
     }));
     change(EngineFrameOverrides{});
-    again = settledTargets(*session, cornerView, {fr::CurrentRenderHdr});
+    again = settledTargets(*session, cornerView, {fr::CurrentRenderHdr, fr::TaaResolved});
     REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
       ambientParms.push_back(access.passes.parms().value(RenderParm::AmbientColor)[0]);
     }));
@@ -23690,7 +23692,7 @@ TEST_CASE("LitSession the overrides' live path on a GPU (LP6.6)", "[.][litgpu4]"
   CHECK_FALSE(noSsao->frame.lit.ssaoRan);
   CHECK_FALSE(noSsao->frame.lit.gbufferRan);
   CHECK(noSsao->frame.convergence.taaHistory == 16u);
-  const auto firstHdr = first->image(fr::CurrentRenderHdr);
+  const auto firstResolved = first->image(fr::TaaResolved);
   const auto creaseFirst = mean(first->image(fr::CurrentRenderHdr), crease);
   const auto creaseNoSsao = mean(noSsao->image(fr::CurrentRenderHdr), crease);
   CHECK(creaseNoSsao > creaseFirst);
@@ -23709,7 +23711,7 @@ TEST_CASE("LitSession the overrides' live path on a GPU (LP6.6)", "[.][litgpu4]"
   const auto openDark = mean(dark->image(fr::CurrentRenderHdr), openWall);
   CHECK(openDark < openFirst);
   // the defaults again: the first picture
-  CHECK(again->image(fr::CurrentRenderHdr).values == firstHdr.values);
+  CHECK(again->image(fr::TaaResolved).values == firstResolved.values);
   CHECK(again->frame.convergence.taaHistory == 16u);
   std::cout << fmt::format(
     "LP6.6 C74: a stale generation's change dropped {}; applied {} / {} / {} / {} (the "
@@ -23729,7 +23731,7 @@ TEST_CASE("LitSession the overrides' live path on a GPU (LP6.6)", "[.][litgpu4]"
     openDark,
     ambientParms[0],
     ambientParms[1],
-    again->image(fr::CurrentRenderHdr).values == firstHdr.values,
+    again->image(fr::TaaResolved).values == firstResolved.values,
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
 }
 
