@@ -2052,9 +2052,40 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     "start,frame,ms,settled,lights_visible,lights_drawn,lights_overflowed,draws,"
     "skipped_draws,pending_pipelines,vram_account_mb,geometry_batches,snapshots,"
     "table_version,compile_jobs,compile_job_ms,compile_pipelines,compile_pipeline_ms\n"};
+  // LP6.5b (C71, C72): what a stretch of frames did with the copy and bumpyenvironment2:
+  // the frames, those with a copy, the most post-process surfaces and 59 stages listed
+  // and drawn in a frame, and the frames where a copy and a post-process surface disagree
+  struct CopyTally
+  {
+    std::size_t frames = 0;
+    std::size_t copyFrames = 0;
+    std::size_t mostPost = 0;
+    std::size_t mostListed = 0;
+    std::size_t most59 = 0;
+    std::size_t mismatch = 0;
+    // the frames (the frame log's numbers) that copied
+    std::set<std::uint64_t> copied;
+
+    void add(const lit::SessionStatus& s)
+    {
+      ++frames;
+      copyFrames += s.stageCopies > 0 ? 1 : 0;
+      if (s.stageCopies > 0)
+      {
+        copied.insert(s.frames);
+      }
+      mostPost = std::max(mostPost, s.stagePostProcess);
+      mostListed = std::max(mostListed, s.bumpyEnvironment2Listed);
+      most59 = std::max(most59, s.bumpyEnvironment2Draws);
+      mismatch += (s.stageCopies > 0) != (s.stagePostProcess > 0) ? 1 : 0;
+    }
+  };
+  // each Start's every frame (kept at its stop), by label
+  auto copyTallies = std::map<std::string, CopyTally>{};
   const auto keepRecords = [&](const StartMeasure& measure) {
     for (const auto& record : sampler.frames)
     {
+      copyTallies[measure.label].add(record.status);
       recordsCsv += fmt::format(
         "{},{},{:.1f},{},{},{},{},{},{},{},{:.1f},{},{},{},{},{:.1f},{},{:.1f}\n",
         measure.label,
@@ -2204,6 +2235,15 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
         }
         previous = record.at;
       }
+    }
+  }
+  // LP6.5b (C71, C72): the copy and 59 over the orbit's frames
+  auto orbitCopies = CopyTally{};
+  for (const auto& record : sampler.frames)
+  {
+    if (record.at > orbitStart && record.at <= lastMove + 40ms)
+    {
+      orbitCopies.add(record.status);
     }
   }
   REQUIRE(sampler.runUntil([&] { return sampler.quietlySettled(false); }, 60s));
@@ -3310,37 +3350,32 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     const auto s1 = statusAt(first);
     const auto s2 = statusAt(second);
     const auto s3 = statusAt(third);
-    auto orbitSeen = std::size_t{0};
-    auto orbitCopyFrames = std::size_t{0};
-    auto orbitMostCopies = std::size_t{0};
-    auto orbitMostPost = std::size_t{0};
-    auto orbitMostListed = std::size_t{0};
-    auto orbitMost59 = std::size_t{0};
-    auto orbitMismatch = std::size_t{0};
-    for (const auto& record : first.records)
+    const auto& t1 = copyTallies["first"];
+    const auto& t2 = copyTallies["second"];
+    const auto& t3 = copyTallies["third"];
+    const auto anyCopy = t1.copyFrames + t2.copyFrames + t3.copyFrames > 0;
+    const auto mismatches = t1.mismatch + t2.mismatch + t3.mismatch;
+    // the copy's cost over the orbit: the frame log's gpu_stages_ms (the Stages query
+    // spans the fog lights and the copy on a frame with a second call) and gpu_frame_ms,
+    // means over the orbit's frames with a copy and without one
+    auto withCopy = std::array<double, 3>{};
+    auto without = std::array<double, 3>{};
+    for (auto f = orbitBegin; f <= orbitEnd && f < firstRows.size(); ++f)
     {
-      if (record.at <= orbitStart || record.at > lastMove + 40ms)
+      const auto stages = firstRows[f].number(column::GpuStagesMs);
+      const auto all = firstRows[f].number(column::GpuFrameMs);
+      if (!stages || !all)
       {
         continue;
       }
-      const auto& s = record.status;
-      ++orbitSeen;
-      orbitCopyFrames += s.stageCopies > 0 ? 1 : 0;
-      orbitMostCopies = std::max(orbitMostCopies, s.stageCopies);
-      orbitMostPost = std::max(orbitMostPost, s.stagePostProcess);
-      orbitMostListed = std::max(orbitMostListed, s.bumpyEnvironment2Listed);
-      orbitMost59 = std::max(orbitMost59, s.bumpyEnvironment2Draws);
-      // a copy exactly when a post-process surface is left (D179)
-      orbitMismatch += (s.stageCopies > 0) != (s.stagePostProcess > 0) ? 1 : 0;
+      auto& into = orbitCopies.copied.contains(std::uint64_t(f + 1)) ? withCopy : without;
+      into[0] += *stages;
+      into[1] += *all;
+      into[2] += 1.0;
     }
-    auto anyCopy = false;
-    for (const auto* measure : {&first, &second, &third})
-    {
-      for (const auto& record : measure->records)
-      {
-        anyCopy = anyCopy || record.status.stageCopies > 0;
-      }
-    }
+    const auto meanOf = [](const std::array<double, 3>& sums, const std::size_t i) {
+      return sums[2] > 0.0 ? sums[i] / sums[2] : 0.0;
+    };
     const auto copyBytes = std::uint64_t(SurfaceWidth) * SurfaceHeight * 8;
     const auto settledMatch = [](const lit::SessionStatus& s) {
       return (s.stageCopies > 0) == (s.stagePostProcess > 0);
@@ -3348,15 +3383,19 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     summary += fmt::format(
       "| The copy and bumpyenvironment2 (LP6.5b, C71, C72) | at the settled frames "
       "(frames {} / {} / {}): post-process surfaces left by the first stage call {} / {} "
-      "/ {}, copies {} / {} / {}; over the first Start's orbit ({} frames seen): {} "
-      "frames with a copy, at most {} copies and {} post-process surfaces in a frame, {} "
-      "frames where a copy and a post-process surface disagree; _currentRender {}; "
-      "bumpyenvironment2: stages listed {} / {} / {} and 59 draws {} / {} / {} at the "
-      "settled frames, at most {} listed and {} drawn over the orbit; pass 3's draws {} "
+      "/ {}, copies {} / {} / {}; over every frame the GUI thread saw ({} / {} / {}): {} "
       "/ "
-      "{} / {} (SSAO on: it runs anyway); the orbit's moving CPU p95 {:.2f} ms (LP6.5a "
-      "10.35 / 9.29), GPU p95 {:.2f} ms (LP6.5a 11.90 / 10.75) | a copy exactly where a "
-      "post-process surface is left (step 0 (e): 0 expected on admin) | {} |\n\n",
+      "{} / {} with a copy, at most {} / {} / {} post-process surfaces in a frame, {} "
+      "frames where a copy and a post-process surface disagree; over the first Start's "
+      "orbit ({} frames seen): {} with a copy, at most {} post-process surfaces; the "
+      "orbit's frames with a copy: gpu_stages_ms {:.3f} and gpu_frame_ms {:.3f} on "
+      "average ({:.0f} timed), without one {:.3f} and {:.3f} ({:.0f}); "
+      "_currentRender {}; bumpyenvironment2: stages listed {} / {} / {} and 59 draws {} "
+      "/ {} / {} at the settled frames, at most {} listed and {} drawn over the orbit; "
+      "pass 3's draws {} / {} / {} (SSAO on: it runs anyway); the orbit's moving CPU p95 "
+      "{:.2f} ms (LP6.5a 10.35 / 9.29), GPU p95 {:.2f} ms (LP6.5a 11.90 / 10.75) | a "
+      "copy exactly where a post-process surface is left (step 0 (e): 0 expected on "
+      "admin) | {} |\n\n",
       first.settledFrame,
       second.settledFrame,
       third.settledFrame,
@@ -3366,11 +3405,25 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       s1.stageCopies,
       s2.stageCopies,
       s3.stageCopies,
-      orbitSeen,
-      orbitCopyFrames,
-      orbitMostCopies,
-      orbitMostPost,
-      orbitMismatch,
+      t1.frames,
+      t2.frames,
+      t3.frames,
+      t1.copyFrames,
+      t2.copyFrames,
+      t3.copyFrames,
+      t1.mostPost,
+      t2.mostPost,
+      t3.mostPost,
+      mismatches,
+      orbitCopies.frames,
+      orbitCopies.copyFrames,
+      orbitCopies.mostPost,
+      meanOf(withCopy, 0),
+      meanOf(withCopy, 1),
+      withCopy[2],
+      meanOf(without, 0),
+      meanOf(without, 1),
+      without[2],
       anyCopy ? fmt::format("made: {} on the render-target line", mb(double(copyBytes)))
               : std::string{"not made (no frame copied)"},
       s1.bumpyEnvironment2Listed,
@@ -3379,17 +3432,16 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       s1.bumpyEnvironment2Draws,
       s2.bumpyEnvironment2Draws,
       s3.bumpyEnvironment2Draws,
-      orbitMostListed,
-      orbitMost59,
+      orbitCopies.mostListed,
+      orbitCopies.most59,
       s1.gbufferDraws,
       s2.gbufferDraws,
       s3.gbufferDraws,
       cpu.p95,
       gpu.p95,
-      pass(
-        settledMatch(s1) && settledMatch(s2) && settledMatch(s3) && orbitMismatch == 0));
-    CHECK(orbitMismatch == 0u);
-    CHECK(orbitMostCopies <= 1u);
+      pass(settledMatch(s1) && settledMatch(s2) && settledMatch(s3) && mismatches == 0));
+    CHECK(mismatches == 0u);
+    CHECK(orbitCopies.frames > 0u);
   }
 
   summary += "Camera moving, per frame (median / p95 / max, count):\n\n";
