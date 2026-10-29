@@ -1,0 +1,70 @@
+// LP6.5c parity fixtures (plans/lit-preview/55-LP6-PACKAGES.md section 5, C71, C72, C76);
+// written by TOOLS/lit-preview/parity.py fixtures. Names under textures/lp6/ are reserved for
+// fixtures (K20). Every stage time-invariant: no time or sound register (D119).
+
+// O01 (the ambient map): a bumpyenvironment2-class material, the LP5 scout's rows 59-62 shape:
+// a diffuse and a bump stage (the ambient pass, pass 3 and the interactions draw them) and a
+// TG_REFLECT_CUBE2 stage, which DrawShaderPasses draws with bumpyenvironment2 (59;
+// RenderBackend.cpp:393-524: unit 0 rebound to the bump image, units 4-6 the view's radiance
+// images). The preview binds _black at t4-t6 (mirror.json M-STAGE-DIFF-07, E-LIT-19: the
+// fork's blob declares them Texture2D where its radiance images are cubes, so the engine binds
+// cube views into 2D slots); the stage's own cube is never sampled (a fixture cube all the same)
+textures/lp6/reflect2bump
+{
+	qer_editorimage	textures/lp6/o01_diffuse.tga
+	diffusemap	textures/lp6/o01_diffuse.tga
+	bumpmap	textures/lp6/o01_local.tga
+	{
+		blend	add
+		cubeMap	textures/lp6/o01_cube
+		texGen	reflect2
+	}
+}
+
+// O02 (the stages map): a heat-haze newStage over the lit checker wall: heathaze (the
+// material-program table's), sorted SS_POST_PROCESS by its _currentRender (Material.cpp:
+// 3196-3210) and drawn by the second stage call over the frame's copy of the HDR target. vertexParm
+// 0 the scroll, constants (0, 0, 0, 1); vertexParm 1 the deform magnitude, 8 (P8.5; heathaze.vs:
+// texcoord1 = min( 0.43 P[1][1] / w, 0.02 ) x rpUser1: at the panel's depth 80, g_fov 90 at
+// 1280 x 720 (P[1][1] 1.778), 0.0096 x 8 = 0.076 of the screen, 98 pixels across and 55 down; the
+// clamp 0.02 x 8 = 0.16, 205 pixels across and 115 down). fragmentMap 1 is the normal map at unit
+// 1, which the engine loads as TD_BUMP (Material.cpp:1250-1254): DXT5 with CFM_NORMAL_DXT5, the
+// source's red moved into alpha (heathaze.ps reads bumpMap.wy), cached as
+// generated/images/textures/lp6/haze_normal#__0300.bimage (not P8.5's TD_DEFAULT #__0200); its
+// pattern: red 255 on the left half (texels s < 32: .w +1), 0 on the right (-1), green 255 on the
+// top half (t < 32: .y +1), 0 below (-1), blue 0. The editor image gives the faces' texture size
+// (64 x 64, the wall's image)
+textures/lp6/haze
+{
+	qer_editorimage	textures/lp6/haze_wall.tga
+	{
+		program	heathaze
+		vertexParm	0	0, 0
+		vertexParm	1	8
+		fragmentMap	0	_currentRender
+		fragmentMap	1	textures/lp6/haze_normal.tga
+	}
+}
+
+// O02b: the same with vertexParm 1 0 (P8.5's control): the stage samples the copy at its own
+// pixel, so the panel shows the wall behind it exactly
+textures/lp6/haze_still
+{
+	qer_editorimage	textures/lp6/haze_wall.tga
+	{
+		program	heathaze
+		vertexParm	0	0, 0
+		vertexParm	1	0
+		fragmentMap	0	_currentRender
+		fragmentMap	1	textures/lp6/haze_normal.tga
+	}
+}
+
+// O02, O02b: the walls, a checker of 16-texel white and black squares (uniform 4 x 4 blocks):
+// the frame's exposure averages its 80th to 95th percentile, the white squares, and clamps it at
+// r_hdrMaxLuminance (R14's light: 0.865 above 0.5), so the panel's region moves no other pixel
+textures/lp6/haze_wall
+{
+	qer_editorimage	textures/lp6/haze_wall.tga
+	diffusemap	textures/lp6/haze_wall.tga
+}
