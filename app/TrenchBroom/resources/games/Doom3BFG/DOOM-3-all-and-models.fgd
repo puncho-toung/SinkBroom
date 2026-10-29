@@ -17781,21 +17781,35 @@ Prefer func_group for unreferenced brush detail. spawnSkipStatics may omit inlin
 @PointClass color(0 255 0) = info_landing : "Explicit party landing slot, index 0 through 7"
 [
 	dmapOnly(string) readonly : "" : "1"
+	index(integer) : "Party player index" : 0
 	landmark(string) : "Arrival doorway id"
-	index(integer) : "Party player index"
 	name(target_source) : "Entity name; other entities target this"
 	target(target_destination) : "Entity to trigger; target1..targetN also link"
 ]
 
-@PointClass color(0 255 255) = info_landmark : "Map graph doorway; landmark identity survives editor group renames"
+@SolidClass color(0 255 255) = info_landmark : "Map graph doorway; landmark identity survives editor group renames"
 [
 	dmapOnly(string) readonly : "" : "1"
 	radius(float) : "Arrival placement radius" : 256
-	entry(string) : "" : "1"
-	exit(string) : "" : "1"
+	entry(choices) : "Arrivals may use this doorway" : 1 =
+	[
+		0 : "No"
+		1 : "Yes"
+	]
+	exit(choices) : "Departures may use this doorway" : 1 =
+	[
+		0 : "No"
+		1 : "Yes"
+	]
+	required(choices) : "Generation must link this exit, through an endcap rule if no other rule links it" : 0 =
+	[
+		0 : "No"
+		1 : "Yes"
+	]
 	landmark(string) : "Stable doorway id"
 	kind(string) : "Doorway template kind"
 	link(string) : "map:landmark or @mapGraph"
+	sealed_by(target_destination) : "func_door kept shut while this doorway is not linked"
 	name(target_source) : "Entity name; other entities target this"
 	target(target_destination) : "Entity to trigger; target1..targetN also link"
 ]
@@ -17856,6 +17870,8 @@ Prefer func_group for unreferenced brush detail. spawnSkipStatics may omit inlin
 	spawnclass(string) readonly : "" : "idPortalSky"
 	hide(string) : "" : "1"
 	triggered(string) : "This portal sky will be inactive at start, and must be triggered to become active.  All additional portalsky areas must have this flag set."
+	parallax_scale(float) : "Sky view parallax scale (0 = fixed sky camera; 0.001 moves the sky camera 1 unit per 1000 units of player movement)" : 0
+	parallax_origin(string) : "Player-space reference point for the parallax" : "0 0 0"
 	name(target_source) : "Entity name; other entities target this"
 	target(target_destination) : "Entity to trigger; target1..targetN also link"
 ]
@@ -27960,8 +27976,14 @@ Use keyval, keyval1, keyval2, etc.. for multiples."
 @SolidClass base(trigger_multiple) color(51 204 255) = trigger_changelevel : "Whole party map graph exit"
 [
 	spawnclass(string) readonly : "" : "idTrigger_ChangeLevel"
-	wait_party(string) : "" : "1"
+	wait_party(choices) : "Fire only when every living player stands inside the carry volume of landmark" : 1 =
+	[
+		0 : "No"
+		1 : "Yes"
+	]
 	landmark(string) : "Departure doorway id"
+	nextMap(string) : "Destination map when no map graph world is active"
+	arrivalLandmark(string) : "Arrival doorway id in nextMap; defaults to landmark"
 	name(target_source) : "Entity name; other entities target this"
 	target(target_destination) : "Entity to trigger; target1..targetN also link"
 ]
@@ -28201,8 +28223,8 @@ Use keyval, keyval1, keyval2, etc.. for multiples."
 @SolidClass color(0 178 255) = trigger_transition : "Map-only carry volume paired with a landmark"
 [
 	dmapOnly(string) readonly : "" : "1"
-	cap(string) : "" : "64"
-	carry(string) : "" : "all"
+	cap(integer) : "Most entities carried across, 0 through 64" : 64
+	carry(string) : "all carries the entities inside the volume; any other value carries none" : "all"
 	landmark(string) : "Doorway id"
 	name(target_source) : "Entity name; other entities target this"
 	target(target_destination) : "Entity to trigger; target1..targetN also link"
