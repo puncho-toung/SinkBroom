@@ -18,6 +18,7 @@
  */
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDockWidget>
 #include <QEvent>
@@ -28,6 +29,7 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QSettings>
+#include <QSlider>
 #include <QTest>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -53,6 +55,8 @@
 #include "lit/Snapshot.h"
 #include "mdl/BrushNode.h"
 #include "mdl/EditorContext.h"
+#include "mdl/Entity.h"
+#include "mdl/EntityNode.h"
 #include "mdl/GameConfigFixture.h"
 #include "mdl/GameInfo.h"
 #include "mdl/LayerNode.h"
@@ -72,6 +76,7 @@
 #include "ui/RenderView.h"
 #include "ui/SidebarManager.h"
 #include "ui/SwitchableMapViewContainer.h"
+#include "ui/WidgetState.h"
 
 #include "kd/invoke.h"
 #include "kd/result.h"
@@ -378,6 +383,81 @@ TEST_CASE("LitPreviewPanel")
     CHECK(report.problems().empty());
     report.deviceLost = true;
     CHECK(report.problems() == std::vector<std::string>{"The GPU device was lost."});
+  }
+
+  SECTION("the overrides' three controls round-trip their settings (LP6.6, C74)")
+  {
+    // R4-1.13: a scratch settings file of the test's, never the user's settings
+    auto env = fs::TestEnvironment{};
+    const auto file = env.dir() / "lit-preview-panel.ini";
+    LitPreviewPanel::setSettingsFileForTesting(file);
+    const auto clearFile =
+      kdl::invoke_later{[] { LitPreviewPanel::setSettingsFileForTesting(std::nullopt); }};
+    auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+    const auto controls = [](const LitPreviewPanel& panel) {
+      auto* ssao = panel.findChild<QCheckBox*>("LitPreviewPanel_Ssao");
+      auto* aa = panel.findChild<QCheckBox*>("LitPreviewPanel_ProgressiveAa");
+      auto* ambient = panel.findChild<QSlider*>("LitPreviewPanel_ForceAmbient");
+      auto* value = panel.findChild<QLabel*>("LitPreviewPanel_ForceAmbientValue");
+      REQUIRE(ssao != nullptr);
+      REQUIRE(aa != nullptr);
+      REQUIRE(ambient != nullptr);
+      REQUIRE(value != nullptr);
+      return std::tuple{ssao, aa, ambient, value};
+    };
+    auto keys = std::vector<QString>{};
+    {
+      auto panel = LitPreviewPanel{fixture.context()};
+      const auto [ssao, aa, ambient, value] = controls(panel);
+      // the engine's defaults (D21, Q25): on, on, 0.5 in steps of 0.05
+      CHECK(ssao->isChecked());
+      CHECK(aa->isChecked());
+      CHECK(ambient->minimum() == 0);
+      CHECK(ambient->maximum() == 20);
+      CHECK(ambient->value() == 10);
+      CHECK(value->text() == "0.50");
+      CHECK(panel.overrides() == lit::EngineFrameOverrides{});
+      ssao->setChecked(false);
+      aa->setChecked(false);
+      ambient->setValue(4);
+      CHECK(value->text() == "0.20");
+      CHECK(panel.overrides() == lit::EngineFrameOverrides{false, false, 0.2f});
+      // no session: a change starts nothing
+      CHECK(!sessionRunning(panel));
+      keys = {
+        widgetSettingsPath(ssao, "Checked"),
+        widgetSettingsPath(aa, "Checked"),
+        widgetSettingsPath(ambient, "Value")};
+      CHECK(keys[0] == "Windows/LitPreviewPanel_Ssao/Checked");
+      CHECK(keys[2] == "Windows/LitPreviewPanel_ForceAmbient/Value");
+    }
+    // the scratch file holds them, the application's settings do not
+    {
+      auto stored = QSettings{pathAsQString(file), QSettings::IniFormat};
+      CHECK(stored.contains(keys[0]));
+      CHECK_FALSE(stored.value(keys[0]).toBool());
+      CHECK_FALSE(stored.value(keys[1]).toBool());
+      CHECK(stored.value(keys[2]).toInt() == 4);
+      for (const auto& key : keys)
+      {
+        CHECK_FALSE(QSettings{}.contains(key));
+      }
+    }
+    // a new panel reads them back
+    {
+      auto panel = LitPreviewPanel{fixture.context()};
+      const auto [ssao, aa, ambient, value] = controls(panel);
+      CHECK_FALSE(ssao->isChecked());
+      CHECK_FALSE(aa->isChecked());
+      CHECK(ambient->value() == 4);
+      CHECK(value->text() == "0.20");
+      CHECK(panel.overrides() == lit::EngineFrameOverrides{false, false, 0.2f});
+      // back to the defaults for the next test's panel
+      ssao->setChecked(true);
+      aa->setChecked(true);
+      ambient->setValue(10);
+    }
+    std::filesystem::remove(file);
   }
 
   SECTION("the session the panel starts reads the document's game path (C1, LP2.1)")
@@ -913,6 +993,7 @@ class ValidationMessages
 {
 private:
   static inline std::atomic<int> s_count = 0;
+  static inline std::atomic<int> s_mirrored = 0;
   static inline std::mutex s_mutex;
   static inline std::vector<std::string> s_texts;
   static inline QtMessageHandler s_previous = nullptr;
@@ -922,7 +1003,16 @@ private:
   static void handler(
     const QtMsgType type, const QMessageLogContext& context, const QString& message)
   {
-    if (message.startsWith("vkDebug:"))
+    // LP6.6: the engine's own LAYOUT_DRAW_VERT input layout raises "Vertex attribute at
+    // location N not consumed by vertex shader" (mirror.json M-PIPE-DEFECT-01) once a
+    // session makes the engine's pipelines (a game with the blobs): counted apart, as
+    // TbLitLib's tests count it
+    if (
+      message.startsWith("vkDebug:") && message.contains("not consumed by vertex shader"))
+    {
+      ++s_mirrored;
+    }
+    else if (message.startsWith("vkDebug:"))
     {
       ++s_count;
       const auto lock = std::scoped_lock{s_mutex};
@@ -943,6 +1033,7 @@ public:
     REQUIRE(instance.supportedLayers().contains(ValidationLayerName));
 #endif
     s_count = 0;
+    s_mirrored = 0;
     {
       const auto lock = std::scoped_lock{s_mutex};
       s_texts.clear();
@@ -958,7 +1049,8 @@ public:
   void check() const
   {
 #ifndef NDEBUG
-    std::cout << m_label << ": validation messages " << s_count << "\n";
+    std::cout << m_label << ": validation messages " << s_count
+              << ", mirrored engine warnings " << s_mirrored << "\n";
     {
       const auto lock = std::scoped_lock{s_mutex};
       for (const auto& text : s_texts)
@@ -2082,6 +2174,182 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     CHECK(status->text().isEmpty());
     reports.checkLast();
     checkCounts("status line");
+  }
+
+  SECTION("the overrides apply live to a running session (LP6.6, C74, D182)")
+  {
+    // a game of the engine's SPIR-V blobs (copied from TB_LIT_GAME_PATH, read-only), one
+    // material of a flat image and a box of it in front of the camera: the ambient pass
+    // alone draws it, with SSAO, the progressive TAA and Force ambient as the panel says
+    const auto* gameValue = std::getenv("TB_LIT_GAME_PATH");
+    if (!gameValue || !*gameValue)
+    {
+      SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+    }
+    auto env = fs::TestEnvironment{};
+    LitPreviewPanel::setSettingsFileForTesting(env.dir() / "lit-preview-panel.ini");
+    const auto clearFile =
+      kdl::invoke_later{[] { LitPreviewPanel::setSettingsFileForTesting(std::nullopt); }};
+    const auto game = std::filesystem::temp_directory_path() / "TbUiLibTest-lp66-game";
+    std::filesystem::remove_all(game);
+    const auto removeGame = kdl::invoke_later{[&] { std::filesystem::remove_all(game); }};
+    std::filesystem::create_directories(game / "base" / "renderprogs2");
+    std::filesystem::copy(
+      std::filesystem::path{gameValue} / "base" / "renderprogs2" / "spirv",
+      game / "base" / "renderprogs2" / "spirv",
+      std::filesystem::copy_options::recursive);
+    std::filesystem::create_directories(game / "base" / "materials");
+    std::filesystem::create_directories(game / "base" / "textures" / "lp66");
+    {
+      auto file = std::ofstream{game / "base" / "materials" / "lp66_overrides.mtr"};
+      file << "textures/lp66/flat\n{\n\tdiffusemap\ttextures/lp66/flat.tga\n}\n"
+           << "lights/defaultPointLight\n{\n\tlightFalloffImage _noFalloff\n"
+           << "\t{\n\t\tmap _white\n\t\tcolored\n\t\tzeroClamp\n\t}\n}\n";
+    }
+    // a 4 x 4 TGA (uncompressed, 32 bits) of one colour, BGRA; the game's _white
+    // (R_ParseImageProgram's guis/assets/white) and the box's image
+    const auto writeTga =
+      [](const std::filesystem::path& path, const std::array<std::uint8_t, 4>& bgra) {
+        std::filesystem::create_directories(path.parent_path());
+        auto tga = std::string(18, '\0');
+        tga[2] = 2;
+        tga[12] = 4;
+        tga[14] = 4;
+        tga[16] = 32;
+        tga[17] = 8;
+        for (auto i = 0; i < 16; ++i)
+        {
+          tga.append(reinterpret_cast<const char*>(bgra.data()), bgra.size());
+        }
+        auto file = std::ofstream{path, std::ios::binary};
+        file.write(tga.data(), std::streamsize(tga.size()));
+      };
+    writeTga(game / "base" / "guis" / "assets" / "white.tga", {255, 255, 255, 255});
+    writeTga(game / "base" / "textures" / "lp66" / "flat.tga", {120, 160, 200, 255});
+    auto& map = harness.fixture.document().map();
+    map.setGamePath(game);
+    auto* brushNode = mdl::createBrushNode(map, "lp66/flat");
+    // a light before the box's face that casts no shadow
+    auto* lightNode = new mdl::EntityNode{mdl::Entity{{
+      {"classname", "light"},
+      {"name", "lp66_light"},
+      {"origin", "-96 0 16"},
+      {"light_radius", "320 320 320"},
+      {"noshadows", "1"},
+    }}};
+    mdl::addNodes(map, {{map.editorContext().currentLayer(), {brushNode, lightNode}}});
+
+    auto* ssao = panel.findChild<QCheckBox*>("LitPreviewPanel_Ssao");
+    auto* aa = panel.findChild<QCheckBox*>("LitPreviewPanel_ProgressiveAa");
+    auto* ambient = panel.findChild<QSlider*>("LitPreviewPanel_ForceAmbient");
+    REQUIRE(ssao != nullptr);
+    REQUIRE(aa != nullptr);
+    REQUIRE(ambient != nullptr);
+    REQUIRE(panel.overrides() == lit::EngineFrameOverrides{});
+
+    harness.camera.setDirection(vm::vec3f{1, 0, 0}, vm::vec3f{0, 0, 1});
+    harness.camera.moveTo(vm::vec3f{-160.0f, 0, 0});
+    harness.fixture.context().cameraDidChangeNotifier(harness.camera);
+    REQUIRE(harness.startAndWaitForFrame());
+    harness.camera.moveTo(vm::vec3f{-160.0f, 0, 0});
+    harness.fixture.context().cameraDidChangeNotifier(harness.camera);
+    // settled with the whole history (the Start's options are the panel's)
+    const auto settledWith =
+      [&](const std::function<bool(const lit::SessionStatus&)>& is) {
+        return QTest::qWaitFor(
+          [&] {
+            auto* session = harness.session();
+            return session && session->status().settled && is(session->status());
+          },
+          30000);
+      };
+    REQUIRE(settledWith([](const lit::SessionStatus& status) {
+      return status.taaHistory == 16u && status.ssaoRan && status.lightsDrawn == 1u;
+    }));
+    auto* session = harness.session();
+    REQUIRE(session != nullptr);
+    const auto first = session->status();
+    const auto firstPicture = session->readbackLdrForTesting();
+    REQUIRE(firstPicture);
+
+    // SSAO off: pass 4 does not run (t4 _white), the history starts again
+    ssao->setChecked(false);
+    REQUIRE(settledWith([](const lit::SessionStatus& status) {
+      return !status.overrides.ssao && status.taaHistory == 16u;
+    }));
+    const auto noSsao = session->status();
+    // Progressive AA off: no history, no resolve
+    aa->setChecked(false);
+    REQUIRE(settledWith(
+      [](const lit::SessionStatus& status) { return !status.overrides.progressiveAa; }));
+    const auto noTaa = session->status();
+    // Force ambient 0: AMBIENT_COLOR 0, a darker picture
+    ambient->setValue(0);
+    REQUIRE(settledWith([](const lit::SessionStatus& status) {
+      return status.overrides.forceAmbient == 0.0f;
+    }));
+    const auto darkStatus = session->status();
+    const auto darkPicture = session->readbackLdrForTesting();
+    REQUIRE(darkPicture);
+    // the defaults again: the first picture
+    ssao->setChecked(true);
+    aa->setChecked(true);
+    ambient->setValue(10);
+    REQUIRE(settledWith([](const lit::SessionStatus& status) {
+      return status.overrides == lit::EngineFrameOverrides{} && status.taaHistory == 16u
+             && status.ssaoRan;
+    }));
+    const auto back = session->status();
+    const auto backPicture = session->readbackLdrForTesting();
+    REQUIRE(backPicture);
+
+    CHECK(first.overrides == lit::EngineFrameOverrides{});
+    CHECK(first.overridesApplied == 0u);
+    CHECK(first.taaOn);
+    CHECK(first.ssaoRan);
+    CHECK_FALSE(noSsao.ssaoRan);
+    CHECK(noSsao.overridesApplied == 1u);
+    CHECK_FALSE(noTaa.taaOn);
+    CHECK(noTaa.taaHistory == 0u);
+    CHECK(noTaa.overridesApplied == 2u);
+    CHECK(darkStatus.overridesApplied == 3u);
+    // a change of the three controls is one live change each (5, 6, 7)
+    CHECK(back.overridesApplied == 6u);
+    const auto sum = [](const lit::LdrImage& image) {
+      auto total = std::uint64_t{0};
+      for (std::size_t i = 0; i < image.rgba.size(); i += 4)
+      {
+        total += std::uint64_t(image.rgba[i]) + image.rgba[i + 1] + image.rgba[i + 2];
+      }
+      return total;
+    };
+    // the ambient pass's default irradiance (no bake) scaled by Force ambient: darker at
+    // 0; the value reached the session (the status)
+    CHECK(darkStatus.overrides.forceAmbient == 0.0f);
+    CHECK(sum(*darkPicture) < sum(*firstPicture));
+    CHECK(sum(*firstPicture) > 0u);
+    CHECK(backPicture->rgba == firstPicture->rgba);
+    std::cout << fmt::format(
+      "LP6.6 C74 panel: applied {} / {} / {} / {}; SSAO ran {} then {}; TAA on {} then "
+      "{} "
+      "(history {}); the picture's sum {} at Force ambient 0.5, {} at 0, the defaults' "
+      "again equal {}\n",
+      noSsao.overridesApplied,
+      noTaa.overridesApplied,
+      darkStatus.overridesApplied,
+      back.overridesApplied,
+      first.ssaoRan,
+      noSsao.ssaoRan,
+      first.taaOn,
+      noTaa.taaOn,
+      noTaa.taaHistory,
+      sum(*firstPicture),
+      sum(*darkPicture),
+      backPicture->rgba == firstPicture->rgba);
+
+    panel.stop();
+    reports.checkLast();
+    checkCounts("overrides");
   }
 
   SECTION("the status line's bake notices (LP4.3, D90, K8, K29)")

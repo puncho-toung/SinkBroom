@@ -793,6 +793,18 @@ void LitSession::setDebugView(const DebugView view)
   m_renderThread->setDebugView(view);
 }
 
+bool LitSession::setOverrides(
+  const EngineFrameOverrides& overrides, const std::uint64_t generation)
+{
+  // D53: a change meant for another session is dropped
+  if (generation != m_events->generation())
+  {
+    return false;
+  }
+  m_renderThread->setOverrides(overrides);
+  return true;
+}
+
 DebugView LitSession::debugView() const
 {
   return m_renderThread->debugView();

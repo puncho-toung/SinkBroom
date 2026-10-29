@@ -464,6 +464,13 @@ private:
   // accumulated frames reset by a change seen only after they were recorded, in a row;
   // MaxStalledFrames of them stop the history's own re-trigger (the livelock guard's)
   std::size_t m_taaResets = 0;
+  // ----- LP6.6 (C74, D182): the overrides -----
+  // the latest live change and the changes posted (m_mutex), and the copy the frames draw
+  // with with the changes it holds (render thread; taken at a frame's start)
+  std::optional<EngineFrameOverrides> m_overridesInbox;
+  std::uint64_t m_overridesPosted = 0;
+  EngineFrameOverrides m_overrides;
+  std::uint64_t m_overridesApplied = 0;
   // LP2.3 (D9): the last frame shown, written by the render thread, read on any thread
   mutable std::mutex m_statusMutex;
   SessionStatus m_status;
@@ -802,6 +809,9 @@ public:
   // LP3.4 (D158), any thread: the debug view the frames draw after the tonemap pass (a
   // change triggers a frame)
   void setDebugView(DebugView view);
+  // LP6.6 (C74, D182, R5.17), any thread: the overrides the next frame takes at its start
+  // (latest wins), triggered; never a wait for a frame
+  void setOverrides(const EngineFrameOverrides& overrides);
   DebugView debugView() const;
   // DX.5, GUI thread, phase B, once the frame resources exist and before start: the
   // pipelines the first lit frames ask for (litStartPipelineKeys, the tonemap pass's and
@@ -881,8 +891,8 @@ private:
   // D77 (LP2.2b): the frame's convergence after its passes, and whether it re-triggers
   // itself (with the livelock guard); LP6.6 (C73): the TAA history after the frame
   void converge(const LitFrameStats& lit, std::uint64_t tableVersion);
-  // LP6.6 (C73, D181): the session's progressive TAA is on (SessionOptions::
-  // progressiveAaForTesting) and blob 89 has not failed
+  // LP6.6 (C73, D181, C74): the session's progressive TAA is on (its overrides, from
+  // SessionOptions::progressiveAaForTesting or a live change) and blob 89 has not failed
   bool taaActive() const;
   // LP2.2b (C29): a settled frame copies the LDR target for the readbacks asked for
   void recordLdrReadback(nvrhi::ICommandList& commandList);

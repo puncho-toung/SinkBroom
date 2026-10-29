@@ -310,6 +310,12 @@ public:
    * then on; whether they exist.
    */
   bool ensureTaaTargets();
+  /**
+   * LP6.6 (C74), render thread: the G-buffer's and SSAO's targets (LP6.5a's set) at the
+   * targets' extent, made now when they are not (a session that started without SSAO and
+   * turned it on), and made again with the targets from then on; whether they exist.
+   */
+  bool ensureSsaoTargets();
   // LP6.6 (C73), render thread: _taaMotionVectors cleared to 0 once after each make
   void recordTaaClears(nvrhi::ICommandList& commandList);
 
@@ -355,6 +361,9 @@ private:
   nvrhi::TextureHandle makeCurrentRender(vk::Extent2D extent) const;
   // LP6.6: the four TAA targets into targets at their extent (why not, or nullopt)
   std::optional<std::string> makeTaaTargets(Targets& targets) const;
+  // LP6.6 (C74): _ao0 and SSAO's arrays into targets at their extent (why not, or
+  // nullopt)
+  std::optional<std::string> makeSsaoTargets(Targets& targets) const;
 
   deleteCopyAndMove(FrameResources);
 };

@@ -229,6 +229,7 @@ RenderThread::RenderThread(
   , m_events{events}
   , m_options{std::move(options)}
   , m_vramBudget{m_options.vramBudgetBytes}
+  , m_overrides{sessionOverrides(m_options)}
 {
 }
 
@@ -844,7 +845,18 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
 
 bool RenderThread::taaActive() const
 {
-  return m_options.progressiveAaForTesting && !m_taaFailed;
+  return m_overrides.progressiveAa && !m_taaFailed;
+}
+
+void RenderThread::setOverrides(const EngineFrameOverrides& overrides)
+{
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    m_overridesInbox = overrides;
+    ++m_overridesPosted;
+    m_pacer.trigger();
+  }
+  m_wake.notify_all();
 }
 
 void RenderThread::setEveryFrameHook(std::function<void(RenderFrameAccess&)> hook)
@@ -1174,6 +1186,18 @@ bool RenderThread::skipShaderPasses() const
 {
   return m_skipShaderPassesForTesting.load();
 }
+
+EngineFrameOverrides sessionOverrides(const SessionOptions& options)
+{
+  return EngineFrameOverrides{
+    options.ssaoForTesting,
+    options.progressiveAaForTesting,
+    options.forceAmbientForTesting};
+}
+
+// LP6.6 (C74): the overrides' defaults are the engine's (D21, Q25)
+static_assert(EngineFrameOverrides{}.ssao == EngineFrame.useSsao);
+static_assert(EngineFrameOverrides{}.forceAmbient == EngineFrame.forceAmbient);
 
 void RenderThread::setDebugView(const DebugView view)
 {
@@ -1905,8 +1929,10 @@ bool RenderThread::recordLitPasses(
   // LP3.3 (C62, D152)
   inputs.shadowsMoving = m_frameShadowsMoving;
   inputs.gamePath = m_options.gamePath;
-  // LP6.5a (C69, C70, D177): passes 3 and 4 when the session's SSAO is on
-  inputs.ssao = m_options.ssaoForTesting;
+  // LP6.5a (C69, C70, D177): passes 3 and 4 when the session's SSAO is on; LP6.6 (C74):
+  // its overrides', and the ambient pass's AMBIENT_COLOR
+  inputs.ssao = m_overrides.ssao;
+  inputs.forceAmbient = m_overrides.forceAmbient;
   inputs.afterPrepass = [this] { runDebugHook(DebugHook::AfterPrepass); };
   // C38 (LP4.2b): r_skipInteractions 1's stand-in, a test's switch
   m_passes.setSkipInteractionsForTesting(m_skipInteractionsForTesting.load());
@@ -1929,7 +1955,7 @@ bool RenderThread::recordLitPasses(
       m_chunksVersion,
       tableVersion,
       m_frameFeedApplied,
-      0,
+      m_overridesApplied,
       m_skipInteractionsForTesting.load(),
       m_skipShaderPassesForTesting.load()};
     m_taaFrameStartChange = current != m_taaLast || m_frameShadowsMoving
@@ -2224,6 +2250,12 @@ void RenderThread::runLoop()
       m_frameStart = now;
       const auto frameCamera = m_camera;
       const auto cameraSet = m_cameraSet;
+      // LP6.6 (C74, D182): a live change of the overrides, taken by this frame
+      if (m_overridesInbox)
+      {
+        m_overrides = *std::exchange(m_overridesInbox, std::nullopt);
+        m_overridesApplied = m_overridesPosted;
+      }
       // S31, B0.3: the frame takes the snapshot offered once the last one's chunks are
       // applied; ReadyForSnapshot then says the inbox is free again
       auto snapshot = std::shared_ptr<const Snapshot>{};
@@ -2931,6 +2963,9 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         status.exactSettled = m_convergence.otherTermsHold();
         status.taaOn = taaActive();
         status.taaHistory = m_convergence.taaHistory;
+        // LP6.6 (C74)
+        status.overrides = m_overrides;
+        status.overridesApplied = m_overridesApplied;
         status.lightsVisible = litStats.lightsVisible;
         status.lightsDrawn = litStats.lightsDrawn;
         status.lightsOverflowed = litStats.lightsOverflowed;

@@ -19,11 +19,14 @@
 
 #include "ui/LitPreviewPanel.h"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPointer>
 #include <QPushButton>
+#include <QSettings>
+#include <QSlider>
 #include <QStackedLayout>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -46,6 +49,7 @@
 #include "ui/QPathUtils.h"
 #include "ui/SystemPaths.h"
 #include "ui/ViewConstants.h"
+#include "ui/WidgetState.h"
 
 #include "kd/result.h"
 
@@ -78,6 +82,22 @@ constexpr auto StatusTimerName = "LitPreviewPanel_StatusTimer";
 // LP3.4 (D158): the debug-view choice beside the status line, its items in
 // lit::DebugView's order
 constexpr auto DebugViewName = "LitPreviewPanel_DebugView";
+// LP6.6 (C74, D182): the overrides' controls and their settings' suffixes; Force ambient
+// in steps of 0.05 (the director's reading (2))
+constexpr auto SsaoName = "LitPreviewPanel_Ssao";
+constexpr auto ProgressiveAaName = "LitPreviewPanel_ProgressiveAa";
+constexpr auto ForceAmbientName = "LitPreviewPanel_ForceAmbient";
+constexpr auto ForceAmbientValueName = "LitPreviewPanel_ForceAmbientValue";
+constexpr auto CheckedSuffix = "Checked";
+constexpr auto ValueSuffix = "Value";
+constexpr auto ForceAmbientSteps = 20;
+
+// LP6.6 (C74): a test's settings file (setSettingsFileForTesting); GUI thread only
+std::optional<std::filesystem::path>& settingsFileForTesting()
+{
+  static auto file = std::optional<std::filesystem::path>{};
+  return file;
+}
 
 /**
  * D29: the panel that runs the process's one session, GUI thread only. Every change
@@ -134,9 +154,14 @@ bool environmentFlag(const char* name)
  * environment variables for tests and measurements: TB_LIT_FORCE_FIFO (1, true or yes)
  * and TB_LIT_FRAME_LOG (the frame log's absolute path, C16).
  */
-lit::SessionOptions sessionOptions(Logger& logger)
+lit::SessionOptions sessionOptions(
+  Logger& logger, const lit::EngineFrameOverrides& overrides)
 {
   auto options = lit::SessionOptions{};
+  // LP6.6 (C74, D182): the panel's overrides are the session's first ones
+  options.ssaoForTesting = overrides.ssao;
+  options.progressiveAaForTesting = overrides.progressiveAa;
+  options.forceAmbientForTesting = overrides.forceAmbient;
 #ifndef NDEBUG
   options.validation = true;
 #endif
@@ -298,7 +323,7 @@ void LitPreviewPanel::start()
   // C1: the material service reads the game the document's map belongs to; the host's
   // document observer watches the document for the session
   auto host = std::make_unique<LitSessionHost>(
-    sessionOptions(m_document.logger()),
+    sessionOptions(m_document.logger(), overrides()),
     ++lastGeneration,
     std::move(eventHandler),
     std::move(camera),
@@ -376,6 +401,73 @@ void LitPreviewPanel::dropContainerIndexMemoryForTesting()
 std::shared_ptr<lit::GameContainerIndex> LitPreviewPanel::containerIndexForTesting() const
 {
   return m_containerIndex;
+}
+
+lit::EngineFrameOverrides LitPreviewPanel::overrides() const
+{
+  auto overrides = lit::EngineFrameOverrides{};
+  overrides.ssao = m_ssaoBox->isChecked();
+  overrides.progressiveAa = m_progressiveAaBox->isChecked();
+  overrides.forceAmbient =
+    float(m_forceAmbientSlider->value()) / float(ForceAmbientSteps);
+  return overrides;
+}
+
+void LitPreviewPanel::setSettingsFileForTesting(std::optional<std::filesystem::path> file)
+{
+  settingsFileForTesting() = std::move(file);
+}
+
+std::unique_ptr<QSettings> LitPreviewPanel::settings()
+{
+  if (const auto& file = settingsFileForTesting())
+  {
+    return std::make_unique<QSettings>(pathAsQString(*file), QSettings::IniFormat);
+  }
+  return std::make_unique<QSettings>();
+}
+
+void LitPreviewPanel::restoreOverrides()
+{
+  // R4-1.13: absent keys are the engine's defaults (D21, Q25)
+  const auto defaults = lit::EngineFrameOverrides{};
+  const auto stored = settings();
+  const auto blockSsao = QSignalBlocker{m_ssaoBox};
+  const auto blockProgressiveAa = QSignalBlocker{m_progressiveAaBox};
+  const auto blockForceAmbient = QSignalBlocker{m_forceAmbientSlider};
+  m_ssaoBox->setChecked(
+    stored->value(widgetSettingsPath(m_ssaoBox, CheckedSuffix), defaults.ssao).toBool());
+  m_progressiveAaBox->setChecked(
+    stored
+      ->value(
+        widgetSettingsPath(m_progressiveAaBox, CheckedSuffix), defaults.progressiveAa)
+      .toBool());
+  m_forceAmbientSlider->setValue(std::clamp(
+    stored
+      ->value(
+        widgetSettingsPath(m_forceAmbientSlider, ValueSuffix),
+        int(std::lround(defaults.forceAmbient * float(ForceAmbientSteps))))
+      .toInt(),
+    0,
+    ForceAmbientSteps));
+  m_forceAmbientValue->setText(QString::number(double(overrides().forceAmbient), 'f', 2));
+}
+
+void LitPreviewPanel::overridesChanged()
+{
+  const auto stored = settings();
+  stored->setValue(widgetSettingsPath(m_ssaoBox, CheckedSuffix), m_ssaoBox->isChecked());
+  stored->setValue(
+    widgetSettingsPath(m_progressiveAaBox, CheckedSuffix),
+    m_progressiveAaBox->isChecked());
+  stored->setValue(
+    widgetSettingsPath(m_forceAmbientSlider, ValueSuffix), m_forceAmbientSlider->value());
+  m_forceAmbientValue->setText(QString::number(double(overrides().forceAmbient), 'f', 2));
+  // a running session takes them at its next frame; one still to start at Start
+  if (m_host)
+  {
+    m_host->setOverrides(overrides());
+  }
 }
 
 bool LitPreviewPanel::claimSessionForTesting(const LitPreviewPanel& panel)
@@ -479,6 +571,52 @@ void LitPreviewPanel::createGui()
   statusLayout->addWidget(statusLabel, 1);
   statusLayout->addWidget(debugView);
   surfacePageLayout->addLayout(statusLayout);
+
+  // LP6.6 (C74, D182, A57): the frame's three overrides in a row of their own under the
+  // status line, restored from the panel's settings, saved and applied at each change
+  m_ssaoBox = new QCheckBox{tr("SSAO")};
+  m_ssaoBox->setObjectName(SsaoName);
+  m_ssaoBox->setToolTip(
+    tr("Screen-space ambient occlusion, as the engine's r_useSSAO 1"));
+  m_progressiveAaBox = new QCheckBox{tr("Progressive AA")};
+  m_progressiveAaBox->setObjectName(ProgressiveAaName);
+  m_progressiveAaBox->setToolTip(
+    tr("Once the camera stops, 16 jittered frames are averaged, as the engine's TAA"));
+  auto* forceAmbientLabel = new QLabel{tr("Force ambient")};
+  m_forceAmbientSlider = new QSlider{Qt::Horizontal};
+  m_forceAmbientSlider->setObjectName(ForceAmbientName);
+  m_forceAmbientSlider->setRange(0, ForceAmbientSteps);
+  m_forceAmbientSlider->setSingleStep(1);
+  m_forceAmbientSlider->setPageStep(2);
+  m_forceAmbientSlider->setToolTip(
+    tr("The ambient pass's strength, as the engine's r_forceAmbient (0 to 1)"));
+  m_forceAmbientValue = new QLabel{};
+  m_forceAmbientValue->setObjectName(ForceAmbientValueName);
+  m_forceAmbientValue->setMinimumWidth(
+    m_forceAmbientValue->fontMetrics().horizontalAdvance("0.00"));
+  for (auto* widget : std::initializer_list<QWidget*>{
+         m_ssaoBox, m_progressiveAaBox, m_forceAmbientSlider})
+  {
+    // a click leaves the keyboard with the 3D view (review L3.12)
+    widget->setFocusPolicy(Qt::TabFocus);
+  }
+  auto* overridesLayout = new QHBoxLayout{};
+  overridesLayout->setContentsMargins(
+    LayoutConstants::WideHMargin,
+    LayoutConstants::NarrowVMargin,
+    LayoutConstants::WideHMargin,
+    LayoutConstants::NarrowVMargin);
+  overridesLayout->addWidget(m_ssaoBox);
+  overridesLayout->addWidget(m_progressiveAaBox);
+  overridesLayout->addWidget(forceAmbientLabel);
+  overridesLayout->addWidget(m_forceAmbientSlider, 1);
+  overridesLayout->addWidget(m_forceAmbientValue);
+  surfacePageLayout->addLayout(overridesLayout);
+  restoreOverrides();
+  connect(m_ssaoBox, &QCheckBox::toggled, this, [this] { overridesChanged(); });
+  connect(m_progressiveAaBox, &QCheckBox::toggled, this, [this] { overridesChanged(); });
+  connect(
+    m_forceAmbientSlider, &QSlider::valueChanged, this, [this] { overridesChanged(); });
   auto* statusTimer = new QTimer{this};
   statusTimer->setObjectName(StatusTimerName);
   statusTimer->setInterval(StatusInterval);

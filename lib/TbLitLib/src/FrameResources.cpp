@@ -545,21 +545,60 @@ Result<FrameResources::Targets> FrameResources::makeTargets(
   }
   if (m_ssaoTargets)
   {
-    // LP6.5a (C70): R_AmbientOcclusionImage_ResNative (Image_intrinsic.cpp:342-345:
-    // TD_R8F, a render target and a UAV) and SsaoPass' arrays (SsaoPass.cpp:56-71)
-    targets.ao0 = device.createTexture(
-      renderTargetDesc("_ao0", nvrhi::Format::R8_UNORM, extent, false, true));
-    targets.deinterleavedDepth = device.createTexture(
-      deinterleavedDesc("SSAO/DeinterleavedDepth", nvrhi::Format::R32_FLOAT, extent));
-    targets.deinterleavedOcclusion = device.createTexture(
-      deinterleavedDesc("SSAO/DeinterleavedOcclusion", nvrhi::Format::R8_UNORM, extent));
-    if (!targets.ao0 || !targets.deinterleavedDepth || !targets.deinterleavedOcclusion)
+    if (const auto failed = makeSsaoTargets(targets))
     {
-      return Error{fmt::format(
-        "Cannot create the SSAO targets at {}x{}", extent.width, extent.height)};
+      return Error{*failed};
     }
   }
   return targets;
+}
+
+std::optional<std::string> FrameResources::makeSsaoTargets(Targets& targets) const
+{
+  if (!m_device)
+  {
+    return std::string{"The SSAO targets need the frame's device"};
+  }
+  auto& device = *m_device;
+  const auto extent = targets.extent;
+  // LP6.5a (C70): R_AmbientOcclusionImage_ResNative (Image_intrinsic.cpp:342-345:
+  // TD_R8F, a render target and a UAV) and SsaoPass' arrays (SsaoPass.cpp:56-71)
+  targets.ao0 = device.createTexture(
+    renderTargetDesc("_ao0", nvrhi::Format::R8_UNORM, extent, false, true));
+  targets.deinterleavedDepth = device.createTexture(
+    deinterleavedDesc("SSAO/DeinterleavedDepth", nvrhi::Format::R32_FLOAT, extent));
+  targets.deinterleavedOcclusion = device.createTexture(
+    deinterleavedDesc("SSAO/DeinterleavedOcclusion", nvrhi::Format::R8_UNORM, extent));
+  if (!targets.ao0 || !targets.deinterleavedDepth || !targets.deinterleavedOcclusion)
+  {
+    targets.ao0 = nullptr;
+    targets.deinterleavedDepth = nullptr;
+    targets.deinterleavedOcclusion = nullptr;
+    return fmt::format(
+      "Cannot create the SSAO targets at {}x{}", extent.width, extent.height);
+  }
+  return std::nullopt;
+}
+
+bool FrameResources::ensureSsaoTargets()
+{
+  m_ssaoTargets = true;
+  if ((!m_targets.ao0 || !m_targets.normals) && m_targets.depth)
+  {
+    // a failed make leaves the targets as they were
+    auto made = m_targets;
+    const auto failed = !made.normals ? makeNormals(made) : std::nullopt;
+    if (!failed && !made.ao0 && !makeSsaoTargets(made))
+    {
+      m_targets = std::move(made);
+    }
+    else if (!failed && made.ao0)
+    {
+      m_targets = std::move(made);
+    }
+  }
+  return m_targets.ao0 && m_targets.deinterleavedDepth && m_targets.deinterleavedOcclusion
+         && m_targets.normals && m_targets.gbufferFramebuffer;
 }
 
 std::optional<std::string> FrameResources::makeNormals(Targets& targets) const

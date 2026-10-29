@@ -23547,6 +23547,192 @@ TEST_CASE("LitSession the progressive TAA on a GPU (LP6.6)", "[.][litgpu4]")
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
 }
 
+/**
+ * LP6.6 (C74, D182, R5.17, P8.27): the overrides' live path without the panel:
+ * LitSession::setOverrides from the test thread, stamped with the session's generation (a
+ * stale one dropped), taken by the next frame (SessionStatus' applied values and count),
+ * each change resetting the TAA history: SSAO off (pass 4 not run, t4 _white: the
+ * corner's crease brighter), Progressive AA off (no history, no resolve, settled at
+ * once), Force ambient 0 (AMBIENT_COLOR 0: the ambient picture darker), and back to the
+ * defaults (the first picture again). Hidden: it needs a GPU and the game's blobs.
+ */
+TEST_CASE("LitSession the overrides' live path on a GPU (LP6.6)", "[.][litgpu4]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto started = std::chrono::steady_clock::now();
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  writeLp65aBake(root);
+  namespace fr = frame_resource;
+  const auto cornerView = litCamera({230, -60, 30}, {0, -1, 0}, {0, 0, 1});
+  // LP6.5a's windows: the open wall and the crease band
+  const auto openWall = std::array<std::uint32_t, 4>{110, 8, 142, 36};
+  const auto crease = std::array<std::uint32_t, 4>{40, 86, 150, 100};
+  const auto mean = [](const TargetImage& image, const std::array<std::uint32_t, 4>& w) {
+    auto sum = 0.0;
+    for (std::uint32_t c = 0; c < 3; ++c)
+    {
+      sum += image.stats(w[0], w[1], w[2], w[3], c)[0] / 3.0;
+    }
+    return sum;
+  };
+
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  auto first = std::optional<TargetFrame>{};
+  auto noSsao = std::optional<TargetFrame>{};
+  auto noTaa = std::optional<TargetFrame>{};
+  auto dark = std::optional<TargetFrame>{};
+  auto again = std::optional<TargetFrame>{};
+  auto frames = std::vector<TaaFrame>{};
+  auto ambientParms = std::vector<float>{};
+  auto stale = true;
+  auto statuses = std::vector<SessionStatus>{};
+  auto changedAt = std::vector<FrameClock::time_point>{};
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto service = rootService(root);
+    auto events = Events{};
+    auto session = taaSession(instance, events, *service, root, true, true);
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+    REQUIRE(session->offerSnapshot(lp22aSnapshot(lp65aMapText(), root, 7, 1)));
+    first = settledTargets(*session, cornerView, {fr::CurrentRenderHdr});
+    REQUIRE(first);
+    statuses.push_back(session->status());
+    auto tally = std::make_shared<TaaTally>();
+    tallyTaa(*session, tally);
+    REQUIRE(inFrame(*session, [](RenderFrameAccess&) {}));
+    // a change stamped with another generation is dropped
+    stale = session->setOverrides(EngineFrameOverrides{false, false, 0.0f}, 8);
+    const auto change = [&](const EngineFrameOverrides& overrides) {
+      const auto mark = session->framesPresented();
+      changedAt.push_back(FrameClock::now());
+      REQUIRE(session->setOverrides(overrides, 7));
+      REQUIRE(waitFor(
+        [&] {
+          const auto status = session->status();
+          return status.frames > mark && status.overrides == overrides && status.settled;
+        },
+        20000ms,
+        false));
+      statuses.push_back(session->status());
+    };
+    change(EngineFrameOverrides{false, true, 0.5f});
+    noSsao = settledTargets(*session, cornerView, {fr::CurrentRenderHdr});
+    change(EngineFrameOverrides{true, false, 0.5f});
+    noTaa = settledTargets(*session, cornerView, {fr::CurrentRenderHdr});
+    change(EngineFrameOverrides{true, true, 0.0f});
+    dark = settledTargets(*session, cornerView, {fr::CurrentRenderHdr});
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      ambientParms.push_back(access.passes.parms().value(RenderParm::AmbientColor)[0]);
+    }));
+    change(EngineFrameOverrides{});
+    again = settledTargets(*session, cornerView, {fr::CurrentRenderHdr});
+    REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+      ambientParms.push_back(access.passes.parms().value(RenderParm::AmbientColor)[0]);
+    }));
+    session->setEveryFrameHookForTesting({});
+    frames = tally->copy();
+    teardown(*session);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    CHECK(events.count(SessionEvent::Warning) == 0u);
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  CHECK(resetDispatcher());
+  CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+  messages.print("LP6.6 C74, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+
+  REQUIRE(first);
+  REQUIRE(noSsao);
+  REQUIRE(noTaa);
+  REQUIRE(dark);
+  REQUIRE(again);
+  CHECK_FALSE(stale);
+  // the options' overrides, then each change applied and counted
+  REQUIRE(statuses.size() == 5u);
+  CHECK(statuses[0].overrides == EngineFrameOverrides{true, true, 0.5f});
+  CHECK(statuses[0].overridesApplied == 0u);
+  for (std::size_t i = 1; i < statuses.size(); ++i)
+  {
+    CHECK(statuses[i].overridesApplied == i);
+  }
+  // each change's first frame drew plain with no history (a reset), after a settled one
+  auto resets = std::vector<std::string>{};
+  for (const auto at : changedAt)
+  {
+    const auto it =
+      std::ranges::find_if(frames, [&](const TaaFrame& f) { return f.start >= at; });
+    REQUIRE(it != frames.end());
+    REQUIRE(it != frames.begin());
+    CHECK(std::prev(it)->settled);
+    CHECK(it->index == 0u);
+    CHECK(it->history == 0u);
+    CHECK_FALSE(it->taaRan);
+    resets.push_back(fmt::format("{} -> {}", std::prev(it)->history, it->history));
+  }
+  // SSAO off: pass 4 not run (t4 _white), the crease brighter, the open wall the same
+  CHECK(first->frame.lit.ssaoRan);
+  CHECK_FALSE(noSsao->frame.lit.ssaoRan);
+  CHECK_FALSE(noSsao->frame.lit.gbufferRan);
+  CHECK(noSsao->frame.convergence.taaHistory == 16u);
+  const auto firstHdr = first->image(fr::CurrentRenderHdr);
+  const auto creaseFirst = mean(first->image(fr::CurrentRenderHdr), crease);
+  const auto creaseNoSsao = mean(noSsao->image(fr::CurrentRenderHdr), crease);
+  CHECK(creaseNoSsao > creaseFirst);
+  // Progressive AA off: no history, no resolve, settled at once, SSAO on again
+  CHECK(noTaa->frame.convergence.taaHistory == 0u);
+  CHECK_FALSE(noTaa->frame.lit.taaRan);
+  CHECK_FALSE(noTaa->frame.tonemap.taaResolved);
+  CHECK(noTaa->frame.lit.ssaoRan);
+  CHECK(noTaa->frame.settled);
+  CHECK_FALSE(statuses[2].taaOn);
+  // Force ambient 0: AMBIENT_COLOR 0, the ambient picture darker; back at 0.5
+  REQUIRE(ambientParms.size() == 2u);
+  CHECK(ambientParms[0] == 0.0f);
+  CHECK(ambientParms[1] == 0.5f);
+  const auto openFirst = mean(first->image(fr::CurrentRenderHdr), openWall);
+  const auto openDark = mean(dark->image(fr::CurrentRenderHdr), openWall);
+  CHECK(openDark < openFirst);
+  // the defaults again: the first picture
+  CHECK(again->image(fr::CurrentRenderHdr).values == firstHdr.values);
+  CHECK(again->frame.convergence.taaHistory == 16u);
+  std::cout << fmt::format(
+    "LP6.6 C74: a stale generation's change dropped {}; applied {} / {} / {} / {} (the "
+    "histories before and after each change {}); the crease's HDR {:.5f} with SSAO, "
+    "{:.5f} without; the open wall's {:.5f} at Force ambient 0.5, {:.5f} at 0 "
+    "(AMBIENT_COLOR {} then {}); the defaults again: the first picture {}; case {:.1f} "
+    "s\n",
+    !stale,
+    statuses[1].overridesApplied,
+    statuses[2].overridesApplied,
+    statuses[3].overridesApplied,
+    statuses[4].overridesApplied,
+    fmt::join(resets, ", "),
+    creaseFirst,
+    creaseNoSsao,
+    openFirst,
+    openDark,
+    ambientParms[0],
+    ambientParms[1],
+    again->image(fr::CurrentRenderHdr).values == firstHdr.values,
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+}
+
 } // namespace tb::lit
 
 #endif

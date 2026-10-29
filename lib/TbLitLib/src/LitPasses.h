@@ -304,6 +304,9 @@ struct LitFrameInputs
   bool taaPending = false;
   // pass 11's timer (TimedPass::Taa), or null
   nvrhi::ITimerQuery* taaTimer = nullptr;
+  // LP6.6 (C74, Q25): r_forceAmbient, AMBIENT_COLOR's rgb in the ambient pass (the
+  // session's overrides; the engine's 0.5 by default)
+  float forceAmbient = EngineFrame.forceAmbient;
 };
 
 // C16's columns of the lit passes, per frame (LP2.2b logs them)

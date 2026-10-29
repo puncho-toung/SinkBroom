@@ -51,6 +51,25 @@ enum class TextureDimension : std::uint8_t;
 namespace tb::lit
 {
 
+/**
+ * LP6.6 (C74, D182, A57, P8.27, the director's reading (2)): the three switches of the
+ * frame a session takes at run time from its panel, beside EngineFrame (the constexpr
+ * defaults table): SSAO (r_useSSAO 1: passes 3 and 4, C70), Progressive AA
+ * (r_antiAliasing 2's preview form, C73) and Force ambient (r_forceAmbient,
+ * AMBIENT_COLOR's rgb, a float 0-1: the panel's slider in steps of 0.05). The defaults
+ * are the engine's (D21, Q25: on, on, 0.5; RenderThread.cpp asserts them against
+ * EngineFrame). SessionOptions' three ForTesting fields are a session's first copy
+ * (sessionOverrides), LitSession:: setOverrides a live change.
+ */
+struct EngineFrameOverrides
+{
+  bool ssao = true;
+  bool progressiveAa = true;
+  float forceAmbient = 0.5f;
+
+  bool operator==(const EngineFrameOverrides&) const = default;
+};
+
 struct SessionOptions
 {
   // the validation layer is on the instance; in Debug, NVRHI's validation layer as well
@@ -86,7 +105,13 @@ struct SessionOptions
   // frames resolved through blob 89 into _taaResolved, then the frame settles. Off in
   // TbLitLib tests (a case opts in), on in sessions (LitSessionHost); parity keeps it off
   bool progressiveAaForTesting = false;
+  // LP6.6 (C74, Q25): r_forceAmbient, AMBIENT_COLOR's rgb in the ambient pass (0.5, the
+  // engine's default and the parity rows'); the panel's slider sets it for sessions
+  float forceAmbientForTesting = 0.5f;
 };
+
+// LP6.6 (C74): a session's first overrides, its options' three switches
+EngineFrameOverrides sessionOverrides(const SessionOptions& options);
 
 // D9: a program the compile thread was asked for, and whether the preview can draw with
 // it ("disabled: <field>" otherwise); the panel's status line shows the disabled ones
@@ -157,6 +182,10 @@ struct SessionStatus
   bool exactSettled = false;
   bool taaOn = false;
   std::size_t taaHistory = 0;
+  // LP6.6 (C74): the overrides the frame drew with, and the live changes
+  // (LitSession::setOverrides) applied by then (0: the options' alone)
+  EngineFrameOverrides overrides;
+  std::uint64_t overridesApplied = 0;
   std::size_t lightsVisible = 0;
   std::size_t lightsDrawn = 0;
   std::size_t lightsOverflowed = 0;
@@ -882,6 +911,17 @@ public:
   // LP3.4 (D158), any thread: the debug view the frames draw from the next one on (a
   // change triggers a frame), and the one set last
   void setDebugView(DebugView view);
+  /**
+   * LP6.6 (C74, D182, R5.17, D53), any thread: a live change of the session's overrides,
+   * stamped with the session generation it is meant for: dropped (false) for another
+   * generation; else put into the render thread's latest-wins slot under its mutex (no
+   * wait for a frame) and a frame triggered, whose start takes it: SSAO switches passes 3
+   * and 4 (t4 _ao0 or _white, C69's consumer rule; the targets made at the first frame
+   * that needs them), Progressive AA starts or ends the TAA history, Force ambient sets
+   * AMBIENT_COLOR's rgb; each change resets the history. SessionStatus reports the
+   * values applied and how many changes.
+   */
+  bool setOverrides(const EngineFrameOverrides& overrides, std::uint64_t generation);
   DebugView debugView() const;
   /**
    * U2.3, any thread: while set, every device memory allocation in a type that is

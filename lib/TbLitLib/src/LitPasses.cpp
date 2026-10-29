@@ -496,6 +496,16 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
   if ((inputs.ssao || normalsForStages) && !m_lists.drawSurfs.empty())
   {
     auto& pipelines = *inputs.pipelines;
+    // LP6.6 (C74): SSAO switched on in a session that started without it: its targets
+    // made now (FrameResources::ensureSsaoTargets) and kept from then on
+    if (inputs.ssao && !inputs.frame->ensureSsaoTargets())
+    {
+      m_stats.ssaoDisabled = true;
+      if (m_stats.disabledReason.empty())
+      {
+        m_stats.disabledReason = "the SSAO targets cannot be made";
+      }
+    }
     // copies: a lookup is valid until the next call (RenderPipelines); asked for only in
     // a session with SSAO
     const auto ssaoPipelines = inputs.ssao ? std::array<ComputePipelineLookup, 3>{
@@ -503,7 +513,7 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
                                                pipelines.compute(EngineNamedSsaoCompute),
                                                pipelines.compute(EngineNamedSsaoBlur)}
                                            : std::array<ComputePipelineLookup, 3>{};
-    auto ready = inputs.ssao;
+    auto ready = inputs.ssao && !m_stats.ssaoDisabled;
     for (const auto& lookup : ssaoPipelines)
     {
       if (!inputs.ssao)
@@ -2270,12 +2280,13 @@ void LitPasses::setAmbientPassParms(Frame& frame)
   m_parms.set(RenderParm::Color, engineClampedColor(Vec4{1.0f, 1.0f, 1.0f, 1.0f}));
 
   // :2401-2418: the light colour white × r_lightScale for diffuse and specular, and
-  // AMBIENT_COLOR ( r_forceAmbient, same, same, 1 ) (ambientBoost 1)
+  // AMBIENT_COLOR ( r_forceAmbient, same, same, 1 ) (ambientBoost 1); LP6.6 (C74): the
+  // session's Force ambient
   const auto lightScale = EngineFrame.lightScale;
   const auto lightColor = Vec4{lightScale, lightScale, lightScale, lightScale};
   const auto diffuseColor = lightColor;
   const auto specularColor = lightColor;
-  const auto ambient = EngineFrame.forceAmbient;
+  const auto ambient = frame.inputs->forceAmbient;
   m_parms.set(RenderParm::AmbientColor, Vec4{ambient, ambient, ambient, 1.0f});
 
   // :2420-2423: useIBL, and RB_SetupForFastPathInteractions( diffuseColor,

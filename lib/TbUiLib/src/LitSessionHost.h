@@ -252,6 +252,13 @@ public:
 
   // passed on once phase B has run; phase B asks the camera provider
   void setCamera(const lit::CameraState& camera);
+  /**
+   * LP6.6 (C74, D182, R5.17): the owner's overrides changed: the options a phase B still
+   * to run starts with take them, and a running session gets them stamped with this
+   * host's generation (LitSession::setOverrides: its render thread takes them at its next
+   * frame, never a wait)
+   */
+  void setOverrides(const lit::EngineFrameOverrides& overrides);
   // the panel was shown: the document observer offers what coalesced while it was hidden
   void panelShown();
 

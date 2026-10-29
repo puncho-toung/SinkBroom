@@ -33,8 +33,11 @@
 #include <string>
 #include <vector>
 
+class QCheckBox;
 class QLabel;
 class QPushButton;
+class QSettings;
+class QSlider;
 class QStackedLayout;
 class QWidget;
 
@@ -46,6 +49,7 @@ class Camera;
 namespace tb::lit
 {
 struct CameraState;
+struct EngineFrameOverrides;
 class GameContainerIndex;
 class LitSession;
 class MaterialService;
@@ -114,6 +118,14 @@ struct LitPreviewReport
  * is made per Start, and hands it to each host's material service; it is made at the
  * first Start, persisted under SystemPaths::userDataDirectory() / "lit-preview" (§3.12),
  * so the first Start of a launch finds it too. Tests pass a folder of their own.
+ *
+ * LP6.6 (C74, D182, A57, R4-1.13, D17): a row under the status line holds the frame's
+ * three overrides, SSAO and Progressive AA (check boxes) and Force ambient (a slider 0-1
+ * in steps of 0.05 with its value): panel state in QSettings through widgetSettingsPath
+ * (the prefab windows' own scope), restored when the panel is made, given to each Start's
+ * session options and to a running session at each change (LitSessionHost::setOverrides,
+ * stamped with the session's generation). Tests read and write a scratch settings file of
+ * their own (setSettingsFileForTesting), never the user's.
  */
 class LitPreviewPanel : public SidebarPanel
 {
@@ -131,6 +143,11 @@ private:
   QWidget* m_startPage = nullptr;
   QLabel* m_messageLabel = nullptr;
   QWidget* m_surfacePage = nullptr;
+  // LP6.6 (C74): the overrides' controls
+  QCheckBox* m_ssaoBox = nullptr;
+  QCheckBox* m_progressiveAaBox = nullptr;
+  QSlider* m_forceAmbientSlider = nullptr;
+  QLabel* m_forceAmbientValue = nullptr;
 
   // why the last session stopped, unless Stop or a close stopped it
   QString m_stopReason;
@@ -182,6 +199,15 @@ public:
   // Why Start is unavailable, or empty.
   QString unavailableReason() const;
 
+  // LP6.6 (C74): the overrides the controls hold now
+  lit::EngineFrameOverrides overrides() const;
+  /**
+   * LP6.6 (C74, R4-1.13), GUI thread, tests: the panels' settings are read from and
+   * written to this INI file instead of the application's settings, from the next panel
+   * made on (and by every panel for its changes); nullopt for the application's again.
+   */
+  static void setSettingsFileForTesting(std::optional<std::filesystem::path> file);
+
   // the running session once phase B has run, else null
   lit::LitSession* sessionForTesting() const;
   // the running session's parse thread from phase A on, else null
@@ -210,6 +236,11 @@ public:
 private:
   void createGui();
   void connectObservers();
+  // LP6.6 (C74): the overrides' settings (the test file's or the application's), their
+  // restore and save, and a change handed to the running session
+  static std::unique_ptr<QSettings> settings();
+  void restoreOverrides();
+  void overridesChanged();
 
   void cameraDidChange(const gl::Camera& camera);
   void sessionEventReceived(

@@ -382,12 +382,21 @@ lit::SessionOptions LitSessionHost::sessionOptions() const
   // document's map belongs to
   auto options = m_options;
   options.gamePath = m_document.map().gamePath();
-  // LP6.5a (C70, D177, Q43): SSAO on in sessions, the game's r_useSSAO 1 (the panel's
-  // switch to turn it off is C74's, LP6.6)
-  options.ssaoForTesting = true;
-  // LP6.6 (C73, D181, D21: r_antiAliasing 2): the progressive TAA on in sessions
-  options.progressiveAaForTesting = true;
+  // LP6.5a (C70, D177, Q43), LP6.6 (C73, C74, D181, D182): SSAO, the progressive TAA and
+  // Force ambient are the owner's (the panel's controls, on, on and 0.5 by default: D21)
   return options;
+}
+
+void LitSessionHost::setOverrides(const lit::EngineFrameOverrides& overrides)
+{
+  m_options.ssaoForTesting = overrides.ssao;
+  m_options.progressiveAaForTesting = overrides.progressiveAa;
+  m_options.forceAmbientForTesting = overrides.forceAmbient;
+  if (drawing())
+  {
+    // R5.17, D53: stamped with this host's generation
+    m_session->setOverrides(overrides, m_generation);
+  }
 }
 
 void LitSessionHost::setCamera(const lit::CameraState& camera)
