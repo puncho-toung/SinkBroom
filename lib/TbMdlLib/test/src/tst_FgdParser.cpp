@@ -34,6 +34,9 @@
 #include "mdl/PropertyDefinition.h"
 
 #include "kd/ranges/contains.h"
+#include "kd/string_compare.h"
+#include "kd/string_format.h"
+#include "kd/string_utils.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -119,22 +122,51 @@ TEST_CASE("FgdParser")
 
     SECTION("parse all six files")
     {
-      const auto expectedClassCounts = std::vector<size_t>{
-        649u,
-        1200u,
-        1891u,
-        2442u,
-        1248u,
-        // 39 multiplayer classes plus the included DOOM-3-slim.fgd
-        688u,
+      // Counts the class declarations that become entity definitions: @PointClass and
+      // @SolidClass at the start of a line, also in @include'd files (the multiplayer
+      // file includes DOOM-3-slim.fgd). @BaseClass and @Main yield no definition, and
+      // commented-out lines start with //.
+      const auto countClassDeclarations = [&](const std::filesystem::path& path) {
+        auto count = size_t{0};
+        auto paths = std::vector<std::filesystem::path>{path};
+        while (!paths.empty())
+        {
+          const auto currentPath = paths.back();
+          paths.pop_back();
+
+          const auto text = readFile(currentPath);
+          for (const auto& line : kdl::str_split(text, "\n"))
+          {
+            const auto declaration = kdl::str_trim(line);
+            const auto keyword =
+              declaration.substr(0, declaration.find_first_of(" \t(=\""));
+            if (
+              kdl::ci::str_is_equal(keyword, "@PointClass")
+              || kdl::ci::str_is_equal(keyword, "@SolidClass"))
+            {
+              ++count;
+            }
+            else if (kdl::ci::str_is_equal(keyword, "@include"))
+            {
+              const auto start = declaration.find('"');
+              REQUIRE(start != std::string::npos);
+              const auto end = declaration.find('"', start + 1);
+              REQUIRE(end != std::string::npos);
+              paths.push_back(
+                currentPath.parent_path()
+                / declaration.substr(start + 1, end - start - 1));
+            }
+          }
+        }
+        return count;
       };
 
-      for (size_t i = 0; i < filenames.size(); ++i)
+      for (const auto& filename : filenames)
       {
-        CAPTURE(filenames[i]);
+        CAPTURE(filename);
 
         auto status = TestParserStatus{};
-        const auto definitions = parseFile(gamePath / filenames[i], status);
+        const auto definitions = parseFile(gamePath / filename, status);
         REQUIRE(definitions);
 
         const auto& errors = status.messages(LogLevel::Error);
@@ -142,7 +174,7 @@ TEST_CASE("FgdParser")
         CAPTURE(errors, warnings);
         CHECK(status.countStatus(LogLevel::Error) == 0u);
         CHECK(status.countStatus(LogLevel::Warn) == 0u);
-        CHECK(definitions.value().size() == expectedClassCounts[i]);
+        CHECK(definitions.value().size() == countClassDeclarations(gamePath / filename));
       }
     }
 
