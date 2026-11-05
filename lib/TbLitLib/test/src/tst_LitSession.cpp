@@ -23846,10 +23846,10 @@ std::string mocRoomsMap(const bool farIn, const bool partition, const int radius
 {
   auto map = lp3MapText("lp3_point.map");
   {
-    const auto from = std::string{"\"light_radius\" \"400 400 400\""};
+    const auto from = std::string{R"("light_radius" "400 400 400")"};
     const auto at = map.find(from);
     REQUIRE(at != std::string::npos);
-    map.replace(at, from.size(), fmt::format("\"light_radius\" \"{0} {0} {0}\"", radius));
+    map.replace(at, from.size(), fmt::format(R"("light_radius" "{0} {0} {0}")", radius));
   }
   auto world = boxBrush(272, -272, -16, 800, 272, 0, "lp3/room")
                + boxBrush(272, -272, 256, 800, 272, 272, "lp3/room")
@@ -24523,10 +24523,10 @@ TEST_CASE("LitSession masked occlusion culling on a GPU (LP6.7)", "[.][litgpu4]"
   {
     const auto root = assembleLp3Root(gamePath);
     REQUIRE_FALSE(root.empty());
-    // 1280 × 720: the buffer 640 × 360, whole 32 × 8 tiles (at 160 × 120 the buffer's 80
-    // × 60 holds partial tiles, whose cleared reference layer the library's test reads as
-    // visible beside the edge: no box crossing the view's right or bottom edge is culled
-    // there), and the shell's 1.8 units 2.9 pixels at the boxes' near face
+    // 1280 × 720: the buffer 640 × 360, whole 32 × 8 tiles (at 160 × 120 the buffer's
+    // 80 × 60 holds partial tiles, whose cleared reference layer the library's test
+    // reads as visible beside the edge: no box crossing the view's right or bottom edge
+    // is culled there), and the shell's 1.8 units 2.9 pixels at the boxes' near face
     auto view = litCamera({-20, 0, 0}, {1, 0, 0}, {0, 0, 1});
     view.viewportWidth = 1280;
     view.viewportHeight = 720;

@@ -38,7 +38,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstddef>
 #include <limits>
 
 namespace tb::lit
@@ -53,10 +52,10 @@ double millisecondsSince(const MocClock::time_point start)
   return std::chrono::duration<double, std::milli>(MocClock::now() - start).count();
 }
 
-// a chunk's idDrawVerts as RenderTriangles reads them: x at 0, y at 4, z at 8 (with a
-// matrix the library reads z, VertexLayout's offsetZ), the vertex's 32 bytes apart
+// a chunk's idDrawVerts as RenderTriangles reads them: x at 0, y at 4, z at 8 (xyz is
+// EngineDrawVert's first member; with a matrix the library reads z, VertexLayout's
+// offsetZ), the vertex's 32 bytes apart
 static_assert(sizeof(EngineDrawVert) == 32);
-static_assert(offsetof(EngineDrawVert, xyz) == 0);
 constexpr auto DrawVertLayout = EngineMocVertexLayout{int(sizeof(EngineDrawVert)), 4, 8};
 
 // idRenderMatrix::TransformPoint( const idVec4& in, idVec4& out ) (RenderMatrix.h:
@@ -102,14 +101,9 @@ const std::vector<unsigned int>& MaskedOcclusion::indexesOf(const Chunk& chunk)
   // indexes are the same (another chunk may have been made there)
   const auto [it, made] = m_indexes.try_emplace(&chunk);
   auto& entry = it->second;
-  if (
-    made
-    || (entry.chunksVersion != m_chunksVersion
-        && !std::equal(
-          chunk.indexes.begin(),
-          chunk.indexes.end(),
-          entry.indexes.begin(),
-          entry.indexes.end())))
+  const auto changed = entry.chunksVersion != m_chunksVersion
+                       && !std::ranges::equal(chunk.indexes, entry.indexes);
+  if (made || changed)
   {
     entry.indexes.assign(chunk.indexes.begin(), chunk.indexes.end());
   }

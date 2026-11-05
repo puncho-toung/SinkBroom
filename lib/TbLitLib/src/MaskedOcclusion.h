@@ -91,9 +91,10 @@ public:
   MaskedOcclusion& operator=(const MaskedOcclusion&) = delete;
 
   /**
-   * TMOC:546-577 then the fill and FAM's tests: the buffer at ⌊width / 2⌋ rounded up to
-   * a multiple of 8 by ⌊height / 2⌋ rounded up to a multiple of 4, the near plane r_znear
-   * (cramZNear never), cleared; then the surfaces whose occluder flag is set rasterized
+   * TMOC:546-577 then the fill and FAM's tests: the buffer at ⌊width / 2⌋ rounded up
+   * to a multiple of 8 by ⌊height / 2⌋ rounded up to a multiple of 4, the near plane
+   * r_znear (cramZNear never), cleared; then the surfaces whose occluder flag is set
+   * rasterized
    * through RenderTriangles( the chunk's idDrawVerts, its 32-bit indexes, the transposed
    * unjittered mvp of its space, BACKFACE_CCW, CLIP_PLANE_ALL, VertexLayout( sizeof(
    * idDrawVert ), 4, 8 ) ), run by sub-cell run, the runs front to back (the recorded
