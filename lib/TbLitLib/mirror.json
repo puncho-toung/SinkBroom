@@ -24676,6 +24676,418 @@
       "note": "LP7.1a (D135): mikktspace.c compiles as C (the project declares C and CXX, CMakeLists.txt:41) inside TbLitIdLib with that target's options: on MSVC /w (suppress_dependency_warnings), /bigobj in Debug and /Z7 in Release, the compiler's default /fp:precise and CMake's default C flags; on GCC and Clang -w, -fno-strict-aliasing, -ffp-contract=off and, outside Debug, -fno-math-errno -fno-trapping-math (M-ID-BUILD-01's set). No define is needed (it includes the C headers only). The goldens' N03 (MikkTSpace on the engine's MSVC build) equals the preview's byte for byte"
     },
     {
+      "id": "M-MOC-COPY-01",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/libs/moc/CMakeLists.txt",
+          "lines": [
+            1,
+            84
+          ],
+          "anchor": "whole file",
+          "sha256": "24d7962877d6c59a182faa531aeb1fad0f9c94d002c377894060b3e01126e4dd",
+          "gitBlob": "0d5aff72874c5724d51cbc9ef60590c6f0afbfa9"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/moc/CMakeLists.txt"
+        }
+      ],
+      "note": "LP6.7 (C75, D183, Q44, A59, P8.16): one of the eleven files of the engine-vendored Intel Masked Software Occlusion Culling (Copyright 2017 Intel Corporation, Apache-2.0: LICENSE_EXCEPTIONS.md's \"Intel Masked Software Occlusion Culling\" entry and libs/moc/license.txt; credited in the About dialog), copied whole by git show at the pinned commit and never edited: D27's recorded exception, as tinyexr and MikkTSpace. Not compiled: the engine's build of the library, whose per-file flags TbLitMoc takes (M-MOC-BUILD-01)"
+    },
+    {
+      "id": "M-MOC-COPY-02",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/libs/moc/CompilerSpecific.inl",
+          "lines": [
+            1,
+            111
+          ],
+          "anchor": "whole file",
+          "sha256": "7935e7cc805714682b9210e4751e3368f45d016614475f00935024af52afb868",
+          "gitBlob": "3677a6e8850107842f2601d95d2a3510e82c11f7"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/moc/CompilerSpecific.inl"
+        }
+      ],
+      "note": "LP6.7 (C75, D183, Q44, A59, P8.16): one of the eleven files of the engine-vendored Intel Masked Software Occlusion Culling (Copyright 2017 Intel Corporation, Apache-2.0: LICENSE_EXCEPTIONS.md's \"Intel Masked Software Occlusion Culling\" entry and libs/moc/license.txt; credited in the About dialog), copied whole by git show at the pinned commit and never edited: D27's recorded exception, as tinyexr and MikkTSpace. Compiled: included by the three library files (moc_aligned_alloc / moc_aligned_free: _aligned_malloc on MSVC, the CPUID and xgetbv wrappers)"
+    },
+    {
+      "id": "M-MOC-COPY-03",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/libs/moc/CullingThreadpool.cpp",
+          "lines": [
+            1,
+            503
+          ],
+          "anchor": "whole file",
+          "sha256": "04c0f30428c65f111077c3c214f39f4fa4082de19fe718061a0a8340e75b4302",
+          "gitBlob": "390592dcb01fde5dea08a2cc2530220529370569"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/moc/CullingThreadpool.cpp"
+        }
+      ],
+      "note": "LP6.7 (C75, D183, Q44, A59, P8.16): one of the eleven files of the engine-vendored Intel Masked Software Occlusion Culling (Copyright 2017 Intel Corporation, Apache-2.0: LICENSE_EXCEPTIONS.md's \"Intel Masked Software Occlusion Culling\" entry and libs/moc/license.txt; credited in the About dialog), copied whole by git show at the pinned commit and never edited: D27's recorded exception, as tinyexr and MikkTSpace. Not compiled: the threadpool path is the engine's MOC_MULTITHREADED 1 alone (RenderCommon.h:71 sets 0, SC830)"
+    },
+    {
+      "id": "M-MOC-COPY-04",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/libs/moc/CullingThreadpool.h",
+          "lines": [
+            1,
+            311
+          ],
+          "anchor": "whole file",
+          "sha256": "27afb730a782d83a9945262ee7232e8937dcd025a480c21e70eca4da2a95cde9",
+          "gitBlob": "7d4f8052e493168fbae45fc623e24e7d9f183e1c"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/moc/CullingThreadpool.h"
+        }
+      ],
+      "note": "LP6.7 (C75, D183, Q44, A59, P8.16): one of the eleven files of the engine-vendored Intel Masked Software Occlusion Culling (Copyright 2017 Intel Corporation, Apache-2.0: LICENSE_EXCEPTIONS.md's \"Intel Masked Software Occlusion Culling\" entry and libs/moc/license.txt; credited in the About dialog), copied whole by git show at the pinned commit and never edited: D27's recorded exception, as tinyexr and MikkTSpace. Not compiled (MOC_MULTITHREADED 0)"
+    },
+    {
+      "id": "M-MOC-COPY-05",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/libs/moc/MaskedOcclusionCulling.cpp",
+          "lines": [
+            1,
+            529
+          ],
+          "anchor": "whole file",
+          "sha256": "eb0ba71bc5bf2526fb963b02e6e54738d6a12eaac279ccd34b1a8a7a545e84ea",
+          "gitBlob": "6c34af5b46932f7d03973dd85cff53052a888a85"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/moc/MaskedOcclusionCulling.cpp"
+        }
+      ],
+      "note": "LP6.7 (C75, D183, Q44, A59, P8.16): one of the eleven files of the engine-vendored Intel Masked Software Occlusion Culling (Copyright 2017 Intel Corporation, Apache-2.0: LICENSE_EXCEPTIONS.md's \"Intel Masked Software Occlusion Culling\" entry and libs/moc/license.txt; credited in the About dialog), copied whole by git show at the pinned commit and never edited: D27's recorded exception, as tinyexr and MikkTSpace. Compiled without an arch flag on MSVC (it #errors under /arch:AVX and AVX2, :28-33), -msse4.1 off MSVC: the SSE2 and SSE4.1 implementations, the CPUID dispatch (:36-93) and Create (:482-509)"
+    },
+    {
+      "id": "M-MOC-COPY-06",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/libs/moc/MaskedOcclusionCulling.h",
+          "lines": [
+            1,
+            596
+          ],
+          "anchor": "whole file",
+          "sha256": "7f21bdbb43bbd9f633e325327c896305427ab688fdd533f1eb3970a3a3534c87",
+          "gitBlob": "5e7ea995fa2138752fdd579ae45b5add9e56c0a7"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/moc/MaskedOcclusionCulling.h"
+        }
+      ],
+      "note": "LP6.7 (C75, D183, Q44, A59, P8.16): one of the eleven files of the engine-vendored Intel Masked Software Occlusion Culling (Copyright 2017 Intel Corporation, Apache-2.0: LICENSE_EXCEPTIONS.md's \"Intel Masked Software Occlusion Culling\" entry and libs/moc/license.txt; credited in the About dialog), copied whole by git show at the pinned commit and never edited: D27's recorded exception, as tinyexr and MikkTSpace. Compiled: the API, with its defaults QUICK_MASK 1, USE_D3D 1, PRECISE_COVERAGE 1, USE_AVX512 0, CLIPPING_PRESERVES_ORDER 1, ENABLE_STATS 0, MOC_RECORDER_ENABLE 0 (none overridden, as in the engine)"
+    },
+    {
+      "id": "M-MOC-COPY-07",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/libs/moc/MaskedOcclusionCullingAVX2.cpp",
+          "lines": [
+            1,
+            280
+          ],
+          "anchor": "whole file",
+          "sha256": "0479bc3db29e2d429fd97b8c5fe5d8f48912481099558fbb7816af924e996e54",
+          "gitBlob": "de74ac28a883621dedbabc9430308a7d0685e3e0"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/moc/MaskedOcclusionCullingAVX2.cpp"
+        }
+      ],
+      "note": "LP6.7 (C75, D183, Q44, A59, P8.16): one of the eleven files of the engine-vendored Intel Masked Software Occlusion Culling (Copyright 2017 Intel Corporation, Apache-2.0: LICENSE_EXCEPTIONS.md's \"Intel Masked Software Occlusion Culling\" entry and libs/moc/license.txt; credited in the About dialog), copied whole by git show at the pinned commit and never edited: D27's recorded exception, as tinyexr and MikkTSpace. Compiled with /arch:AVX2 (-mavx2 -mfma -msse4.1 off MSVC): the AVX2 implementation"
+    },
+    {
+      "id": "M-MOC-COPY-08",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/libs/moc/MaskedOcclusionCullingAVX512.cpp",
+          "lines": [
+            1,
+            364
+          ],
+          "anchor": "whole file",
+          "sha256": "575597e46a17e9ee52d8386455c7c3b0ca7dfedb96469314b3d1b1d4a10c6aaf",
+          "gitBlob": "3edcf58102da470046645611cc89d2a49f88d822"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/moc/MaskedOcclusionCullingAVX512.cpp"
+        }
+      ],
+      "note": "LP6.7 (C75, D183, Q44, A59, P8.16): one of the eleven files of the engine-vendored Intel Masked Software Occlusion Culling (Copyright 2017 Intel Corporation, Apache-2.0: LICENSE_EXCEPTIONS.md's \"Intel Masked Software Occlusion Culling\" entry and libs/moc/license.txt; credited in the About dialog), copied whole by git show at the pinned commit and never edited: D27's recorded exception, as tinyexr and MikkTSpace. Compiled with /arch:AVX2 (-mavx2 -mfma -msse4.1 off MSVC) as the engine compiles it with USE_AVX512 off: it holds the stub CreateMaskedOcclusionCulling that returns null (:351-364), which Create's dispatch calls (MaskedOcclusionCulling.cpp:504-506)"
+    },
+    {
+      "id": "M-MOC-COPY-09",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/libs/moc/MaskedOcclusionCullingCommon.inl",
+          "lines": [
+            1,
+            2223
+          ],
+          "anchor": "whole file",
+          "sha256": "f5eccc5695e9ecff083730da0a5ecb822654af448cf330eb65a3b1117f0be82f",
+          "gitBlob": "82e25e64adfffc1255ddbed853d30120b80e8cbb"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/moc/MaskedOcclusionCullingCommon.inl"
+        }
+      ],
+      "note": "LP6.7 (C75, D183, Q44, A59, P8.16): one of the eleven files of the engine-vendored Intel Masked Software Occlusion Culling (Copyright 2017 Intel Corporation, Apache-2.0: LICENSE_EXCEPTIONS.md's \"Intel Masked Software Occlusion Culling\" entry and libs/moc/license.txt; credited in the About dialog), copied whole by git show at the pinned commit and never edited: D27's recorded exception, as tinyexr and MikkTSpace. Compiled: included by the three library files (the rasterizer and the tests, once per instruction set)"
+    },
+    {
+      "id": "M-MOC-COPY-10",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/libs/moc/README.md",
+          "lines": [
+            1,
+            450
+          ],
+          "anchor": "whole file",
+          "sha256": "f950daea95944938b195c2477d555255d556d8a214df3d4aede5d00c83ee77e0",
+          "gitBlob": "47bc4dc668bce826c3033ae4f0d5eede5dd17779"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/moc/README.md"
+        }
+      ],
+      "note": "LP6.7 (C75, D183, Q44, A59, P8.16): one of the eleven files of the engine-vendored Intel Masked Software Occlusion Culling (Copyright 2017 Intel Corporation, Apache-2.0: LICENSE_EXCEPTIONS.md's \"Intel Masked Software Occlusion Culling\" entry and libs/moc/license.txt; credited in the About dialog), copied whole by git show at the pinned commit and never edited: D27's recorded exception, as tinyexr and MikkTSpace. Not compiled: Intel's documentation of the library"
+    },
+    {
+      "id": "M-MOC-COPY-11",
+      "kind": "copied-file",
+      "engine": [
+        {
+          "file": "neo/libs/moc/license.txt",
+          "lines": [
+            1,
+            181
+          ],
+          "anchor": "whole file",
+          "sha256": "be3cb07dcb1bb6b191d4fa72910d9ccfcdd7d035d2be92c97a7e84a476406c54",
+          "gitBlob": "e71036ef65967bc780427b94313459f9da2d8981"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/moc/license.txt"
+        }
+      ],
+      "note": "LP6.7 (C75, D183, Q44, A59, P8.16): one of the eleven files of the engine-vendored Intel Masked Software Occlusion Culling (Copyright 2017 Intel Corporation, Apache-2.0: LICENSE_EXCEPTIONS.md's \"Intel Masked Software Occlusion Culling\" entry and libs/moc/license.txt; credited in the About dialog), copied whole by git show at the pinned commit and never edited: D27's recorded exception, as tinyexr and MikkTSpace. Not compiled: the Apache License 2.0's text"
+    },
+    {
+      "id": "M-MOC-BUILD-01",
+      "kind": "build",
+      "engine": [
+        {
+          "file": "neo/CMakeLists.txt",
+          "lines": [
+            457,
+            460
+          ],
+          "anchor": "if(USE_INTRINSICS_SSE) add_subdirectory(libs/moc), MASKED_OCCLUSION_LIBRARY",
+          "sha256": "9f81cd48a8e4acd9d97b339337d25cba63d9bb70d87205983eeaffee28563f53"
+        },
+        {
+          "file": "neo/libs/moc/CMakeLists.txt",
+          "lines": [
+            5,
+            5
+          ],
+          "anchor": "option(USE_AVX512 ... OFF)",
+          "sha256": "d43215c399fc16badc7e54753516c4ded8bd62fc69881701a4003f2ba69f05c7"
+        },
+        {
+          "file": "neo/libs/moc/CMakeLists.txt",
+          "lines": [
+            10,
+            14
+          ],
+          "anchor": "the file lists",
+          "sha256": "168d8725d96e1786f0ca529d190387259af42155d4bd1f569ca5e30b3b15ea32"
+        },
+        {
+          "file": "neo/libs/moc/CMakeLists.txt",
+          "lines": [
+            19,
+            74
+          ],
+          "anchor": "the per-file compile flags, MSVC and GCC / Clang",
+          "sha256": "35e0d33675fcedcbffcb57a97850e2797db2a3c34dff90179b7bc9b7e3290a12"
+        },
+        {
+          "file": "neo/renderer/RenderCommon.h",
+          "lines": [
+            71,
+            71
+          ],
+          "anchor": "#define MOC_MULTITHREADED 0",
+          "sha256": "c3a8e0ad1792ab66cc84451a49e34e9d73794eaddc69f3a112580671489d5e16"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            2472,
+            2486
+          ],
+          "anchor": "the FTZ | DAZ flush, Create() and the two cubes",
+          "sha256": "c2be0aa48f6c7fe47a5259129584792fea9dcc4fa37dc7c36ffa729245dcbd27"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/CMakeLists.txt",
+          "symbol": "TbLitMoc"
+        },
+        {
+          "file": "lib/TbLitLib/CMakeLists.txt",
+          "symbol": "TbLitLib links TbLitMoc PUBLIC (the std-only facade)"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineMaskedOcclusion.h"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineMaskedOcclusion.cpp"
+        }
+      ],
+      "note": "LP6.7 (C75, D183, P8.16, P8.22): TbLitMoc is a static target built like TbLitIdLib (no CompilerConfig, no precompiled std headers, suppress_dependency_warnings, apply_sanitizer_options, C++17 as the engine's CMAKE_CXX_STANDARD, /Z7 in Release) with the engine CMake's per-file flags: MaskedOcclusionCulling.cpp with no arch flag on MSVC (x64's SSE2 baseline; the file #errors under /arch:AVX and AVX2) and -msse4.1 off MSVC; MaskedOcclusionCullingAVX2.cpp and MaskedOcclusionCullingAVX512.cpp with /arch:AVX2 (-mavx2 -mfma -msse4.1 off MSVC), USE_AVX512 left 0 as the engine's option OFF; CullingThreadpool.{h,cpp}, the CMakeLists.txt and the README.md are not compiled (the engine compiles CullingThreadpool.cpp among MOC_SSE_FILES but uses it only with MOC_MULTITHREADED 1). The library is compiled where the engine's USE_INTRINSICS_SSE is on (x86 and x86-64, not an arm64 Apple build: TbLitIdLib's rule); elsewhere the facade alone is built and EngineMaskedOcclusion::create returns null (no cull). The facade (shim/src/EngineMaskedOcclusion.cpp, no arch flag, TB_LIT_MOC defined) wraps Create, Destroy, SetResolution, SetNearClipPlane, ClearBuffer, RenderTriangles, TestTriangles, TestRect and ComputePixelDepthBuffer, transcribes the two cubes (RenderSystem_init.cpp:2125-2236) and gives EngineMocFloatScope: _mm_setcsr( _mm_getcsr() | 0x8040 ) (FTZ | DAZ) and the register given back, where the engine sets the bits once on its main thread (:2473-2474) - the preview's render thread keeps its own MXCSR outside the calls (P8.22). The library allocates its buffer with _aligned_malloc (CompilerSpecific.inl's moc_aligned_alloc), outside the GPU account. Linux and macOS on x86-64: the GCC and Clang flags are the engine's, untested here. On this machine Create() picks AVX2 (tst_MaskedOcclusion)."
+    },
+    {
+      "id": "M-MOC-STATIC-01",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/libs/moc/MaskedOcclusionCulling.cpp",
+          "lines": [
+            344,
+            344
+          ],
+          "anchor": "MaskedOcclusionCullingSSE41::gInstructionSet",
+          "sha256": "efdbba2b9c557b813866922cb8f062782569ef29e362604f32f4a43243b3347e"
+        },
+        {
+          "file": "neo/libs/moc/MaskedOcclusionCulling.cpp",
+          "lines": [
+            454,
+            454
+          ],
+          "anchor": "MaskedOcclusionCullingSSE2::gInstructionSet",
+          "sha256": "97090cbbdb8eb283f3a70c2d2c69dd309b7f857b33f1d86448e438662f247e74"
+        },
+        {
+          "file": "neo/libs/moc/MaskedOcclusionCullingAVX2.cpp",
+          "lines": [
+            244,
+            244
+          ],
+          "anchor": "MaskedOcclusionCullingAVX2::gInstructionSet",
+          "sha256": "afcb1288a6de96b509ae4d304b981b61442b5581f988ea1d8b332e0da745f871"
+        },
+        {
+          "file": "neo/libs/moc/MaskedOcclusionCullingAVX512.cpp",
+          "lines": [
+            328,
+            328
+          ],
+          "anchor": "MaskedOcclusionCullingAVX512::gInstructionSet (compiled out with USE_AVX512 0)",
+          "sha256": "27f7cdcd5528975656aea07b23f477a6a37165fb1a1c117e10af4fb92c975ac7"
+        },
+        {
+          "file": "neo/libs/moc/MaskedOcclusionCulling.cpp",
+          "lines": [
+            439,
+            439
+          ],
+          "anchor": "_mmx_sllv_epi32's maskLUT (SSE2)",
+          "sha256": "50ee953440ef3fca9799a66f5f4b3098ece8a02f46ddc9b5e317127f9c740fed"
+        },
+        {
+          "file": "neo/libs/moc/MaskedOcclusionCullingAVX2.cpp",
+          "lines": [
+            209,
+            209
+          ],
+          "anchor": "SIMD_LANE_MASK",
+          "sha256": "74f1cf69f87dba57c8d6d8107518241793ab9d518197b2950563bff7d7052261"
+        },
+        {
+          "file": "neo/libs/moc/MaskedOcclusionCullingCommon.inl",
+          "lines": [
+            639,
+            664
+          ],
+          "anchor": "vertexOrder",
+          "sha256": "69d09970160516c7e9900d06f6ed2b20200fecaadf348ad9c17a85d47cdd840f"
+        },
+        {
+          "file": "neo/libs/moc/MaskedOcclusionCullingCommon.inl",
+          "lines": [
+            719,
+            720
+          ],
+          "anchor": "SIMD_PAD_W_MASK, SIMD_PAD_H_MASK",
+          "sha256": "9b17212662de96c1d8571402d2066570d78898c37ce1ce3332974887b0b6f0d2"
+        },
+        {
+          "file": "neo/libs/moc/MaskedOcclusionCullingCommon.inl",
+          "lines": [
+            1770,
+            1773
+          ],
+          "anchor": "TestRect's tile pads",
+          "sha256": "5fbbdbe826eed7b2614b5d16d487a88e323c292450129c6f7b3b76d28fcdc92e"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/moc/MaskedOcclusionCulling.cpp"
+        }
+      ],
+      "note": "LP6.7 (C75): the library's statics are read-only: gInstructionSet per instruction set (a constant initialiser, read by GetImplementation), constant tables (maskLUT, SIMD_LANE_MASK, vertexOrder) and function-local SIMD constants made from intrinsics at their first call (guarded local statics, never written after). No mutable global: each MaskedOcclusionCulling object holds its own buffer, and the preview's one object is the render thread's alone (the CPU test's own on its thread). TbLitMoc's objects are not in check_static_init.py's scan (TbLitIdLib, ShaderBlob, SpirvReflect); LP6.7 lists their dynamic initialisers with dumpbin by hand."
+    },
+    {
       "id": "M-TEST-MODEL-01",
       "kind": "function",
       "testOnly": true,

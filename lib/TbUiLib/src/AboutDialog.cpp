@@ -98,7 +98,9 @@ Font Awesome 5 Free (Icons)<br />)");
          "geometry, lights, images)<br />"
          "stb_image, TinyEXR with miniz and OpenEXR, Mesa R11G11B10F (image decoders the "
          "engine vendors)<br />"
-         "cmft (cube map utilities, BSD-2-Clause, in the engine's image code)<br />"));
+         "cmft (cube map utilities, BSD-2-Clause, in the engine's image code)<br />"
+         "Intel Masked Software Occlusion Culling (Apache-2.0, the engine's "
+         "occlusion culling library)<br />"));
 #endif
   creditsText->setWordWrap(true);
   creditsText->setMaximumWidth(300);

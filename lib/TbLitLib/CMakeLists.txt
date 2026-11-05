@@ -140,6 +140,9 @@ target_link_libraries(TbLitLib
   PUBLIC
     TbBaseLib
     TbLitIdLib
+    # LP6.7 (C75): Intel's masked occlusion culling as the engine vendors it, behind its
+    # std-only facade lit/EngineMaskedOcclusion.h (idtech/CMakeLists.txt)
+    TbLitMoc
     nvrhi
     nvrhi_vk
     WrapVulkanHeaders::WrapVulkanHeaders

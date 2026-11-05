@@ -308,3 +308,80 @@ endif()
 
 suppress_dependency_warnings(TbLitIdDxtTestLib)
 apply_sanitizer_options(TbLitIdDxtTestLib)
+
+# LP6.7 (C75, D183, Q44, A59, P8.16): TbLitMoc, Intel's Masked Software Occlusion Culling
+# as the engine vendors it (engine/libs/moc: the eleven files of neo/libs/moc copied whole,
+# never edited; Copyright 2017 Intel Corporation, Apache-2.0, LICENSE_EXCEPTIONS.md's
+# "Intel Masked Software Occlusion Culling" and libs/moc/license.txt). Built like
+# TbLitIdLib (no CompilerConfig, no precompiled std headers, no TrenchBroom warnings, C++17
+# as in the engine) with the engine CMake's per-file flags (neo/libs/moc/CMakeLists.txt):
+# MaskedOcclusionCulling.cpp with no arch flag on MSVC (it #errors under /arch:AVX and
+# /arch:AVX2, :28-33) and -msse4.1 off MSVC; MaskedOcclusionCullingAVX2.cpp and
+# MaskedOcclusionCullingAVX512.cpp with /arch:AVX2 (-mavx2 -mfma -msse4.1 off MSVC): the
+# AVX-512 file holds the stub Create the dispatch calls (:351-364) while USE_AVX512 stays 0,
+# the engine's option(USE_AVX512 ... OFF). Not compiled: CullingThreadpool.{h,cpp} (the
+# engine's MOC_MULTITHREADED 0, RenderCommon.h:71, leaves it unused), the library's
+# CMakeLists.txt and README.md. The library is reached only through the facade
+# lit/EngineMaskedOcclusion.h (shim/src/EngineMaskedOcclusion.cpp, no arch flag). The
+# engine builds it under USE_INTRINSICS_SSE alone (neo/CMakeLists.txt:457-460); on other
+# processors the facade is built without it and creates nothing. Linux and macOS on
+# x86-64: the GCC and Clang flags are the engine's, untested here (this tree builds and
+# tests MSVC only).
+add_library(TbLitMoc STATIC)
+
+set(TB_LIT_MOC_DIR ${TB_LIT_ID_ENGINE_DIR}/libs/moc)
+
+target_sources(TbLitMoc
+  PRIVATE
+    ${TB_LIT_ID_SHIM_DIR}/src/EngineMaskedOcclusion.cpp
+
+  PUBLIC FILE_SET headers TYPE HEADERS
+    BASE_DIRS ${TB_LIT_ID_SHIM_DIR}/include
+    FILES
+      ${TB_LIT_ID_SHIM_DIR}/include/lit/EngineMaskedOcclusion.h
+)
+
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)|(e2k)|(E2K)"
+   AND NOT CMAKE_OSX_ARCHITECTURES MATCHES "arm64")
+  target_sources(TbLitMoc
+    PRIVATE
+      ${TB_LIT_MOC_DIR}/MaskedOcclusionCulling.cpp
+      ${TB_LIT_MOC_DIR}/MaskedOcclusionCullingAVX2.cpp
+      ${TB_LIT_MOC_DIR}/MaskedOcclusionCullingAVX512.cpp
+      ${TB_LIT_MOC_DIR}/MaskedOcclusionCulling.h
+      ${TB_LIT_MOC_DIR}/MaskedOcclusionCullingCommon.inl
+      ${TB_LIT_MOC_DIR}/CompilerSpecific.inl
+  )
+  target_include_directories(TbLitMoc PRIVATE ${TB_LIT_MOC_DIR})
+  set_source_files_properties(
+    ${TB_LIT_ID_SHIM_DIR}/src/EngineMaskedOcclusion.cpp
+    PROPERTIES COMPILE_DEFINITIONS TB_LIT_MOC)
+  if(MSVC)
+    set_source_files_properties(
+      ${TB_LIT_MOC_DIR}/MaskedOcclusionCullingAVX2.cpp
+      ${TB_LIT_MOC_DIR}/MaskedOcclusionCullingAVX512.cpp
+      PROPERTIES COMPILE_OPTIONS /arch:AVX2)
+  else()
+    set_source_files_properties(
+      ${TB_LIT_MOC_DIR}/MaskedOcclusionCulling.cpp
+      PROPERTIES COMPILE_OPTIONS -msse4.1)
+    set_source_files_properties(
+      ${TB_LIT_MOC_DIR}/MaskedOcclusionCullingAVX2.cpp
+      ${TB_LIT_MOC_DIR}/MaskedOcclusionCullingAVX512.cpp
+      PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma;-msse4.1")
+  endif()
+endif()
+
+set_target_properties(TbLitMoc PROPERTIES
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  CXX_EXTENSIONS OFF
+)
+
+if(MSVC)
+  # Release keeps symbols for crash reports, as TbLitIdLib (S18)
+  target_compile_options(TbLitMoc PRIVATE $<$<CONFIG:Release>:/Z7>)
+endif()
+
+suppress_dependency_warnings(TbLitMoc)
+apply_sanitizer_options(TbLitMoc)
