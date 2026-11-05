@@ -15509,7 +15509,7 @@
           "symbol": "engineShadowLod (LP3.0)"
         }
       ],
-      "note": "LP2.2a (D67, K22, P2.26): what the frontend does not do yet. Closed for the LP4 items in LP4.1: the portal rects and the \"area not connected to the view\" cull, mirrored since LP4.0 (lit/ViewFlow.h flowView, M-FLOW-01 to M-FLOW-06), are wired into buildFrontendLists (C33: the scissor is the flow's rect intersected with the projected bounds, M-FRONT-01; the pairing through shared, connected areas, M-FRONT-02, M-FLOW-09), and K22's missing half is there. What remains: r_useMaskedOcclusionCulling's light and surface tests (lights and surfaces it would cull are drawn; their pixels fail DEPTHFUNC_EQUAL), and material LODs remain. LP3.0 (SC760): the engine range runs on to :469, the shadow LOD its anchor names, which is mirrored since LP3.0 (engineShadowLod on the light scissor's projected box, M-SHADOW-01; computed for every casting light, never after a MOC cull, which the preview does not make: K51). The static interactions' light triangles, which P2.26 counted here (\"its triangles outside the volume add nothing\"), are mirrored since the LP2 fix round (DX.2, M-INTER-01): LP2.3 found the volume boundary's LIGHT_CLIP_EPSILON dropping whole faces the preview lit. U3.9 corrected (SC371, LP4.0): a light whose scissor comes out empty is skipped (LitFrontend.cpp), and so it is in the engine: R_AddSingleModel takes no contacted light whose scissor is empty (tr_frontend_addmodels.cpp:362-367), so it gets no interaction and the backend never draws it; the skip is the engine's, not a difference, and LP4.1's portal rects are what can make it empty; LP3.0 (D148): such a light, and one left without a surface, still enters the light sort with its shrunk area (M-SHADOW-ORDER-01), and is skipped after it"
+      "note": "LP2.2a (D67, K22, P2.26): what the frontend does not do yet. Closed for the LP4 items in LP4.1: the portal rects and the \"area not connected to the view\" cull, mirrored since LP4.0 (lit/ViewFlow.h flowView, M-FLOW-01 to M-FLOW-06), are wired into buildFrontendLists (C33: the scissor is the flow's rect intersected with the projected bounds, M-FRONT-01; the pairing through shared, connected areas, M-FRONT-02, M-FLOW-09), and K22's missing half is there. What remains: r_useMaskedOcclusionCulling's light and surface tests (lights and surfaces it would cull are drawn; their pixels fail DEPTHFUNC_EQUAL), and material LODs remain. LP3.0 (SC760): the engine range runs on to :469, the shadow LOD its anchor names, which is mirrored since LP3.0 (engineShadowLod on the light scissor's projected box, M-SHADOW-01; computed for every casting light, never after a MOC cull, which the preview does not make: K51). The static interactions' light triangles, which P2.26 counted here (\"its triangles outside the volume add nothing\"), are mirrored since the LP2 fix round (DX.2, M-INTER-01): LP2.3 found the volume boundary's LIGHT_CLIP_EPSILON dropping whole faces the preview lit. U3.9 corrected (SC371, LP4.0): a light whose scissor comes out empty is skipped (LitFrontend.cpp), and so it is in the engine: R_AddSingleModel takes no contacted light whose scissor is empty (tr_frontend_addmodels.cpp:362-367), so it gets no interaction and the backend never draws it; the skip is the engine's, not a difference, and LP4.1's portal rects are what can make it empty; LP3.0 (D148): such a light, and one left without a surface, still enters the light sort with its shrunk area (M-SHADOW-ORDER-01), and is skipped after it LP6.7 (C75): r_useMaskedOcclusionCulling's light and surface tests are mirrored now (M-MOC-DIFF-01), on by default in sessions; the remaining item is material LODs."
     },
     {
       "id": "M-FRONT-DIFF-03",
@@ -25088,6 +25088,156 @@
       "note": "LP6.7 (C75): the library's statics are read-only: gInstructionSet per instruction set (a constant initialiser, read by GetImplementation), constant tables (maskLUT, SIMD_LANE_MASK, vertexOrder) and function-local SIMD constants made from intrinsics at their first call (guarded local statics, never written after). No mutable global: each MaskedOcclusionCulling object holds its own buffer, and the preview's one object is the render thread's alone (the CPU test's own on its thread). TbLitMoc's objects are not in check_static_init.py's scan (TbLitIdLib, ShaderBlob, SpirvReflect); LP6.7 lists their dynamic initialisers with dumpbin by hand."
     },
     {
+      "id": "M-MOC-DIFF-01",
+      "kind": "difference",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_main.cpp",
+          "lines": [
+            934,
+            934
+          ],
+          "anchor": "R_RenderView: the fill after FindViewLightsAndEntities",
+          "sha256": "af1074934084ec29d5a45c6cb7fc74e33231990ae36ebdc0049a7e80b481a6ad"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_masked_occlusion_culling.cpp",
+          "lines": [
+            534,
+            621
+          ],
+          "anchor": "R_FillMaskedOcclusionBufferWithModels",
+          "sha256": "a3c629ac50d172289c638717f2782f5f4e04a676481b5e623a4fef6d8f28f20c"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_masked_occlusion_culling.cpp",
+          "lines": [
+            356,
+            381
+          ],
+          "anchor": "R_RenderSingleModel: the occluder rule and RenderTriangles",
+          "sha256": "2930ba467def41ed799d176e8333ca85c954ecf50dfdab0c01342e3d0cd1cfd0"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            286,
+            388
+          ],
+          "anchor": "R_AddSingleLight: viewInsideLight and the light test",
+          "sha256": "f8381703861006fe0051fb74b0b7dfdb0b77df469aa827c7e55400c458dc0244"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            660,
+            727
+          ],
+          "anchor": "R_AddSingleModel: viewInsideSurface and the surface test",
+          "sha256": "3ebd99595e0db123b183bf1b1490f8b40b5b3c0c604369220486e1892ff50ae9"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            2472,
+            2486
+          ],
+          "anchor": "the FTZ | DAZ flush, Create() and the two cubes",
+          "sha256": "c2be0aa48f6c7fe47a5259129584792fea9dcc4fa37dc7c36ffa729245dcbd27"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            1964,
+            1976
+          ],
+          "anchor": "Destroy",
+          "sha256": "70cd483aa0c5031d911c679015359043c7df21792a8340b61fb106f73fc8c941"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/MaskedOcclusion.cpp",
+          "symbol": "MaskedOcclusion::cullSurfaces (the fill and the surface tests), lightVisible (the light test)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "buildFrontendLists (the occluder rule engineMocOccluder, the light test before the shadow LOD)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "rebuildLists (FrontendInputs::occlusion, ListsKey::maskedOcclusion), recordFrame (the stats)"
+        },
+        {
+          "file": "lib/TbLitLib/src/RenderThread.cpp",
+          "symbol": "the overrides' maskedOcclusion, the frame log's three columns, SessionStatus"
+        }
+      ],
+      "note": "LP6.7 (C75, D183, Q44, Q45, A59; P8.15, P8.22; K51 restated, K15 closed, K58): the engine fills one masked occlusion buffer per view after the portal flow (FMAIN:934) with the visible view entities' static world area models (dmap's _areaN surfaces, every opaque drawn or occluder surface directly visible, in R_SortViewEntities' order) and IsOccluder models, then tests each light whose volume does not contain the view in R_AddSingleLight, before its shadow LOD (a hidden light leaves viewLights), and every surface of every view entity in R_AddSingleModel (the world's included, the !IsStaticWorldModel exclusion commented out; a hidden surface draws nothing and casts by FAL's rules). The preview does the same once per lists build, on the render thread, serially (the engine's MOC_MULTITHREADED 0 on both), inside the build (cpu_record_ms): the buffer at ⌊w / 2⌋ rounded up to x 8 by ⌊h / 2⌋ rounded up to x 4, the near plane r_znear (cramZNear never), cleared; its occluders are the editor's world chunks (worldspawn's, the adopted islands' and the dress surfaces') the flow left directly visible, or every world chunk in the frustum without a tree (D94: the no-.proc cull, SinkBroom's own, K58), of an opaque drawn material (IsDrawn and MC_OPAQUE) or SURF_OCCLUSION; never an entity's chunk or a model instance (an IsOccluder brush entity is one in the engine and none here). They are other triangles than the .proc's (K28), K14's outside set and faces dmap removes, per 1024-unit cell and material rather than per area and material, so the buffer and its decisions are the preview's own: a borderline light can be culled on one side only, and the other lights' atlas packing then differs (K4's clause stands, K51 restated). The recorded order (P8.15): the occluders' 256-unit sub-cell runs (Chunk::ranges) front to back by the squared distance from the view origin to their bounds, ties in ChunkKey order then run order; the library's QUICK_MASK merge keeps a working layer's farthest depth, so an order with far geometry first leaks (libs/moc/README.md, \"render order\"), which the preview's per-cell chunks without a tree would otherwise do. The occluders' 32-bit index copies (RenderTriangles takes unsigned int; the chunks hold uint16) are made at a chunk's first fill and kept in MaskedOcclusion beside it, by its address, kept across chunk versions while its indexes are unchanged and dropped when a fill of a new version no longer meets it (the engine's tri->mocIndexes, made by R_CreateMaskedOcclusionCullingTris); the vertices are the chunk's own idDrawVerts, VertexLayout( 32, 4, 8 ) for the engine's mocVerts' ( 16, 4, 8 ). The tests take the lists' unjittered MVPs (the TAA jitter is applied at parm time only, LP6.6), the light's box with the 3 x 3 part scaled by 0.99 as the engine has it (M-MOC-DEFECT-01), a spot's TestRect of its scissor with wmin / ( 1 - zmin ) in the engine's float and double steps. FTZ | DAZ is set around the calls and the MXCSR given back (EngineMocFloatScope), where the engine sets it once on its main thread at init: the preview's mirrored scissor and LOD arithmetic keeps running without it (P8.22). moc_ms spans the buffer's clear, the fill and every test (and the buffer's creation at the first build), where pc.mocMicroSec spans the fill alone (TMOC:546, 617-619). The switch: SessionOptions::maskedOcclusionForTesting and the overrides' fourth field maskedOcclusion, on by default as r_useMaskedOcclusionCulling 1, in ListsKey (a change builds the lists again); parity pins the engine's 0 (M-PARITY-04, Q45: no second engine run) and the [parity] cases run with it off, so parity never shows the cull; the GPU cases of LP6.7 do."
+    },
+    {
+      "id": "M-MOC-DEFECT-01",
+      "kind": "known-defect",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            296,
+            317
+          ],
+          "anchor": "the scaled inverse light projection, \"1 percentage bigger\"",
+          "sha256": "97f3a8771431278148179e5ace799dc18d2062f8ce887dbf511e120342c20f49"
+        },
+        {
+          "file": "neo/idlib/geometry/RenderMatrix.h",
+          "lines": [
+            358,
+            366
+          ],
+          "anchor": "idRenderMatrix::TransformPoint( idVec4 )",
+          "sha256": "d39ff75c8baa26558aa7eb80eacbac716967c2e8aa06c4d6b5b9c7eecafee1e9"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/MaskedOcclusion.cpp",
+          "symbol": "MaskedOcclusion::lightVisible"
+        }
+      ],
+      "note": "E-LIT-16, kept verbatim (C75): the comment says the light volume is drawn 1 percent bigger to avoid flickering before the camera enters it, but only the 3 x 3 part of inverseBaseLightProject is scaled by 0.99 and its translation column is not, so the tested box is 1 % smaller, shrunk toward the image of the zero-to-one cube's origin: for a point light the box's minimum corner, so its three maximum sides move in by 1 % of its extent and its minimum sides stay. A light whose true box passes an occluder's edge on a maximum side by less than 1 % of its extent is culled; on a minimum side it is kept. The GPU case (LP6.7 (f)) shows it on a 640 x 360 buffer: a box of y extent 180 passing the wall's edge by 1.5 on +y culled (tested box 0.3 short of the edge), by 6 kept, by 1.5 on -y kept."
+    },
+    {
+      "id": "M-MOC-DEFECT-02",
+      "kind": "known-defect",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_masked_occlusion_culling.cpp",
+          "lines": [
+            548,
+            565
+          ],
+          "anchor": "the buffer's size: half res, the width x 8, the height x 4",
+          "sha256": "462dcb44cb46295bbf9f06d9fa5c65cbabe5466147aa76096a3e33d9ca67de93"
+        },
+        {
+          "file": "neo/libs/moc/MaskedOcclusionCullingCommon.inl",
+          "lines": [
+            275,
+            291
+          ],
+          "anchor": "ClearBuffer: zMin[0] -1, beyond infinity",
+          "sha256": "c9b9574a2e6eb95443a8f0418ed3c949305ab1a13f7584f87d9db844cc98fbd7"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/MaskedOcclusion.cpp",
+          "symbol": "MaskedOcclusion::cullSurfaces (the resolution, as the engine's)"
+        }
+      ],
+      "note": "Found in LP6.7, kept (C75: the engine's resolution rule mirrored): the library's tiles are 32 x 8 pixels (subtiles 8 x 4) and the engine's buffer is rounded to a width of 8 and a height of 4 only, so a buffer whose width is not a multiple of 32 or whose height is not one of 8 holds partial tiles whose pixels beyond the view are never covered: their subtiles' reference layer stays ClearBuffer's -1, and a test box whose clipped triangles reach the guard band's pixel there tests VISIBLE whatever is in front of it. At 1080p the engine's and the preview's buffer is 960 x 540 (540 = 67.5 tiles): a light or surface box crossing the bottom edge of the view is never culled; the TbLitLib cases' 160 x 120 gives 80 x 60, partial on the right and the bottom. Shown by a CPU experiment in LP6.7 (a full-screen occluder, boxes crossing each edge): 80 x 60 right and bottom VISIBLE, 96 x 64 and 640 x 360 all OCCLUDED, 960 x 540 bottom VISIBLE. The library's conservative 8 x 4 subtiles also keep a silhouette's far depth across their width (a doorway's), which the fixture's no-.proc case (LP6.7 (d)) avoids by its view."
+    },
+    {
       "id": "M-TEST-MODEL-01",
       "kind": "function",
       "testOnly": true,
@@ -31559,7 +31709,7 @@
           "symbol": "the shadow cvars at the engine's defaults (LP3.0, C58, D159, SC741)"
         }
       ],
-      "note": "LP3.0 step 3 (D159, SC741): the shadow cvars in EngineFrame at the engine's defaults: r_skipShadows 0, r_useShadowAtlas 1, r_shadowMapAtlasSize 8192 (ROM), r_shadowMapFrustumFOV 92, r_shadowMapSingleSide -1, r_shadowMapJitterScale 2.5, r_shadowMapSamples 16, r_shadowMapSplits 3, r_shadowMapSplitWeight 0.9, r_shadowMapLodScale 1.4, r_shadowMapLodBias 0, r_shadowMapPolygonFactor 2, r_vkShadowMapPolygonOffset 1 (parity runs Vulkan; the DX12 0.1 is not the preview's), r_shadowMapOccluderFacing 2, r_shadowMapRegularDepthBiasScale and r_shadowMapSunDepthBiasScale 0.999, r_forceShadowMapsOnAlphaTestedSurfaces 1, r_useShadowSurfaceScissor 1, r_useMaskedOcclusionCulling 1 (the engine's default; the preview has no MOC, K51, and the parity pin to 0 is LP3.2's parity.cfg). One is the preview's behaviour, not the engine's default: shadowMapRandomizeJitter false, the engine's being 1 (:258), because the preview draws the jitter pinned as parity pins it (SC727). r_shadowMapImageSize (:255) is the non-atlas path's (K50) and is not mirrored"
+      "note": "LP3.0 step 3 (D159, SC741): the shadow cvars in EngineFrame at the engine's defaults: r_skipShadows 0, r_useShadowAtlas 1, r_shadowMapAtlasSize 8192 (ROM), r_shadowMapFrustumFOV 92, r_shadowMapSingleSide -1, r_shadowMapJitterScale 2.5, r_shadowMapSamples 16, r_shadowMapSplits 3, r_shadowMapSplitWeight 0.9, r_shadowMapLodScale 1.4, r_shadowMapLodBias 0, r_shadowMapPolygonFactor 2, r_vkShadowMapPolygonOffset 1 (parity runs Vulkan; the DX12 0.1 is not the preview's), r_shadowMapOccluderFacing 2, r_shadowMapRegularDepthBiasScale and r_shadowMapSunDepthBiasScale 0.999, r_forceShadowMapsOnAlphaTestedSurfaces 1, r_useShadowSurfaceScissor 1, r_useMaskedOcclusionCulling 1 (the engine's default; the preview has no MOC, K51, and the parity pin to 0 is LP3.2's parity.cfg). One is the preview's behaviour, not the engine's default: shadowMapRandomizeJitter false, the engine's being 1 (:258), because the preview draws the jitter pinned as parity pins it (SC727). r_shadowMapImageSize (:255) is the non-atlas path's (K50) and is not mirrored LP6.7 (C75): the preview culls by masked occlusion now (M-MOC-DIFF-01): useMaskedOcclusionCulling is the overrides' maskedOcclusion default."
     },
     {
       "id": "M-SHADOW-COPY-03",
@@ -32884,9 +33034,13 @@
         {
           "file": "TOOLS/lit-preview/parity.py",
           "symbol": "SWITCHES: r_useMaskedOcclusionCulling 0 (PRINTED no longer); cmd_selftest's check"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "the [parity] cases' SessionOptions::maskedOcclusionForTesting false (LP6.7)"
         }
       ],
-      "note": "LP3.2 (C63, D159, P3.12, P3.21; K51), test only: parity.cfg sets r_useMaskedOcclusionCulling 0 (a SWITCH, D19's class; it was PRINTED at its default 1): the preview has no masked occlusion culling before LP6, so a light the engine would drop by MOC (the camera outside its volume, the volume occluded) is drawn on both sides and H10's LOD from outside is exact. The proof that the switch changed no earlier row: the 184 older rows' compare identical to the gate's at d0d8d8f11, and their engine shots byte-equal to the previous run's in 182 of 184; A01 (4 pixels at max 1) and A01a (13 pixels) moved with the bake's area-14 probe sh0 in its 8th digit (D95: the bake need not be deterministic), both still exact, MOC never applying there (the camera inside the light). In the product the preview draws such a light (K51) until LP6"
+      "note": "LP3.2 (C63, D159, P3.12, P3.21; K51), test only: parity.cfg sets r_useMaskedOcclusionCulling 0 (a SWITCH, D19's class; it was PRINTED at its default 1): the preview has no masked occlusion culling before LP6, so a light the engine would drop by MOC (the camera outside its volume, the volume occluded) is drawn on both sides and H10's LOD from outside is exact. The proof that the switch changed no earlier row: the 184 older rows' compare identical to the gate's at d0d8d8f11, and their engine shots byte-equal to the previous run's in 182 of 184; A01 (4 pixels at max 1) and A01a (13 pixels) moved with the bake's area-14 probe sh0 in its 8th digit (D95: the bake need not be deterministic), both still exact, MOC never applying there (the camera inside the light). In the product the preview draws such a light (K51) until LP6 LP6.7 (C75, Q45): the preview has the masked occlusion culling now (M-MOC-DIFF-01), and the switch stays: both [parity] cases (the parity rows, the stale bake) run with SessionOptions::maskedOcclusionForTesting false, so the preview side is LP6.6's and the compare is cmpident 0 against the LP6.6 gate's; a second engine run with the cull on is not made (Q45)."
     },
     {
       "id": "M-PARITY-05",

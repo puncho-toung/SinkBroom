@@ -2261,6 +2261,37 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       orbitCopies.add(record.status);
     }
   }
+  // LP6.7 (C75): the masked occlusion culling over the orbit's frames (their statuses):
+  // the lights and surfaces it tested and hid, the lights left visible, its instruction
+  // set
+  struct MocTally
+  {
+    std::size_t frames = 0;
+    std::uint64_t lightsTested = 0;
+    std::uint64_t lightsCulled = 0;
+    std::uint64_t lightsVisible = 0;
+    std::uint64_t surfacesTested = 0;
+    std::uint64_t surfacesCulled = 0;
+    std::string implementation;
+  };
+  auto orbitMoc = MocTally{};
+  for (const auto& record : sampler.frames)
+  {
+    if (record.at > orbitStart && record.at <= lastMove + 40ms)
+    {
+      const auto& st = record.status;
+      ++orbitMoc.frames;
+      orbitMoc.lightsTested += st.lightsMocTested;
+      orbitMoc.lightsCulled += st.lightsMocCulled;
+      orbitMoc.lightsVisible += st.lightsVisible;
+      orbitMoc.surfacesTested += st.surfacesMocTested;
+      orbitMoc.surfacesCulled += st.surfacesMocCulled;
+      if (orbitMoc.implementation.empty())
+      {
+        orbitMoc.implementation = st.mocImplementation;
+      }
+    }
+  }
   REQUIRE(sampler.runUntil([&] { return sampler.quietlySettled(false); }, 60s));
   // §10's settled exact frame: from the last camera move to the first frame after it
   // that is settled and stays so (every frame of the orbit may be settled already);
@@ -3185,6 +3216,142 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     CHECK(frames == 16u);
     CHECK(orbitTaa == 0u);
     CHECK(taaStatus.taaOn);
+  }
+  // LP6.7 (C75, D183): the masked occlusion culling: its instruction set; at the settled
+  // frames the lights and surfaces it hid and their shares of those it tested (the
+  // lights' of the lights tested, the surfaces' of the listed surfaces, each tested);
+  // over the orbit the same, and moc_ms (the fill and every test) at its p95 over the
+  // frames that built their lists (2 ms: over it a reported miss, D183); the moving CPU
+  // record's p95 against the 10 ms row and LP6.6's 10.96 / 10.93 ms, with the draws, the
+  // tiles drawn, the lights drawn and the shadow draws at the moving p95 frames (LP6.6's
+  // the "before": draws 3681 / 3571, tiles 6.4 / 11.2, lights drawn 32.9 / 31.0, shadow
+  // draws 71 / 137); the GPU p95; the settled start view's draws; at each Start's first
+  // lit frame the fill's moc_ms and its counts
+  {
+    auto mocBuilds = std::vector<double>{};
+    for (auto i = orbitBegin; i <= orbitEnd; ++i)
+    {
+      const auto ms = firstRows[i].number(column::MocMs).value_or(0.0);
+      if (ms > 0.0)
+      {
+        mocBuilds.push_back(ms);
+      }
+    }
+    const auto mocMs = distributionOf(mocBuilds);
+    const auto lightsCulled = orbit(column::LightsMocCulled);
+    const auto surfacesCulled = orbit(column::SurfacesMocCulled);
+    auto tail = std::vector<std::size_t>{};
+    for (auto i = orbitBegin; i <= orbitEnd; ++i)
+    {
+      if (firstRows[i].number(column::CpuRecordMs).value_or(0.0) >= cpu.p95)
+      {
+        tail.push_back(i);
+      }
+    }
+    const auto tailMean = [&](const std::size_t c) {
+      auto sum = 0.0;
+      for (const auto i : tail)
+      {
+        sum += firstRows[i].number(c).value_or(0.0);
+      }
+      return tail.empty() ? 0.0 : sum / double(tail.size());
+    };
+    const auto share = [](const double part, const double whole) {
+      return whole > 0.0 ? 100.0 * part / whole : 0.0;
+    };
+    const auto settledText = [&](const StartMeasure& measure) {
+      const auto* record = measure.record(measure.settledFrame);
+      if (!record)
+      {
+        return std::string{"(no record)"};
+      }
+      const auto& st = record->status;
+      return fmt::format(
+        "frame {}: lights {} of {} tested ({:.0f} %; {} visible), surfaces {} of {} "
+        "({:.1f} %), moc_ms of its last build {:.3f}",
+        measure.settledFrame,
+        st.lightsMocCulled,
+        st.lightsMocTested,
+        share(double(st.lightsMocCulled), double(st.lightsMocTested)),
+        st.lightsVisible,
+        st.surfacesMocCulled,
+        st.surfacesMocTested,
+        share(double(st.surfacesMocCulled), double(st.surfacesMocTested)),
+        st.mocMs);
+    };
+    const auto firstLitText = [&](const StartMeasure& measure) {
+      const auto rows = sessionFrames(log, measure.generation);
+      if (measure.firstLitFrame == 0 || measure.firstLitFrame > rows.size())
+      {
+        return std::string{"(no lit frame)"};
+      }
+      const auto& row = rows[measure.firstLitFrame - 1];
+      return fmt::format(
+        "frame {}: moc_ms {:.3f}, lights {} and surfaces {} culled",
+        measure.firstLitFrame,
+        row.number(column::MocMs).value_or(0.0),
+        row.number(column::LightsMocCulled).value_or(0.0),
+        row.number(column::SurfacesMocCulled).value_or(0.0));
+    };
+    const auto settledDraws = [&] {
+      const auto rows = sessionFrames(log, first.generation);
+      return first.settledFrame > 0 && first.settledFrame <= rows.size()
+               ? rows[first.settledFrame - 1].number(column::Draws).value_or(0.0)
+               : 0.0;
+    }();
+    summary += fmt::format(
+      "| Masked occlusion culling (LP6.7, C75) | Create() picked {}; at the settled "
+      "frames "
+      "{} / {} / {}; over the orbit's {} frames: lights_moc_culled median {:.0f}, p95 "
+      "{:.0f}, max {:.0f} ({} of the {} lights tested, {:.1f} %; the lights visible "
+      "{}), surfaces_moc_culled median {:.0f}, p95 {:.0f}, max {:.0f} ({} of {} tested, "
+      "{:.1f} %); moc_ms over the orbit's {} list builds median {:.3f}, p95 {:.3f}, max "
+      "{:.3f} ms (≤ 2 ms: {}); the moving CPU record p95 {:.2f} ms (≤ 10 ms: {}; LP6.6 "
+      "10.96 / 10.93 ms), at the {} frames at or above it draws {:.0f}, tiles drawn "
+      "{:.1f}, lights drawn {:.1f}, shadow draws {:.0f} (LP6.6: draws 3681 / 3571, tiles "
+      "6.4 / 11.2, lights drawn 32.9 / 31.0, shadow draws 71 / 137), lists_ms {:.2f}; "
+      "the GPU p95 {:.2f} ms; the settled start view's draws {:.0f}; the first lit "
+      "frames {} / {} / {} | moc_ms p95 ≤ 2 ms (D183) | {} |\n",
+      orbitMoc.implementation.empty() ? std::string{"(none)"} : orbitMoc.implementation,
+      settledText(first),
+      settledText(second),
+      settledText(third),
+      orbitMoc.frames,
+      lightsCulled.median,
+      lightsCulled.p95,
+      lightsCulled.max,
+      orbitMoc.lightsCulled,
+      orbitMoc.lightsTested,
+      share(double(orbitMoc.lightsCulled), double(orbitMoc.lightsTested)),
+      orbitMoc.lightsVisible,
+      surfacesCulled.median,
+      surfacesCulled.p95,
+      surfacesCulled.max,
+      orbitMoc.surfacesCulled,
+      orbitMoc.surfacesTested,
+      share(double(orbitMoc.surfacesCulled), double(orbitMoc.surfacesTested)),
+      mocMs.count,
+      mocMs.median,
+      mocMs.p95,
+      mocMs.max,
+      pass(mocMs.p95 <= 2.0),
+      cpu.p95,
+      pass(cpu.p95 <= 10.0),
+      tail.size(),
+      tailMean(column::Draws),
+      tailMean(column::TilesDrawn),
+      tailMean(column::LightsDrawn),
+      tailMean(column::ShadowDraws),
+      tailMean(column::ListsMs),
+      gpu.p95,
+      settledDraws,
+      firstLitText(first),
+      firstLitText(second),
+      firstLitText(third),
+      pass(mocMs.p95 <= 2.0));
+    // the measure's sessions run with the culling on (the host's default)
+    CHECK_FALSE(orbitMoc.implementation.empty());
+    CHECK(mocMs.count > 0u);
   }
   summary += fmt::format(
     "| Device memory allocations | peak {} / {} / {} (first, second, third Start); "
