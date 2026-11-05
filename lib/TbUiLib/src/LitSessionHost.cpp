@@ -392,6 +392,9 @@ void LitSessionHost::setOverrides(const lit::EngineFrameOverrides& overrides)
   m_options.ssaoForTesting = overrides.ssao;
   m_options.progressiveAaForTesting = overrides.progressiveAa;
   m_options.forceAmbientForTesting = overrides.forceAmbient;
+  // LP6.7 (C75, the director's reading (4)): the masked occlusion culling, on by default
+  // (the overrides' fourth field: no panel control yet)
+  m_options.maskedOcclusionForTesting = overrides.maskedOcclusion;
   if (drawing())
   {
     // R5.17, D53: stamped with this host's generation

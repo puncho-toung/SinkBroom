@@ -1855,8 +1855,9 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     // (C66, D169) the caster sets made and the tiles drawn again for an image, 115;
     // LP6.4a (C68 (a)): the texture heaps, their bytes and the dedicated slot textures,
     // 118; LP6.4b (C68 (b)-(d)): the evictions, the floored slots, the in-place feeds and
-    // the arena bytes moved, 122; LP6.6 (C73): the TAA history, 123
-    REQUIRE(rows[0].size() == 123u);
+    // the arena bytes moved, 122; LP6.6 (C73): the TAA history, 123; LP6.7 (C75): the
+    // masked occlusion culling's lights and surfaces culled and its time, 126
+    REQUIRE(rows[0].size() == 126u);
     CHECK(rows[0][70] == "shadow_draws");
     CHECK(rows[0][84] == "sm_draws_local");
     CHECK(rows[0][93] == "light_triangle_entries");
@@ -1893,7 +1894,7 @@ TEST_CASE("LitPreviewPanel on a GPU", "[.][litgpu]")
     auto presentMs = std::vector<double>{};
     for (std::size_t i = 1; i < rows.size(); ++i)
     {
-      REQUIRE(rows[i].size() == 123u);
+      REQUIRE(rows[i].size() == 126u);
       sessions.insert(rows[i][0]);
       if (rows[i][1] == "start")
       {

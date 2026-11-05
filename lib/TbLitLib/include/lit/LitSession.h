@@ -59,13 +59,17 @@ namespace tb::lit
  * AMBIENT_COLOR's rgb, a float 0-1: the panel's slider in steps of 0.05). The defaults
  * are the engine's (D21, Q25: on, on, 0.5; RenderThread.cpp asserts them against
  * EngineFrame). SessionOptions' three ForTesting fields are a session's first copy
- * (sessionOverrides), LitSession:: setOverrides a live change.
+ * (sessionOverrides), LitSession:: setOverrides a live change. LP6.7 (C75, D183, the
+ * director's reading (4)): a fourth, Masked occlusion (r_useMaskedOcclusionCulling 1),
+ * the engine's default on; its panel control is not LP6.7's (the field, the stamp and
+ * the live path only).
  */
 struct EngineFrameOverrides
 {
   bool ssao = true;
   bool progressiveAa = true;
   float forceAmbient = 0.5f;
+  bool maskedOcclusion = true;
 
   bool operator==(const EngineFrameOverrides&) const = default;
 };
@@ -108,6 +112,12 @@ struct SessionOptions
   // LP6.6 (C74, Q25): r_forceAmbient, AMBIENT_COLOR's rgb in the ambient pass (0.5, the
   // engine's default and the parity rows'); the panel's slider sets it for sessions
   float forceAmbientForTesting = 0.5f;
+  // LP6.7 (C75, D183, Q45): r_useMaskedOcclusionCulling 1, the engine's default: the
+  // lists cull lights and surfaces against the masked occlusion buffer of the static
+  // world (on here, in sessions and in the measure); off in the parity case (the SWITCH
+  // pins the engine's 0) and in the GPU cases before LP6.7, whose pictures and counts
+  // stand
+  bool maskedOcclusionForTesting = true;
 };
 
 // LP6.6 (C74): a session's first overrides, its options' three switches
@@ -239,6 +249,18 @@ struct SessionStatus
   std::uint64_t arenaMovedBytes = 0;
   // LP6.4a: the slots' texture heaps
   TextureHeapStatus heaps;
+  // LP6.7 (C75, C65): the masked occlusion culling behind the frame's lists: the lights
+  // and the surfaces the buffer hid, the fill's and the tests' time of the last build
+  // (0 when the frame kept its lists), and the buffer's instruction set ("" before it is
+  // made, and with the switch off)
+  std::size_t lightsMocCulled = 0;
+  std::size_t surfacesMocCulled = 0;
+  double mocMs = 0.0;
+  std::string mocImplementation;
+  // and the lights tested (their volume does not contain the view) and the surfaces
+  // tested in the frame's lists (the measurement's shares)
+  std::size_t lightsMocTested = 0;
+  std::size_t surfacesMocTested = 0;
   // LP4.1 (D90's first half, C32): the view's portal flow: the view's area (-1 outside
   // the world), the areas flowed, the tree's area count (0 without a tree: no flow) and
   // the view lights that went on to the pairing

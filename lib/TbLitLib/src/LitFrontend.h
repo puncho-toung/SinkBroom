@@ -54,6 +54,7 @@ namespace tb::lit
 struct AreaData;
 class CasterSets;
 struct GridTable;
+class MaskedOcclusion;
 struct PortalFogTable;
 struct ProcTree;
 
@@ -280,6 +281,28 @@ struct FrontendLists
   double casterMs = 0.0;
   // LP6.2 (C66): the caster sets made in this build (kept ones are not)
   std::size_t casterSetsBuilt = 0;
+
+  // ----- LP6.7 (C75, D183): the masked occlusion culling of this build -----
+
+  // the buffer was filled (FrontendInputs::occlusion and the library)
+  bool mocActive = false;
+  // the occluders rasterized and their triangles, the surfaces tested and those the
+  // buffer hid (left out of drawSurfs and the interactions), the lights tested (their
+  // volume does not contain the view) and those it hid (left out of viewLights before
+  // the shadow LOD), by preview id in the light loop's order
+  std::size_t mocOccluders = 0;
+  std::size_t mocOccluderTriangles = 0;
+  // the occluders' sub-cell runs rasterized (front to back), those wholly culled
+  std::size_t mocOccluderRuns = 0;
+  std::size_t mocOccluderRunsViewCulled = 0;
+  std::size_t mocSurfaceTests = 0;
+  std::size_t surfacesMocCulled = 0;
+  std::size_t lightsMocCulled = 0;
+  std::vector<PreviewId> mocTestedLights;
+  std::vector<PreviewId> mocCulledLights;
+  // the fill's and every test's time in this build (steady clock), in milliseconds:
+  // inside surfacesMs (the fill and the surface tests) and lightsMs (the light tests)
+  double mocMs = 0.0;
 };
 
 /**
@@ -350,7 +373,18 @@ struct FrontendInputs
   // LP6.2 (D52): the registers of a kept set's Perforated casters stay the consumer's for
   // this build (RegisterCache::keep: one lookup each, no evaluation)
   std::function<void(PreviewId, const MaterialEntry&)> keepRegisters;
+  // LP6.7 (C75, D183): r_useMaskedOcclusionCulling 1's buffer (LitPasses', on the render
+  // thread); null: no masked occlusion culling (the switch off, the parity case)
+  MaskedOcclusion* occlusion = nullptr;
 };
+
+/**
+ * LP6.7 (C75): the material half of R_RenderSingleModel's occluder rule
+ * (tr_frontend_masked_occlusion_culling.cpp:356-358): IsDrawn() and MC_OPAQUE (no
+ * depth hack in the preview), or IsOccluder() (SURF_OCCLUSION). Perforated, translucent
+ * and MC_BAD materials are not. Pure.
+ */
+bool engineMocOccluder(const MaterialEntry& material);
 
 /**
  * R_LightUsesMathPath (RenderCommon.h:1592-1600): math_enabled and r_mathLightsEnabled 1.

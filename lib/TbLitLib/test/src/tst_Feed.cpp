@@ -306,6 +306,8 @@ struct Host
               | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
 
     auto sessionOptions = SessionOptions{};
+    // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+    sessionOptions.maskedOcclusionForTesting = false;
     sessionOptions.validation = options.validation;
     sessionOptions.gamePath = gamePath;
     sessionOptions.frameLogPath = options.frameLogPath;
@@ -2265,6 +2267,8 @@ Result<LdrImage> feedExampleRecords(
 
   // 3. the session: headless (a null surface), the blobs from the game path
   auto sessionOptions = SessionOptions{};
+  // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+  sessionOptions.maskedOcclusionForTesting = false;
   sessionOptions.gamePath = gamePath;
   const auto generation = std::uint64_t{1};
   auto session = LitSession::create(
@@ -2389,6 +2393,8 @@ lp5/feed_sphere
   serviceOptions.listener = feed::GuardedListener::listener(listener);
   auto service = MaterialService::create(std::move(serviceOptions)) | kdl::value();
   auto sessionOptions = SessionOptions{};
+  // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+  sessionOptions.maskedOcclusionForTesting = false;
   sessionOptions.gamePath = gamePath;
   auto session = LitSession::create(
                    instance.handles(),

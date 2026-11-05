@@ -32,6 +32,7 @@
 
 #include "CasterSets.h"
 #include "LitStages.h"
+#include "MaskedOcclusion.h"
 #include "ShadowCache.h"
 #include "ViewFlow.h"
 #include "lit/AreaData.h"
@@ -74,6 +75,12 @@ double millisecondsOf(const std::chrono::steady_clock::duration span)
 }
 
 } // namespace
+
+bool engineMocOccluder(const MaterialEntry& material)
+{
+  return (engineMaterialIsDrawn(material) && material.coverage == em::CoverageOpaque)
+         || (material.surfaceFlags & em::SurfOcclusion) != 0;
+}
 
 bool engineLightUsesMathPath(const RenderLightParms& light)
 {
@@ -763,6 +770,62 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
     }
   }
 
+  // LP6.7 (C75, D183, P8.15, P8.22, the director's readings (1)-(3), (6)): the masked
+  // occlusion buffer filled after the flow, before the lights (tr_frontend_main.cpp:934),
+  // on this (the render) thread: R_RenderSingleModel's occluders (TMOC:356-381) are the
+  // static world's directly visible surfaces - the world chunks (worldspawn's, the
+  // adopted islands' and the dress surfaces' among them) the flow left visible, or every
+  // world chunk in the frustum without a tree (D94, K58) - of an opaque drawn (or
+  // occluder) material, never an entity's chunk or a model instance; rasterized in the
+  // recorded order (P8.15): their sub-cell runs front to back from the view origin, ties
+  // in the visible surfaces' order (the chunks by ChunkKey: area, entity, material, cell,
+  // part, an adopted island's parts after the editor's of its key) then the runs' (Masked
+  // Occlusion::cullSurfaces). Then R_AddSingleModel's test of every listed surface, the
+  // world's included (FAM:660-727): a hidden surface leaves the lists (no draw, no
+  // interaction); its shadow is the caster sets', on screen or off (FAL's rules)
+  if (inputs.occlusion)
+  {
+    auto occluder = std::vector<char>(visible.size(), 0);
+    for (std::size_t i = 0; i < visible.size(); ++i)
+    {
+      const auto& surface = visible[i];
+      occluder[i] = !surface.instance && !stateOf(surface.chunk->key.entity)
+                    && surface.material && engineMocOccluder(*surface.material);
+    }
+    auto culled = std::vector<char>{};
+    if (
+      const auto cull = inputs.occlusion->cullSurfaces(
+        view, inputs.chunksVersion, visible, lists.spaces, occluder, culled))
+    {
+      lists.mocActive = true;
+      lists.mocOccluders = cull->occluders;
+      lists.mocOccluderTriangles = cull->occluderTriangles;
+      lists.mocOccluderRuns = cull->runs;
+      lists.mocOccluderRunsViewCulled = cull->runsViewCulled;
+      lists.mocSurfaceTests = cull->tests;
+      lists.surfacesMocCulled = cull->culled;
+      lists.mocMs += cull->ms;
+      if (cull->culled > 0)
+      {
+        auto kept = std::size_t{0};
+        for (std::size_t i = 0; i < visible.size(); ++i)
+        {
+          if (!culled[i])
+          {
+            if (kept != i)
+            {
+              visible[kept] = std::move(visible[i]);
+              areaSurfaces[kept] = std::move(areaSurfaces[i]);
+            }
+            ++kept;
+          }
+        }
+        visible.resize(kept);
+        areaSurfaces.resize(kept);
+      }
+    }
+  }
+
   // the prepass list: the drawn surfaces, the leading SS_SUBVIEW ones first
   for (const auto subview : {true, false})
   {
@@ -883,8 +946,34 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
         continue;
       }
       const auto* scissor = &scissorAndBox->scissor;
+      // LP6.7 (C75, D183, the director's reading (6)): R_AddSingleLight's masked
+      // occlusion test (FAL:286-388) of a light whose volume does not contain the view
+      // (the preview has no mirror or subview): a light the buffer hides leaves
+      // viewLights here, before its shadow LOD, so the sort and the atlas's packing run
+      // on the others (removeFromList, :474, :679)
+      if (lists.mocActive)
+      {
+        const auto viewInsideLight = !engineCullPointToMvp(
+          record->derived.projection.baseLightProject, view.viewOrigin, true);
+        if (!viewInsideLight)
+        {
+          lists.mocTestedLights.push_back(record->id);
+          if (!inputs.occlusion->lightVisible(
+                view,
+                record->derived.projection.inverseBaseLightProject,
+                record->light.parms.pointLight || record->light.parms.parallel,
+                *scissor,
+                lists.mocMs))
+          {
+            ++lists.lightsMocCulled;
+            lists.mocCulledLights.push_back(record->id);
+            continue;
+          }
+        }
+      }
       // LP3.0 (C58, D144): the shadow LOD from the projected box, for a light that casts
-      // (tr_frontend_addlights.cpp:391-466; r_useLightScissors 3, no MOC: K51)
+      // (tr_frontend_addlights.cpp:391-466; r_useLightScissors 3; LP6.7: after the masked
+      // occlusion test above)
       viewLight.projected = scissorAndBox->projected;
       if (
         !EngineFrame.skipShadows && !inputs.skipShadows

@@ -79,6 +79,9 @@ constexpr int FlagForceShadows = 1 << 3;
 constexpr int FlagNoSelfShadow = 1 << 4;
 // LP5.3 (C49, D123): MF_NOPORTALFOG (:352), the material keyword noPortalFog
 constexpr int FlagNoPortalFog = 1 << 5;
+// LP6.7 (C75): surfaceFlags_t SURF_OCCLUSION (:441), the material keyword occlusion: an
+// occluder surface (idMaterial::IsOccluder, :691-694)
+constexpr int SurfOcclusion = 1 << 13;
 // texgen_t (:158-169)
 constexpr int TexgenExplicit = 0;
 constexpr int TexgenDiffuseCube = 1;

@@ -288,8 +288,16 @@ struct FrameLogRow
   std::optional<std::uint64_t> arenaMovedBytes;
   // LP6.6 (C73, C65), frame rows: the progressive TAA history's length after the frame
   // (0-16: 0 for a plain frame, 1 the history's first, 16 its settled one and the frames
-  // that keep it); empty in an event row, the last column
+  // that keep it); empty in an event row
   std::optional<std::uint64_t> taaHistory;
+  // LP6.7 (C75, C65), frame rows: the lights and the surfaces the masked occlusion buffer
+  // hid in the frame's lists (kept or built), and the fill's and every test's time when
+  // the lists were built this frame (0 when kept: c_mocCulledLights, c_mocCulledSurfaces
+  // and pc.mocMicroSec, which spans the engine's fill alone); empty in an event row, the
+  // last columns
+  std::optional<std::uint64_t> lightsMocCulled;
+  std::optional<std::uint64_t> surfacesMocCulled;
+  std::optional<double> mocMs;
 };
 
 // the CSV header line, ending in a newline

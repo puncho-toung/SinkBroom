@@ -1192,12 +1192,17 @@ EngineFrameOverrides sessionOverrides(const SessionOptions& options)
   return EngineFrameOverrides{
     options.ssaoForTesting,
     options.progressiveAaForTesting,
-    options.forceAmbientForTesting};
+    options.forceAmbientForTesting,
+    options.maskedOcclusionForTesting};
 }
 
-// LP6.6 (C74): the overrides' defaults are the engine's (D21, Q25)
+// LP6.6 (C74): the overrides' defaults are the engine's (D21, Q25); LP6.7 (C75)
 static_assert(EngineFrameOverrides{}.ssao == EngineFrame.useSsao);
 static_assert(EngineFrameOverrides{}.forceAmbient == EngineFrame.forceAmbient);
+static_assert(
+  EngineFrameOverrides{}.maskedOcclusion == EngineFrame.useMaskedOcclusionCulling);
+static_assert(
+  SessionOptions{}.maskedOcclusionForTesting == EngineFrame.useMaskedOcclusionCulling);
 
 void RenderThread::setDebugView(const DebugView view)
 {
@@ -1933,6 +1938,8 @@ bool RenderThread::recordLitPasses(
   // its overrides', and the ambient pass's AMBIENT_COLOR
   inputs.ssao = m_overrides.ssao;
   inputs.forceAmbient = m_overrides.forceAmbient;
+  // LP6.7 (C75, D183): the masked occlusion switch (the overrides' fourth field)
+  inputs.maskedOcclusion = m_overrides.maskedOcclusion;
   inputs.afterPrepass = [this] { runDebugHook(DebugHook::AfterPrepass); };
   // C38 (LP4.2b): r_skipInteractions 1's stand-in, a test's switch
   m_passes.setSkipInteractionsForTesting(m_skipInteractionsForTesting.load());
@@ -2952,6 +2959,11 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       row.arenaMovedBytes = m_arenas.movedBytes();
       // LP6.6 (C73, C65): the TAA history after the frame
       row.taaHistory = std::uint64_t(m_convergence.taaHistory);
+      // LP6.7 (C75, C65): the lights and surfaces the masked occlusion buffer hid, and
+      // the fill's and tests' time when the lists were built
+      row.lightsMocCulled = litStats.lightsMocCulled;
+      row.surfacesMocCulled = litStats.surfacesMocCulled;
+      row.mocMs = litStats.mocMs;
       m_timers.frameShown(slot, row);
       ++m_framesPresented;
       // LP2.3 (D9): the panel's status line reads the frame's counts
@@ -2966,6 +2978,13 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         // LP6.6 (C74)
         status.overrides = m_overrides;
         status.overridesApplied = m_overridesApplied;
+        // LP6.7 (C75)
+        status.lightsMocCulled = litStats.lightsMocCulled;
+        status.surfacesMocCulled = litStats.surfacesMocCulled;
+        status.mocMs = litStats.mocMs;
+        status.mocImplementation = std::string{litStats.mocImplementation};
+        status.lightsMocTested = litStats.mocLightTests;
+        status.surfacesMocTested = litStats.mocSurfaceTests;
         status.lightsVisible = litStats.lightsVisible;
         status.lightsDrawn = litStats.lightsDrawn;
         status.lightsOverflowed = litStats.lightsOverflowed;

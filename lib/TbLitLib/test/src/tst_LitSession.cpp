@@ -30,6 +30,7 @@
 #include "lit/EngineBuiltins.h"
 #include "lit/EngineGeometry.h"
 #include "lit/EngineImageData.h"
+#include "lit/EngineMaskedOcclusion.h"
 #include "lit/EnginePipelineState.h"
 #include "lit/EngineTables.h"
 #include "lit/EntityState.h"
@@ -380,8 +381,9 @@ using namespace std::chrono_literals;
 // counts (C64), LP6.2's three parts of lists_ms (C65), caster sets made and tiles drawn
 // again for an image (C66, D169), LP6.4a's texture heaps, their bytes and the dedicated
 // slot textures (C68 (a)), LP6.4b's evictions, floored slots, in-place feeds and arena
-// bytes moved (C68 (b)-(d)), LP6.6's TAA history (C73)
-constexpr auto FrameLogFields = std::size_t{123};
+// bytes moved (C68 (b)-(d)), LP6.6's TAA history (C73), LP6.7's masked occlusion
+// culling's lights and surfaces culled and its time (C75)
+constexpr auto FrameLogFields = std::size_t{126};
 
 // LP2.0, T0.2: the validation layer's id of "Vertex attribute at location N not consumed
 // by vertex shader" (mirror.json M-PIPE-DEFECT-01), as this machine's layer names it
@@ -754,6 +756,8 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
         CAPTURE(validation, cycle);
         auto events = Events{};
         auto options = SessionOptions{};
+        // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+        options.maskedOcclusionForTesting = false;
         options.validation = validation;
         options.frameLogPath = cycle == 0 ? logPath : std::filesystem::path{};
 
@@ -871,6 +875,8 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
 
       auto events = Events{};
       auto options = SessionOptions{};
+      // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+      options.maskedOcclusionForTesting = false;
       options.validation = true;
       auto session =
         LitSession::create(
@@ -999,6 +1005,8 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
 
       auto events = Events{};
       auto options = SessionOptions{};
+      // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+      options.maskedOcclusionForTesting = false;
       options.validation = true;
       auto session =
         LitSession::create(
@@ -1120,6 +1128,8 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
 
       auto events = Events{};
       auto options = SessionOptions{};
+      // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+      options.maskedOcclusionForTesting = false;
       options.validation = true;
       auto session = LitSession::create(
                        instance.handles(),
@@ -1445,6 +1455,8 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
 
         auto events = Events{};
         auto options = SessionOptions{};
+        // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+        options.maskedOcclusionForTesting = false;
         options.validation = true;
         options.forceFifo = forceFifo;
         options.frameLogPath = cycle == 0 ? logPath : std::filesystem::path{};
@@ -1654,6 +1666,8 @@ TEST_CASE("LitSession pipelines on a GPU (D71)", "[.][litgpu]")
 
       auto events = Events{};
       auto options = SessionOptions{};
+      // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+      options.maskedOcclusionForTesting = false;
       options.validation = true;
       options.gamePath = gamePath;
       // the section counts the pipelines it asks for (DX.5's are not asked for)
@@ -1841,6 +1855,8 @@ TEST_CASE("LitSession pipelines on a GPU (D71)", "[.][litgpu]")
 
       auto events = Events{};
       auto options = SessionOptions{};
+      // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+      options.maskedOcclusionForTesting = false;
       options.validation = true;
       options.gamePath = gamePath;
       // the test orders the compile thread's jobs (DX.5's are not asked for)
@@ -1944,6 +1960,8 @@ std::unique_ptr<LitSession> gpuSession(
   const std::filesystem::path& frameLogPath = {})
 {
   auto options = SessionOptions{};
+  // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+  options.maskedOcclusionForTesting = false;
   options.validation = true;
   options.gamePath = gamePath;
   options.frameLogPath = frameLogPath;
@@ -2172,6 +2190,8 @@ TEST_CASE("LitSession LP5's programs and layouts on a GPU (LP5.0)", "[.][litgpu3
 
     auto events = Events{};
     auto options = SessionOptions{};
+    // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+    options.maskedOcclusionForTesting = false;
     options.validation = true;
     options.gamePath = gamePath;
     options.requestStartPipelines = false;
@@ -4411,6 +4431,8 @@ std::unique_ptr<LitSession> rootSession(
   const bool shadows = false)
 {
   auto options = SessionOptions{};
+  // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+  options.maskedOcclusionForTesting = false;
   options.validation = true;
   options.gamePath = root;
   options.requestStartPipelines = startPipelines;
@@ -5396,6 +5418,8 @@ std::unique_ptr<LitSession> loggedRootSession(
   const bool shaderPasses = false)
 {
   auto options = SessionOptions{};
+  // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+  options.maskedOcclusionForTesting = false;
   options.validation = true;
   options.gamePath = root;
   options.frameLogPath = frameLogPath;
@@ -6170,6 +6194,8 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
         auto service = rootService(root);
         auto events = Events{};
         auto options = SessionOptions{};
+        // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+        options.maskedOcclusionForTesting = false;
         options.validation = true;
         options.gamePath = root;
         // LP3.1 (C57): r_skipShadows 1: a case about the window's present, whose
@@ -8070,6 +8096,8 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
     auto width = std::uint32_t(record->numberOr("width", 1280.0));
     auto height = std::uint32_t(record->numberOr("height", 720.0));
     auto options = SessionOptions{};
+    // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+    options.maskedOcclusionForTesting = false;
     options.validation = true;
     options.gamePath = root;
     options.frameLogPath = frameLog;
@@ -9175,6 +9203,8 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu2]")
       auto service = rootService(root);
       auto events = Events{};
       auto options = SessionOptions{};
+      // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+      options.maskedOcclusionForTesting = false;
       options.validation = true;
       options.gamePath = root;
       options.frameLogPath = logPath;
@@ -11938,6 +11968,8 @@ TEST_CASE("LitSession math and ambientLight lights on a GPU (LP5.1)", "[.][litgp
     const auto atExit = OpenParkingAtExit{gate};
     auto events = Events{};
     auto options = SessionOptions{};
+    // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+    options.maskedOcclusionForTesting = false;
     options.validation = true;
     options.gamePath = root;
     options.frameLogPath = frameLog;
@@ -16078,6 +16110,8 @@ TEST_CASE("LitSession model entities on a GPU (LP7.2)", "[.][litgpu3]")
     const auto atExit = OpenParkingAtExit{gate};
     auto events = Events{};
     auto options = SessionOptions{};
+    // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+    options.maskedOcclusionForTesting = false;
     options.validation = true;
     options.gamePath = root;
     options.frameLogPath = frameLog;
@@ -19454,6 +19488,8 @@ TEST_CASE("LitSession shadow debug views on the shadows map (LP3.4)", "[.][litgp
     auto service = rootService(root);
     auto events = Events{};
     auto options = SessionOptions{};
+    // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+    options.maskedOcclusionForTesting = false;
     options.validation = true;
     options.gamePath = root;
     auto session = LitSession::create(
@@ -20835,6 +20871,8 @@ std::unique_ptr<LitSession> lp65aSession(
   const bool startPipelines = true)
 {
   auto options = SessionOptions{};
+  // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+  options.maskedOcclusionForTesting = false;
   options.validation = true;
   options.gamePath = root;
   options.frameLogPath = frameLog;
@@ -22522,6 +22560,8 @@ std::unique_ptr<LitSession> taaSession(
   const bool shadows = false)
 {
   auto options = SessionOptions{};
+  // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
+  options.maskedOcclusionForTesting = false;
   options.validation = true;
   options.gamePath = root;
   options.frameLogPath = frameLog;
@@ -23085,7 +23125,8 @@ TEST_CASE("LitSession the progressive TAA on a GPU (LP6.6)", "[.][litgpu4]")
     const auto historyColumn = frameLogColumn(rows, "taa_history");
     const auto taaMsColumn = frameLogColumn(rows, "gpu_taa_ms");
     const auto settledColumn = frameLogColumn(rows, "settled");
-    REQUIRE(historyColumn == FrameLogFields - 1);
+    // the 123rd column (LP6.7: the masked occlusion culling's three after it)
+    REQUIRE(historyColumn == 122u);
     REQUIRE(taaMsColumn < FrameLogFields);
     auto shortSettled = 0;
     auto timedRows = 0;
@@ -23613,7 +23654,8 @@ TEST_CASE("LitSession the overrides' live path on a GPU (LP6.6)", "[.][litgpu4]"
     tallyTaa(*session, tally);
     REQUIRE(inFrame(*session, [](RenderFrameAccess&) {}));
     // a change stamped with another generation is dropped
-    stale = session->setOverrides(EngineFrameOverrides{false, false, 0.0f}, 8);
+    // LP6.7 (C75): every change keeps the masked occlusion culling off, as the options
+    stale = session->setOverrides(EngineFrameOverrides{false, false, 0.0f, false}, 8);
     const auto change = [&](const EngineFrameOverrides& overrides) {
       const auto mark = session->framesPresented();
       changedAt.push_back(FrameClock::now());
@@ -23627,16 +23669,17 @@ TEST_CASE("LitSession the overrides' live path on a GPU (LP6.6)", "[.][litgpu4]"
         false));
       statuses.push_back(session->status());
     };
-    change(EngineFrameOverrides{false, true, 0.5f});
+    change(EngineFrameOverrides{false, true, 0.5f, false});
     noSsao = settledTargets(*session, cornerView, {fr::CurrentRenderHdr});
-    change(EngineFrameOverrides{true, false, 0.5f});
+    change(EngineFrameOverrides{true, false, 0.5f, false});
     noTaa = settledTargets(*session, cornerView, {fr::CurrentRenderHdr});
-    change(EngineFrameOverrides{true, true, 0.0f});
+    change(EngineFrameOverrides{true, true, 0.0f, false});
     dark = settledTargets(*session, cornerView, {fr::CurrentRenderHdr});
     REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
       ambientParms.push_back(access.passes.parms().value(RenderParm::AmbientColor)[0]);
     }));
-    change(EngineFrameOverrides{});
+    // the defaults (LP6.7: the masked occlusion culling still off)
+    change(EngineFrameOverrides{true, true, 0.5f, false});
     again = settledTargets(*session, cornerView, {fr::CurrentRenderHdr, fr::TaaResolved});
     REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
       ambientParms.push_back(access.passes.parms().value(RenderParm::AmbientColor)[0]);
@@ -23667,7 +23710,7 @@ TEST_CASE("LitSession the overrides' live path on a GPU (LP6.6)", "[.][litgpu4]"
   CHECK_FALSE(stale);
   // the options' overrides, then each change applied and counted
   REQUIRE(statuses.size() == 5u);
-  CHECK(statuses[0].overrides == EngineFrameOverrides{true, true, 0.5f});
+  CHECK(statuses[0].overrides == EngineFrameOverrides{true, true, 0.5f, false});
   CHECK(statuses[0].overridesApplied == 0u);
   for (std::size_t i = 1; i < statuses.size(); ++i)
   {
@@ -23732,6 +23775,884 @@ TEST_CASE("LitSession the overrides' live path on a GPU (LP6.6)", "[.][litgpu4]"
     ambientParms[0],
     ambientParms[1],
     again->image(fr::TaaResolved).values == firstResolved.values,
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+}
+
+namespace
+{
+
+/**
+ * LP6.7 (C75): a headless 160 × 120 session with validation over a root, with shadows
+ * (the interactions drawn; or skipped with them, the LP2.2a fixture's lights) and the
+ * masked occlusion culling as asked, the stage pass skipped, SSAO and TAA off, logging
+ * its frames to frameLog when given.
+ */
+std::unique_ptr<LitSession> mocSession(
+  const VulkanInstance& instance,
+  Events& events,
+  MaterialService& service,
+  const std::filesystem::path& root,
+  const bool moc,
+  const bool shadows,
+  const std::filesystem::path& frameLog = {})
+{
+  auto options = SessionOptions{};
+  options.validation = true;
+  options.gamePath = root;
+  options.frameLogPath = frameLog;
+  options.skipShadowsForTesting = !shadows;
+  options.maskedOcclusionForTesting = moc;
+  auto session =
+    LitSession::create(
+      instance.handles(), VK_NULL_HANDLE, 160, 120, options, events.sink(), 7, &service)
+    | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  session->skipShaderPassesForTesting(true);
+  return session;
+}
+
+// the overrides of mocSession's options (SSAO and TAA off, r_forceAmbient 0.5) with the
+// masked occlusion culling as asked: the live switch
+EngineFrameOverrides mocOverrides(const bool moc)
+{
+  return EngineFrameOverrides{false, false, 0.5f, moc};
+}
+
+// switches the culling live and waits for a frame drawn with it
+void switchMoc(LitSession& session, const bool moc)
+{
+  const auto mark = session.framesPresented();
+  REQUIRE(session.setOverrides(mocOverrides(moc), 7));
+  REQUIRE(waitFor(
+    [&] {
+      const auto status = session.status();
+      return status.frames > mark && status.overrides == mocOverrides(moc);
+    },
+    20000ms,
+    false));
+}
+
+/**
+ * LP6.7: one structure for every scene of a session (a snapshot is a delta by preview
+ * id: entities first, then their brushes, in file order, so a scene change keeps the
+ * entity and brush counts and moves or changes them): lp3_point's room (room 1, its
+ * interior x, y -256..256, z 0..256, lp3_point of radius radius, lp3_box, lp3_anchor), a
+ * second room east of room 1's east wall (interior x 272..784) and a partition across
+ * room 1 at x -120..-104 when placed (it hides lp3_box and lp3_anchor from the camera at
+ * -200 0 128; else parked at x -2016..-2000, outside the rooms and behind the cameras);
+ * lp3_far (a casting point light of radius 200) and lp3_farbox (lp3/box) in room 2 when
+ * farIn, else parked at y 5000, outside every light volume and the cameras' frustums.
+ */
+std::string mocRoomsMap(const bool farIn, const bool partition, const int radius)
+{
+  auto map = lp3MapText("lp3_point.map");
+  {
+    const auto from = std::string{"\"light_radius\" \"400 400 400\""};
+    const auto at = map.find(from);
+    REQUIRE(at != std::string::npos);
+    map.replace(at, from.size(), fmt::format("\"light_radius\" \"{0} {0} {0}\"", radius));
+  }
+  auto world = boxBrush(272, -272, -16, 800, 272, 0, "lp3/room")
+               + boxBrush(272, -272, 256, 800, 272, 272, "lp3/room")
+               + boxBrush(784, -272, 0, 800, 272, 256, "lp3/room")
+               + boxBrush(272, 256, 0, 784, 272, 256, "lp3/room")
+               + boxBrush(272, -272, 0, 784, -256, 256, "lp3/room");
+  world += partition ? boxBrush(-120, -256, 0, -104, 256, 256, "lp3/room")
+                     : boxBrush(-2016, -256, 0, -2000, 256, 256, "lp3/room");
+  const auto entity1 = map.find("// entity 1");
+  REQUIRE(entity1 != std::string::npos);
+  map.insert(map.rfind('}', entity1), world);
+  const auto farY = farIn ? 0 : 5000;
+  map += fmt::format(
+    "// entity 4\n{{\n\"classname\" \"light\"\n\"name\" \"lp3_far\"\n\"origin\" \"528 {} "
+    "128\"\n\"light_radius\" \"200 200 200\"\n\"_color\" \"1 1 1\"\n\"noshadows\" "
+    "\"0\"\n}}\n",
+    farY);
+  map += fmt::format(
+    "// entity 5\n{{\n\"classname\" \"func_static\"\n\"name\" \"lp3_farbox\"\n\"model\" "
+    "\"lp3_farbox\"\n\"origin\" \"576 {} 96\"\n",
+    farY);
+  map += boxBrush(560, farY - 16, 80, 592, farY + 16, 112, "lp3/box") + "}\n";
+  return map;
+}
+
+/**
+ * LP6.7 (E-LIT-16): a wall at x 0..16 that ends at y 0 (wallBelow: it holds y -5000..0;
+ * else y 0..5000), z -5000..5000, and two point lights of radius (50, 90, 50), each at
+ * (230, y, 0) with its name: boxes x 180..280 whose y extent is 180, so that their 1 %
+ * shell on y is 1.8 units, 2.9 buffer pixels at the near face seen from (-20, 0, 0) on a
+ * 1280 × 720 target (the buffer 640 × 360, whole 32 × 8 tiles), and the wall's edge on
+ * the buffer's column 320, a subtile's border.
+ */
+std::string mocShellMap(
+  const bool wallBelow, const std::array<std::pair<std::string, float>, 2>& lights)
+{
+  auto map =
+    std::string{"// entity 0\n{\n\"classname\" \"worldspawn\"\n\"mapversion\" \"220\"\n"};
+  map += wallBelow ? boxBrush(0, -5000, -5000, 16, 0, 5000, "lp3/room")
+                   : boxBrush(0, 0, -5000, 16, 5000, 5000, "lp3/room");
+  map += "}\n";
+  auto n = 1;
+  for (const auto& [name, y] : lights)
+  {
+    map += fmt::format(
+      "// entity {}\n{{\n\"classname\" \"light\"\n\"name\" \"{}\"\n\"origin\" \"{} {} "
+      "0\"\n\"light_radius\" \"50 90 50\"\n\"_color\" \"1 1 1\"\n}}\n",
+      n++,
+      name,
+      // a parked light stands behind the camera
+      name == "shell_parked" ? -5000 : 230,
+      y);
+  }
+  return map;
+}
+
+// what the lists of the last build hold of the culling, and the buffer's facts
+struct MocLists
+{
+  bool active = false;
+  std::size_t lightsCulled = 0;
+  std::size_t surfacesCulled = 0;
+  std::size_t occluders = 0;
+  std::size_t occluderTriangles = 0;
+  std::size_t runs = 0;
+  std::size_t runsViewCulled = 0;
+  std::size_t surfaceTests = 0;
+  double ms = 0.0;
+  std::vector<std::string> tested;
+  std::vector<std::string> culled;
+  std::vector<std::string> drawnMaterials;
+  std::string implementation;
+  std::thread::id fillThread;
+  std::size_t indexCopies = 0;
+  // the buffer after the build: its size and its pixels written (depth above 0)
+  unsigned int bufferWidth = 0;
+  unsigned int bufferHeight = 0;
+  std::size_t depthWritten = 0;
+};
+
+MocLists mocListsOf(LitSession& session)
+{
+  auto ids = std::pair<std::vector<PreviewId>, std::vector<PreviewId>>{};
+  auto lists = MocLists{};
+  REQUIRE(inFrame(session, [&](RenderFrameAccess& access) {
+    const auto& l = access.passes.lists();
+    lists.active = l.mocActive;
+    lists.lightsCulled = l.lightsMocCulled;
+    lists.surfacesCulled = l.surfacesMocCulled;
+    lists.occluders = l.mocOccluders;
+    lists.occluderTriangles = l.mocOccluderTriangles;
+    lists.runs = l.mocOccluderRuns;
+    lists.runsViewCulled = l.mocOccluderRunsViewCulled;
+    lists.surfaceTests = l.mocSurfaceTests;
+    lists.ms = l.mocMs;
+    ids = {l.mocTestedLights, l.mocCulledLights};
+    for (const auto& surface : l.drawSurfs)
+    {
+      lists.drawnMaterials.push_back(surface.chunk->key.material);
+    }
+    auto& moc = access.passes.maskedOcclusionForTesting();
+    lists.implementation = std::string{moc.implementationName()};
+    lists.fillThread = moc.lastThread();
+    lists.indexCopies = moc.indexCopies();
+    const auto depth = moc.depthForTesting(lists.bufferWidth, lists.bufferHeight);
+    lists.depthWritten =
+      std::size_t(std::ranges::count_if(depth, [](const float d) { return d > 0.0f; }));
+  }));
+  const auto table = session.lightTable();
+  const auto nameOf = [&](const PreviewId id) {
+    const auto record = table ? table->find(id) : nullptr;
+    return record ? std::string{spawnString(record->spawnArgs, "name")} : std::string{};
+  };
+  for (const auto id : ids.first)
+  {
+    lists.tested.push_back(nameOf(id));
+  }
+  for (const auto id : ids.second)
+  {
+    lists.culled.push_back(nameOf(id));
+  }
+  return lists;
+}
+
+// the light record of a name in the session's table
+std::shared_ptr<const LightRecord> lightNamed(
+  LitSession& session, const std::string& name)
+{
+  auto found = std::shared_ptr<const LightRecord>{};
+  const auto table = session.lightTable();
+  if (!table)
+  {
+    return found;
+  }
+  table->records.forEach(
+    [&](const PreviewId&, const std::shared_ptr<const LightRecord>& record) {
+      if (record && spawnString(record->spawnArgs, "name") == name)
+      {
+        found = record;
+      }
+    });
+  return found;
+}
+
+/**
+ * offers a scene and waits until the render thread took it and the light table holds
+ * its lights (ready on the record of name), so that the settled frame looked for next is
+ * the scene's: an earlier scene's settled frames hold the same camera
+ */
+template <typename Ready>
+void offerMocScene(
+  LitSession& session,
+  std::shared_ptr<const Snapshot> snapshot,
+  const std::string& name,
+  Ready ready)
+{
+  const auto sequence = snapshot->sequence;
+  REQUIRE(session.offerSnapshot(std::move(snapshot)));
+  REQUIRE(waitFor(
+    [&] { return session.snapshotsTakenForTesting() >= sequence; }, 10000ms, false));
+  REQUIRE(waitFor(
+    [&] {
+      const auto record = lightNamed(session, name);
+      return record && ready(*record);
+    },
+    20000ms,
+    false));
+}
+
+/**
+ * LP6.7 (E-LIT-16): a light's tested box (FAL:301-317, the zero-to-one cube through
+ * inverseBaseLightProject with its 3 x 3 part times 0.99) and its true box, in world
+ * space: the corners' bounds
+ */
+std::pair<EngineBounds, EngineBounds> mocLightBoxes(const LightRecord& record)
+{
+  const auto& inverse = record.derived.projection.inverseBaseLightProject;
+  auto scaled = inverse;
+  for (std::size_t r = 0; r < 3; ++r)
+  {
+    for (std::size_t c = 0; c < 3; ++c)
+    {
+      scaled[r * 4 + c] *= 0.99f;
+    }
+  }
+  const auto boxOf = [](const EngineMat4& m) {
+    auto bounds = engineClearedBounds();
+    for (auto i = 0; i < 8; ++i)
+    {
+      const auto p = EngineVec3{float(i & 1), float((i >> 1) & 1), float((i >> 2) & 1)};
+      auto out = std::array<float, 4>{};
+      for (std::size_t r = 0; r < 4; ++r)
+      {
+        out[r] =
+          p[0] * m[r * 4 + 0] + p[1] * m[r * 4 + 1] + p[2] * m[r * 4 + 2] + m[r * 4 + 3];
+      }
+      const auto q = EngineVec3{out[0] / out[3], out[1] / out[3], out[2] / out[3]};
+      bounds = engineAddBounds(bounds, EngineBounds{q, q});
+    }
+    return bounds;
+  };
+  return {boxOf(scaled), boxOf(inverse)};
+}
+
+} // namespace
+
+/**
+ * LP6.7 (C75, D183, E-LIT-16, K51, K58; P8.15, P8.22): the masked occlusion culling on
+ * the synthetic shadow scenes (no .proc: every chunk a candidate, D94) and the LP2.2a
+ * fixture without its .proc: (a) a casting light behind a wall with the camera outside
+ * its volume dropped before the shadow LOD, the atlas packing that of the remaining
+ * light, the picture the scene without it's; (b) the casters behind a partition not
+ * drawn and still casting, the picture unchanged; (c) a light containing the view never
+ * tested, tested and culled once the camera stands behind the wall; (d) the no-.proc
+ * fixture's lights behind its walls; (e) the switch off: every count 0, the lists
+ * LP6.6's; (f) the 0.99 box: a light whose true box passes a wall's edge inside its 1 %
+ * shell culled, past it kept, and the shell on the box's maximum side alone; (g) Stop:
+ * allocations 0, validation 0 / 0, the MXCSR's control bits the same at every frame's
+ * start, the fill on the render thread. Hidden: the blobs live only in the game folder;
+ * it needs a GPU.
+ */
+TEST_CASE("LitSession masked occlusion culling on a GPU (LP6.7)", "[.][litgpu4]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto started = std::chrono::steady_clock::now();
+  const auto gamePath = std::filesystem::path{gamePathValue};
+  const auto roomView = litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1});
+
+  // (g): every frame's start on the render thread: the MXCSR's control bits (the sticky
+  // flags 0-5 apart) the same as at the first frame, and the thread
+  struct FrameWatch
+  {
+    std::mutex mutex;
+    std::optional<std::uint32_t> first;
+    std::size_t frames = 0;
+    std::size_t changed = 0;
+    std::thread::id thread;
+  };
+  constexpr auto ControlBits = ~std::uint32_t{0x3f};
+  const auto watch = std::make_shared<FrameWatch>();
+  const auto watchFrames = [&](LitSession& session) {
+    session.setEveryFrameHookForTesting([watch](RenderFrameAccess&) {
+      const auto control = engineMxcsr() & ControlBits;
+      const auto lock = std::scoped_lock{watch->mutex};
+      if (!watch->first)
+      {
+        watch->first = control;
+      }
+      watch->changed += control != *watch->first ? 1 : 0;
+      ++watch->frames;
+      watch->thread = std::this_thread::get_id();
+    });
+  };
+  const auto checkWatch = [&](const MocLists& lists, const char* what) {
+    const auto lock = std::scoped_lock{watch->mutex};
+    CHECK(watch->frames > 0u);
+    CHECK(watch->changed == 0u);
+    CHECK(lists.active);
+    CHECK(lists.fillThread == watch->thread);
+    std::cout << fmt::format(
+      "LP6.7 (g) {}: {} frames watched, the MXCSR's control bits {:#x} at each, changed "
+      "{}; "
+      "the fill on the frames' thread {}\n",
+      what,
+      watch->frames,
+      watch->first.value_or(0u),
+      watch->changed,
+      lists.fillThread == watch->thread);
+    watch->first.reset();
+    watch->frames = 0;
+    watch->changed = 0;
+  };
+
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+
+  SECTION("(a)-(c), (e), (g): two rooms, the switch, a partition")
+  {
+    const auto root = assembleLp3Root(gamePath);
+    REQUIRE_FALSE(root.empty());
+    const auto logPath =
+      std::filesystem::temp_directory_path() / "TbLitLibTest-lp67-frame-log.csv";
+    std::filesystem::remove(logPath);
+    auto implementation = std::string{};
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = mocSession(instance, events, *service, root, true, true, logPath);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      watchFrames(*session);
+      auto sequence = std::uint64_t{0};
+      const auto snapshotOf = [&](const std::string& text) {
+        return lp3Snapshot(text, root, "lp3_moc.map", ++sequence);
+      };
+      const auto drawLog = [&] {
+        REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+          access.passes.setDrawLogForTesting(true);
+        }));
+      };
+      const auto farAt = [](const float y) {
+        return [y](const LightRecord& record) {
+          return std::abs(record.light.parms.origin[1] - y) < 1.0f;
+        };
+      };
+
+      // ---- (a) the scene without lp3_far (parked away): its picture and tiles ----
+      offerMocScene(
+        *session, snapshotOf(mocRoomsMap(false, false, 400)), "lp3_far", farAt(5000));
+      drawLog();
+      const auto withoutFrame = settledShadowFrame(*session, roomView, 1, true);
+      REQUIRE(withoutFrame);
+      REQUIRE(withoutFrame->records.size() == 1u);
+
+      // ---- (a) lp3_far in room 2, behind room 1's walls: dropped before its LOD ----
+      offerMocScene(
+        *session, snapshotOf(mocRoomsMap(true, false, 400)), "lp3_far", farAt(0));
+      drawLog();
+      const auto culledFrame = settledShadowFrame(*session, roomView, 1, true);
+      REQUIRE(culledFrame);
+      const auto culled = mocListsOf(*session);
+      implementation = culled.implementation;
+      std::cout << fmt::format(
+        "LP6.7 (a): Create() picked {}; the buffer {} x {} ({} pixels written); "
+        "occluders {} "
+        "({} triangles in {} sub-cell runs front to back, {} wholly culled); surfaces "
+        "tested "
+        "{}, culled {}; lights tested [{}], culled [{}]; lights drawn {} [{}], casting "
+        "{}; "
+        "moc_ms {:.3f}\n",
+        culled.implementation,
+        culled.bufferWidth,
+        culled.bufferHeight,
+        culled.depthWritten,
+        culled.occluders,
+        culled.occluderTriangles,
+        culled.runs,
+        culled.runsViewCulled,
+        culled.surfaceTests,
+        culled.surfacesCulled,
+        fmt::join(culled.tested, " "),
+        fmt::join(culled.culled, " "),
+        culledFrame->stats.lightsDrawn,
+        fmt::join(culledFrame->lights, " "),
+        culledFrame->stats.lightsCasting,
+        culled.ms);
+      CHECK(culled.active);
+      CHECK(culled.occluders > 0u);
+      CHECK(culled.bufferWidth == 80u);
+      CHECK(culled.bufferHeight == 60u);
+      CHECK(culledFrame->stats.mocActive);
+      CHECK(culledFrame->stats.mocImplementation == implementation);
+      CHECK(culledFrame->stats.lightsMocCulled == 1u);
+      CHECK(culled.culled == std::vector<std::string>{"lp3_far"});
+      // (c) the camera inside lp3_point's volume: never tested
+      CHECK(culled.tested == std::vector<std::string>{"lp3_far"});
+      CHECK(culledFrame->lights == std::vector<std::string>{"lp3_point"});
+      CHECK(culledFrame->stats.lightsDrawn == 1u);
+      CHECK(culledFrame->stats.lightsCasting == 1u);
+      REQUIRE(culledFrame->records.size() == 1u);
+      const auto& kept = culledFrame->records[0];
+      const auto& alone = withoutFrame->records[0];
+      const auto expected = packedAlone(kept.sides, kept.imageSize[0]);
+      auto packingEqual = kept.imageSize == alone.imageSize;
+      for (std::size_t side = 0; side < std::size_t(kept.sides); ++side)
+      {
+        CAPTURE(side);
+        CHECK(kept.placements[side].placed);
+        CHECK(kept.placements[side].x == expected[side].x);
+        CHECK(kept.placements[side].y == expected[side].y);
+        packingEqual = packingEqual && kept.placements[side].x == expected[side].x
+                       && kept.placements[side].y == expected[side].y
+                       && alone.placements[side].x == kept.placements[side].x
+                       && alone.placements[side].y == kept.placements[side].y;
+      }
+      CHECK(packingEqual);
+      // room 2's surfaces hidden by room 1's: not drawn; room 1's box drawn
+      CHECK(culled.surfacesCulled > 0u);
+      CHECK(culledFrame->stats.surfacesMocCulled == culled.surfacesCulled);
+      CHECK(
+        std::ranges::find(culled.drawnMaterials, "textures/lp3/box")
+        != culled.drawnMaterials.end());
+      // the picture the scene without lp3_far's
+      const auto sameAsWithout = withoutFrame->hdr.rgba == culledFrame->hdr.rgba;
+      CHECK(sameAsWithout);
+      const auto diff = comparePictures(culledFrame->hdr, withoutFrame->hdr);
+      std::cout << fmt::format(
+        "LP6.7 (a): lp3_point's {} sides of {} at the packing of the light alone, as in "
+        "the "
+        "scene without lp3_far: {}; the pictures equal {} ({} pixels equal, {} darker, "
+        "{} "
+        "brighter)\n",
+        kept.sides,
+        kept.imageSize[0],
+        packingEqual,
+        sameAsWithout,
+        diff.equal,
+        diff.darker,
+        diff.brighter);
+      saveHdrPng(culledFrame->hdr, "lp67_a_culled");
+
+      // ---- (e) the switch off: every count 0, both lights drawn and packed ----
+      switchMoc(*session, false);
+      const auto offFrame = settledShadowFrame(*session, roomView, 2, true);
+      REQUIRE(offFrame);
+      const auto off = mocListsOf(*session);
+      CHECK_FALSE(off.active);
+      CHECK(off.lightsCulled == 0u);
+      CHECK(off.surfacesCulled == 0u);
+      CHECK(off.tested.empty());
+      CHECK(off.indexCopies == 0u);
+      CHECK(offFrame->stats.lightsMocCulled == 0u);
+      CHECK(offFrame->stats.surfacesMocCulled == 0u);
+      CHECK(offFrame->stats.mocMs == 0.0);
+      CHECK(offFrame->stats.mocImplementation.empty());
+      CHECK(offFrame->stats.lightsDrawn == 2u);
+      CHECK(offFrame->stats.lightsCasting == 2u);
+      CHECK(offFrame->records.size() == 2u);
+      std::cout << fmt::format(
+        "LP6.7 (e): the switch off: lights drawn {} [{}], casting {}, placed {}, every "
+        "count 0; on: {}\n",
+        offFrame->stats.lightsDrawn,
+        fmt::join(offFrame->lights, " "),
+        offFrame->stats.lightsCasting,
+        offFrame->stats.lightsPlaced,
+        culledFrame->stats.lightsDrawn);
+      switchMoc(*session, true);
+
+      // ---- (c) lp3_point of radius 250 (inside room 1): never tested from inside its
+      // volume; tested and culled from room 2, behind the wall ----
+      offerMocScene(
+        *session,
+        snapshotOf(mocRoomsMap(false, false, 250)),
+        "lp3_point",
+        [](const LightRecord& record) {
+          return record.derived.projection.globalLightBounds[1][0] < 300.0f;
+        });
+      const auto insideFrame = settledShadowFrame(*session, roomView, 1, false);
+      REQUIRE(insideFrame);
+      const auto inside = mocListsOf(*session);
+      CHECK(inside.active);
+      CHECK(inside.tested.empty());
+      CHECK(insideFrame->stats.lightsMocCulled == 0u);
+      const auto outsideView = litCamera({700, 0, 128}, {-1, 0, 0}, {0, 0, 1});
+      const auto outsideFrame = settledShadowFrame(*session, outsideView, 0, false);
+      REQUIRE(outsideFrame);
+      const auto outside = mocListsOf(*session);
+      CHECK(outside.tested == std::vector<std::string>{"lp3_point"});
+      CHECK(outside.culled == std::vector<std::string>{"lp3_point"});
+      CHECK(outsideFrame->stats.lightsMocCulled == 1u);
+      std::cout << fmt::format(
+        "LP6.7 (c): inside lp3_point's volume: lights tested [{}], lights_moc_culled {}; "
+        "in "
+        "room 2 behind the wall: tested [{}], culled [{}], lights_moc_culled {}\n",
+        fmt::join(inside.tested, " "),
+        insideFrame->stats.lightsMocCulled,
+        fmt::join(outside.tested, " "),
+        fmt::join(outside.culled, " "),
+        outsideFrame->stats.lightsMocCulled);
+
+      // ---- (b) the casters behind the partition: not drawn, still casting ----
+      offerMocScene(
+        *session,
+        snapshotOf(mocRoomsMap(false, true, 250)),
+        "lp3_point",
+        [](const LightRecord& record) {
+          return record.derived.projection.globalLightBounds[1][0] < 300.0f;
+        });
+      drawLog();
+      const auto hiddenFrame = settledShadowFrame(*session, roomView, 1, true);
+      REQUIRE(hiddenFrame);
+      const auto hidden = mocListsOf(*session);
+      CHECK(hidden.surfacesCulled > 0u);
+      CHECK(
+        std::ranges::find(hidden.drawnMaterials, "textures/lp3/box")
+        == hidden.drawnMaterials.end());
+      auto boxDraws = std::size_t{0};
+      auto boxShadowDraws = std::size_t{0};
+      for (const auto& draw : hiddenFrame->drawLog)
+      {
+        if (draw.chunk.material == "textures/lp3/box")
+        {
+          (draw.pass == LitDrawRecord::Pass::Shadow ? boxShadowDraws : boxDraws) += 1;
+        }
+      }
+      CHECK(boxDraws == 0u);
+      REQUIRE(hiddenFrame->records.size() == 1u);
+      REQUIRE_FALSE(hiddenFrame->atlas.depth.empty());
+      const auto anchor =
+        EngineBounds{EngineVec3{92, -208, 24}, EngineVec3{108, -192, 40}};
+      const auto nearer =
+        checkTiles(*hiddenFrame, hiddenFrame->records[0], {Lp3Box, anchor}, Lp3Box);
+      auto nearerAll = std::size_t{0};
+      for (const auto n : nearer)
+      {
+        nearerAll += n;
+      }
+      CHECK(nearerAll > 0u);
+      // the picture the same with the culling off (the casters were hidden)
+      switchMoc(*session, false);
+      drawLog();
+      const auto shownFrame = settledShadowFrame(*session, roomView, 1, true);
+      REQUIRE(shownFrame);
+      auto shownBoxDraws = std::size_t{0};
+      for (const auto& draw : shownFrame->drawLog)
+      {
+        shownBoxDraws += draw.chunk.material == "textures/lp3/box"
+                             && draw.pass != LitDrawRecord::Pass::Shadow
+                           ? 1
+                           : 0;
+      }
+      CHECK(shownBoxDraws > 0u);
+      const auto sameHidden = shownFrame->hdr.rgba == hiddenFrame->hdr.rgba;
+      CHECK(sameHidden);
+      switchMoc(*session, true);
+      std::cout << fmt::format(
+        "LP6.7 (b): surfaces culled {} of {} tested (lp3/box drawn {} times, in the "
+        "shadow "
+        "pass {}; {} times with the culling off); lp3_point's atlas texels below 1.0 per "
+        "side {} (the box's footprint below 1.0); the picture equal to the culling off's "
+        "{}\n",
+        hidden.surfacesCulled,
+        hidden.surfaceTests,
+        boxDraws,
+        boxShadowDraws,
+        shownBoxDraws,
+        fmt::join(nearer, " "),
+        sameHidden);
+      saveAtlasPng(hiddenFrame->atlas, "lp67_b_partition");
+
+      const auto last = mocListsOf(*session);
+      session->setEveryFrameHookForTesting({});
+      checkWatch(last, "two rooms");
+      teardown(*session, std::nullopt);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+    // the frame log's three columns: lights_moc_culled 1 on the culled scene's rows,
+    // moc_ms on the rows that built their lists
+    {
+      const auto rows = readCsv(logPath);
+      REQUIRE(rows.size() > 1u);
+      REQUIRE(rows[0].size() == FrameLogFields);
+      const auto culledColumn = frameLogColumn(rows, "lights_moc_culled");
+      const auto surfacesColumn = frameLogColumn(rows, "surfaces_moc_culled");
+      const auto msColumn = frameLogColumn(rows, "moc_ms");
+      CHECK(culledColumn == 123u);
+      CHECK(surfacesColumn == 124u);
+      CHECK(msColumn == 125u);
+      auto withCulled = 0;
+      auto withSurfaces = 0;
+      auto timed = 0;
+      for (std::size_t i = 1; i < rows.size(); ++i)
+      {
+        if (rows[i].size() != FrameLogFields || rows[i][1] != "frame")
+        {
+          continue;
+        }
+        withCulled += rows[i][culledColumn] == "1" ? 1 : 0;
+        withSurfaces += rows[i][surfacesColumn] != "0" ? 1 : 0;
+        timed += !rows[i][msColumn].empty() && std::stod(rows[i][msColumn]) > 0.0 ? 1 : 0;
+      }
+      CHECK(withCulled > 0);
+      CHECK(withSurfaces > 0);
+      CHECK(timed > 0);
+      std::cout << fmt::format(
+        "LP6.7 frame log: {} frame rows with lights_moc_culled 1, {} with surfaces "
+        "culled, "
+        "{} with a moc_ms\n",
+        withCulled,
+        withSurfaces,
+        timed);
+      std::filesystem::remove(logPath);
+    }
+    messages.print("LP6.7 two rooms, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+    CHECK_FALSE(implementation.empty());
+    std::filesystem::remove_all(root);
+  }
+
+  SECTION("(d) the no-.proc fixture: the lights behind its walls dropped")
+  {
+    const auto root = assembleLitRoot(gamePath);
+    REQUIRE_FALSE(root.empty());
+    std::filesystem::remove(root / "base" / "maps" / "lp1b_geometry.proc");
+    // in the west room at y 100: the doorway (y -32..32) on the buffer's right (columns
+    // 54-66), lp1b_small behind the wall's solid part, left of it (the library's 8 x 4
+    // subtiles keep a silhouette's far depth across their width)
+    const auto view = litCamera({-200, 100, 64}, {1, 0, 0}, {0, 0, 1});
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = mocSession(instance, events, *service, root, true, false);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      watchFrames(*session);
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+      const auto on = settledShadowFrame(*session, view, 0, false);
+      REQUIRE(on);
+      const auto onLists = mocListsOf(*session);
+      CHECK(on->stats.areas == 0u);
+      CHECK(on->stats.viewArea == -1);
+      CHECK(onLists.active);
+      CHECK(on->stats.lightsMocCulled >= 1u);
+      CHECK(std::ranges::find(onLists.culled, "lp1b_small") != onLists.culled.end());
+      session->setEveryFrameHookForTesting({});
+      checkWatch(onLists, "no tree");
+      switchMoc(*session, false);
+      const auto off = settledShadowFrame(*session, view, 0, false);
+      REQUIRE(off);
+      const auto offLists = mocListsOf(*session);
+      CHECK(off->stats.lightsMocCulled == 0u);
+      CHECK(offLists.tested.empty());
+      CHECK(on->stats.lightsVisible <= off->stats.lightsVisible);
+      std::cout << fmt::format(
+        "LP6.7 (d): no tree: lights tested [{}], culled [{}] (lights_moc_culled {}); "
+        "surfaces culled {} of {} tested; occluders {} ({} runs); lights visible {} with "
+        "the culling, {} without [{}]\n",
+        fmt::join(onLists.tested, " "),
+        fmt::join(onLists.culled, " "),
+        on->stats.lightsMocCulled,
+        onLists.surfacesCulled,
+        onLists.surfaceTests,
+        onLists.occluders,
+        onLists.runs,
+        on->stats.lightsVisible,
+        off->stats.lightsVisible,
+        fmt::join(off->lights, " "));
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+    messages.print("LP6.7 no tree, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+    std::filesystem::remove_all(root);
+  }
+
+  SECTION("(f) E-LIT-16: the 0.99 box's shell")
+  {
+    const auto root = assembleLp3Root(gamePath);
+    REQUIRE_FALSE(root.empty());
+    // 1280 × 720: the buffer 640 × 360, whole 32 × 8 tiles (at 160 × 120 the buffer's 80
+    // × 60 holds partial tiles, whose cleared reference layer the library's test reads as
+    // visible beside the edge: no box crossing the view's right or bottom edge is culled
+    // there), and the shell's 1.8 units 2.9 pixels at the boxes' near face
+    auto view = litCamera({-20, 0, 0}, {1, 0, 0}, {0, 0, 1});
+    view.viewportWidth = 1280;
+    view.viewportHeight = 720;
+    auto below = MocLists{};
+    auto above = MocLists{};
+    auto boxes = std::map<std::string, std::pair<EngineBounds, EngineBounds>>{};
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = mocSession(instance, events, *service, root, true, false);
+      session->resizeHeadlessForTesting(1280, 720);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      watchFrames(*session);
+      // the wall below y 0: shell_max's box passes its edge by 1.5 (+y), inside its 1.8
+      // shell; shell_out's by 6
+      offerMocScene(
+        *session,
+        lp3Snapshot(
+          mocShellMap(true, {{{"shell_max", -88.5f}, {"shell_out", -84.0f}}}),
+          root,
+          "lp3_shell.map",
+          1),
+        "shell_out",
+        [](const LightRecord&) { return true; });
+      REQUIRE(settledShadowFrame(*session, view, 0, false));
+      below = mocListsOf(*session);
+      for (const auto* name : {"shell_max", "shell_out"})
+      {
+        const auto record = lightNamed(*session, name);
+        REQUIRE(record);
+        boxes[name] = mocLightBoxes(*record);
+      }
+      // the wall above y 0: shell_min's box passes its edge by 1.5 (-y), its unshrunk
+      // side; the second light parked behind the camera
+      offerMocScene(
+        *session,
+        lp3Snapshot(
+          mocShellMap(false, {{{"shell_min", 88.5f}, {"shell_parked", 0.0f}}}),
+          root,
+          "lp3_shell.map",
+          2),
+        "shell_min",
+        [](const LightRecord&) { return true; });
+      REQUIRE(settledShadowFrame(*session, view, 0, false));
+      above = mocListsOf(*session);
+      {
+        const auto record = lightNamed(*session, "shell_min");
+        REQUIRE(record);
+        boxes["shell_min"] = mocLightBoxes(*record);
+      }
+      session->setEveryFrameHookForTesting({});
+      checkWatch(above, "E-LIT-16");
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+    messages.print("LP6.7 E-LIT-16, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+
+    const auto& [maxTested, maxTrue] = boxes.at("shell_max");
+    const auto& [outTested, outTrue] = boxes.at("shell_out");
+    const auto& [minTested, minTrue] = boxes.at("shell_min");
+    // the true boxes pass the edge; the tested box shrinks toward the image of the cube's
+    // origin, the minimum corner: shell_max's +y side 1.8 in, past the edge; shell_min's
+    // -y side unmoved
+    CHECK(maxTrue[1][1] > 1.0f);
+    CHECK(maxTested[1][1] < 0.0f);
+    CHECK(outTested[1][1] > 1.0f);
+    CHECK(minTrue[0][1] < -1.0f);
+    CHECK(minTested[0][1] == minTrue[0][1]);
+    const auto has = [](const std::vector<std::string>& names, const std::string& name) {
+      return std::ranges::find(names, name) != names.end();
+    };
+    CHECK(below.bufferWidth == 640u);
+    CHECK(below.bufferHeight == 360u);
+    CHECK(has(below.tested, "shell_max"));
+    CHECK(has(below.tested, "shell_out"));
+    CHECK(below.culled == std::vector<std::string>{"shell_max"});
+    CHECK(above.tested == std::vector<std::string>{"shell_min"});
+    CHECK(above.culled.empty());
+    std::cout << fmt::format(
+      "LP6.7 (f) E-LIT-16 (the buffer {} x {}): the wall's edge at y 0, the camera 20 in "
+      "front of it; shell_max's true box y {:.2f}..{:.2f}, tested {:.2f}..{:.2f}: culled "
+      "{}; shell_out's true y ..{:.2f}, tested ..{:.2f}: culled {}; shell_min's true y "
+      "{:.2f}.., tested {:.2f}.. (the wall above y 0): culled {}; the boxes x "
+      "{:.2f}..{:.2f}, tested {:.2f}..{:.2f}, z {:.2f}..{:.2f}, tested {:.2f}..{:.2f}\n",
+      below.bufferWidth,
+      below.bufferHeight,
+      maxTrue[0][1],
+      maxTrue[1][1],
+      maxTested[0][1],
+      maxTested[1][1],
+      has(below.culled, "shell_max"),
+      outTrue[1][1],
+      outTested[1][1],
+      has(below.culled, "shell_out"),
+      minTrue[0][1],
+      minTested[0][1],
+      has(above.culled, "shell_min"),
+      maxTrue[0][0],
+      maxTrue[1][0],
+      maxTested[0][0],
+      maxTested[1][0],
+      maxTrue[0][2],
+      maxTrue[1][2],
+      maxTested[0][2],
+      maxTested[1][2]);
+    std::filesystem::remove_all(root);
+  }
+  std::cout << fmt::format(
+    "LP6.7 masked occlusion culling on a GPU: {:.1f} s\n",
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
 }
 

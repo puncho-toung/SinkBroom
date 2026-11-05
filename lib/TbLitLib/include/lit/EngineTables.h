@@ -1156,7 +1156,9 @@ struct EngineFrameDefaults
   bool useShadowSurfaceScissor = true;
   // r_useMaskedOcclusionCulling "1", NOCHEAT (:329): the engine's default; the preview
   // has no MOC before LP6 (K51, M-FRONT-DIFF-02), and parity pins it to 0 (LP3.2's
-  // parity.cfg)
+  // parity.cfg). LP6.7 (C75, D183): the preview takes it per session (the overrides'
+  // maskedOcclusion, SessionOptions::maskedOcclusionForTesting: on by default, off in
+  // the parity case and the GPU cases before LP6.7, Q45)
   bool useMaskedOcclusionCulling = true;
 };
 inline constexpr auto EngineFrame = EngineFrameDefaults{};

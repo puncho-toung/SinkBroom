@@ -56,6 +56,8 @@ target_sources(TbLitLib
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LightTriangles.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitFrontend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitFrontend.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/MaskedOcclusion.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/MaskedOcclusion.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitPasses.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitPasses.h
     ${CMAKE_CURRENT_SOURCE_DIR}/src/LitSession.cpp

@@ -1272,7 +1272,8 @@ constexpr auto TilesImageRedrawn = std::size_t{114};
 // (C68 (a)): and the texture heaps' three (texture_heaps, heap_bytes,
 // textures_dedicated), the 118th; LP6.4b (C68 (b)-(d)): and textures_evicted,
 // textures_floored, feeds_in_place and arena_moved_bytes, the 122nd; LP6.6 (C73): and
-// taa_history, the 123rd the last
+// taa_history, the 123rd; LP6.7 (C75): and lights_moc_culled, surfaces_moc_culled and
+// moc_ms, the 126th the last
 constexpr auto TextureHeaps = std::size_t{115};
 constexpr auto HeapBytes = std::size_t{116};
 constexpr auto TexturesDedicated = std::size_t{117};
@@ -1281,7 +1282,10 @@ constexpr auto TexturesFloored = std::size_t{119};
 constexpr auto FeedsInPlace = std::size_t{120};
 constexpr auto ArenaMovedBytes = std::size_t{121};
 constexpr auto TaaHistory = std::size_t{122};
-constexpr auto Count = std::size_t{123};
+constexpr auto LightsMocCulled = std::size_t{123};
+constexpr auto SurfacesMocCulled = std::size_t{124};
+constexpr auto MocMs = std::size_t{125};
+constexpr auto Count = std::size_t{126};
 } // namespace column
 
 /**

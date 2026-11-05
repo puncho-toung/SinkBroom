@@ -39,6 +39,7 @@
 #include "ImageSlots.h"
 #include "LitFrontend.h"
 #include "LitStages.h"
+#include "MaskedOcclusion.h"
 #include "PipelineCompiler.h"
 #include "RenderParms.h"
 #include "SamplerSet.h"
@@ -307,6 +308,10 @@ struct LitFrameInputs
   // LP6.6 (C74, Q25): r_forceAmbient, AMBIENT_COLOR's rgb in the ambient pass (the
   // session's overrides; the engine's 0.5 by default)
   float forceAmbient = EngineFrame.forceAmbient;
+  // LP6.7 (C75, D183): r_useMaskedOcclusionCulling 1 (the session's overrides, Session
+  // Options::maskedOcclusionForTesting): the lists' build culls lights and surfaces
+  // against the masked occlusion buffer of its static world; off: the lists LP6.6's
+  bool maskedOcclusion = false;
 };
 
 // C16's columns of the lit passes, per frame (LP2.2b logs them)
@@ -645,6 +650,19 @@ struct LitFrameStats
   bool taaDisabled = false;
   double taaRecordMs = 0.0;
   EngineTaaConstants taaConstants;
+  // ----- LP6.7 (C75, D183, C65): the masked occlusion culling -----
+  // the lists' buffer was filled, the lights and the surfaces it hid, the occluders
+  // rasterized and the surfaces tested (the lists', kept or built), the fill's and every
+  // test's time when the lists were built this frame (0 when kept; inside listsMs, across
+  // surfacesMs and lightsMs), and the buffer's instruction set ("" before it is made)
+  bool mocActive = false;
+  std::size_t lightsMocCulled = 0;
+  std::size_t surfacesMocCulled = 0;
+  std::size_t mocOccluders = 0;
+  std::size_t mocSurfaceTests = 0;
+  std::size_t mocLightTests = 0;
+  double mocMs = 0.0;
+  std::string_view mocImplementation;
 };
 
 // a recorded draw (setDrawLogForTesting)
@@ -901,6 +919,8 @@ private:
     bool lightTriangleCull = true;
     // LP3.1 (C57): r_skipShadows 1's stand-in (a test's switch)
     bool skipShadows = false;
+    // LP6.7 (C75): the masked occlusion switch (a cull change builds the lists again)
+    bool maskedOcclusion = false;
 
     bool operator==(const ListsKey&) const = default;
   };
@@ -1018,6 +1038,9 @@ private:
   // while their keys hold (the frontend's); the light triangles and registers they hold
   // stay theirs (the caches' rules, rebuildLists)
   CasterSets m_casterSets;
+  // LP6.7 (C75, D183): the masked occlusion buffer and the occluders' index copies, used
+  // by the lists' build while the switch is on, freed when it is off and at Stop
+  MaskedOcclusion m_occlusion;
   FrontendLists m_lists;
   // LP4.2a (C37, D79): the view's probes, chosen every frame outside the cached lists
   ViewProbes m_viewProbes;
@@ -1228,6 +1251,9 @@ public:
 
   // the lists of the last build (tests, on the render thread)
   const FrontendLists& lists() const;
+  // LP6.7 (C75), tests on the render thread: the masked occlusion buffer
+  const MaskedOcclusion& maskedOcclusionForTesting() const;
+  MaskedOcclusion& maskedOcclusionForTesting();
   // LP4.2a: the last frame's probe choice (tests, on the render thread)
   const ViewProbes& viewProbes() const;
   // DX.2, render thread: a finished light triangles job is taken (whether one was), and

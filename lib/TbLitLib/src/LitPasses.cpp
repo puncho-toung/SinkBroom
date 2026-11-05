@@ -386,6 +386,16 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
   m_stats.casterMs = m_stats.listsRebuilt ? m_lists.casterMs : 0.0;
   // LP6.2 (C66): the caster sets made by this frame's build
   m_stats.casterSetsBuilt = m_stats.listsRebuilt ? m_lists.casterSetsBuilt : 0;
+  // LP6.7 (C75, C65): the masked occlusion culling behind the lists; its time only when
+  // they were built this frame
+  m_stats.mocActive = m_lists.mocActive;
+  m_stats.lightsMocCulled = m_lists.lightsMocCulled;
+  m_stats.surfacesMocCulled = m_lists.surfacesMocCulled;
+  m_stats.mocOccluders = m_lists.mocOccluders;
+  m_stats.mocSurfaceTests = m_lists.mocSurfaceTests;
+  m_stats.mocLightTests = m_lists.mocTestedLights.size();
+  m_stats.mocMs = m_stats.listsRebuilt ? m_lists.mocMs : 0.0;
+  m_stats.mocImplementation = m_occlusion.implementationName();
   m_stats.lightTriangleEntries = m_lightTriangles.size();
 
   // LP4.2a (C37, D79, D88): R_FindClosestEnvironmentProbes, every frame, from the probe
@@ -857,6 +867,8 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   key.lightTrianglesVersion = m_lightTriangles.version();
   key.lightTriangleCull = m_lightTriangleCull;
   key.skipShadows = m_skipShadows;
+  // LP6.7 (C75): the switch is in the key: a cull change builds the lists again
+  key.maskedOcclusion = inputs.maskedOcclusion;
   const auto tableVersion = table ? table->version : 0;
   if (m_listsKey == key && !(m_lists.pending && tableVersion != m_listsTableVersion))
   {
@@ -911,6 +923,17 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   frontend.portalFog = inputs.portalFog.get();
   // LP3.1 (C57): r_skipShadows 1's stand-in
   frontend.skipShadows = m_skipShadows;
+  // LP6.7 (C75, D183, the director's reading (1)): the masked occlusion culling inside
+  // this build, on the render thread; with the switch off the buffer and the index copies
+  // are let go
+  if (inputs.maskedOcclusion)
+  {
+    frontend.occlusion = &m_occlusion;
+  }
+  else
+  {
+    m_occlusion.release();
+  }
   // LP4.3 (C36): an area's grid is valid when it has points and its atlas slot holds an
   // image (Resident, or Loading: its texture is made and written as the frame uploads);
   // Pending is not loaded yet, Default the engine's defaulted image (D88)
@@ -6715,6 +6738,16 @@ void LitPasses::log(
   m_drawLog.push_back(std::move(record));
 }
 
+const MaskedOcclusion& LitPasses::maskedOcclusionForTesting() const
+{
+  return m_occlusion;
+}
+
+MaskedOcclusion& LitPasses::maskedOcclusionForTesting()
+{
+  return m_occlusion;
+}
+
 const FrontendLists& LitPasses::lists() const
 {
   return m_lists;
@@ -6879,6 +6912,8 @@ void LitPasses::releaseAll()
   m_lightTriangles.clear();
   // LP6.2 (C66): the caster sets go with the caches whose answers they hold
   m_casterSets.clear();
+  // LP6.7 (C75): the masked occlusion buffer and the index copies
+  m_occlusion.release();
   m_state = DrawState{};
   m_units = {};
   m_unitKeys = {};
