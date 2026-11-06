@@ -3378,6 +3378,54 @@ TEST_CASE("SceneGeometry, the dress decals from the .proc (LP7.3, C54)")
       CHECK(counts.inlined == (gui ? 0u : 1u));
       CHECK(surfaces.size() == (gui ? 2u : 1u));
     }
+
+    // V-F.13 (2026-11-06): the extension filter, the common case: a func_static without
+    // a model file (a brush entity, its model key its own name, no extension) is never
+    // inlined under inlineAllStatics (usurface.cpp:793-805), so the same-material surface
+    // inside its bounds is the decal's fragment: identified and made a dress chunk, which
+    // the passes draw
+    auto dress = DressScene{
+      procWithSurfaces(
+        {dressSurface("textures/lp73/decal"),
+         fmt::format(
+           "{{ \"textures/lp73/decal\" /* numVerts = */ 4 /* numIndexes = */ 6 /* "
+           "vertexFormat = */ 0\n{}{}{}{}\n0 1 2 0 2 3\n}}",
+           procVertex({116, 0, 40}, {0, 0}, std::nullopt),
+           procVertex({148, 0, 40}, {1, 0}, std::nullopt),
+           procVertex({148, 32, 40}, {1, 1}, std::nullopt),
+           procVertex({116, 32, 40}, {0, 1}, std::nullopt))}),
+      R"("classname" "worldspawn")",
+      "\"classname\" \"worldspawn\"\n\"inlineAllStatics\" \"1\""};
+    const auto snapshot = dress.take(
+      decalEntities(
+        "d1", "textures/lp73/decal", "\"depth\" \"100\"\n\"decalSize\" \"600 600\"\n")
+      + dressEntity(
+        "func_static",
+        "\"name\" \"brushes\"\n\"model\" \"brushes\"\n"
+          + boxBrush(112, -4, 36, 152, 36, 44, "lp1b/wall")));
+    const auto surfaces = identifiedArea0(*dress.scene);
+    const auto copyIdentified = std::ranges::any_of(
+      surfaces, [](const DressSurface& surface) { return surface.surface == 5u; });
+    const auto chunks = dress.dressChunks();
+    const auto copyDrawn = std::ranges::any_of(chunks, [](const Chunk* chunk) {
+      return std::ranges::any_of(chunk->verts, [](const auto& vert) {
+        return vert.xyz[0] == 148.0f && vert.xyz[1] == 32.0f && vert.xyz[2] == 40.0f;
+      });
+    });
+    std::cout << fmt::format(
+      "V-F.13: inlineAllStatics, a brush func_static: {} dress surfaces identified (its "
+      "copy among them {}), inlined {}, {} dress chunks (the copy's among them {})\n",
+      surfaces.size(),
+      copyIdentified,
+      dress.scene->dressCounts().inlined,
+      chunks.size(),
+      copyDrawn);
+    CHECK(dressEntityId(snapshot, "brushes") != NoPreviewId);
+    CHECK(copyIdentified);
+    CHECK(dress.scene->dressCounts().inlined == 0u);
+    CHECK(surfaces.size() == 2u);
+    CHECK(chunks.size() == 2u);
+    CHECK(copyDrawn);
   }
 }
 

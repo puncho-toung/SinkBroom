@@ -2706,6 +2706,27 @@ TEST_CASE("ModelLoading: the glTF validator (LP7.5, D136, P7.2)")
       glbProblem(
         quad.with(at, at + R"(,"pbrMetallicRoughness":{"baseColorFactor":[1,1,1,1]})"))
         .empty());
+    // V-F.11 (2026-11-06): extras are opaque to the parser (gltfItem_Extra): an
+    // "extensions" there that is no object passes, in the material and in the
+    // pbrMetallicRoughness (until V-F.11 every object member was entered as a texture
+    // info and refused); a texture info's own extras too; the normalTexture's extensions
+    // are still read
+    CHECK(glbProblem(quad.with(at, at + R"(,"extras":{"extensions":5})")).empty());
+    CHECK(
+      glbProblem(
+        quad.with(at, at + R"(,"pbrMetallicRoughness":{"extras":{"extensions":[1]}})"))
+        .empty());
+    CHECK(glbProblem(quad.with(
+                       at,
+                       at
+                         + R"(,"pbrMetallicRoughness":{"baseColorTexture":{"index":0,)"
+                           R"("extras":{"extensions":5}}})"))
+            .empty());
+    CHECK_THAT(
+      glbProblem(quad.with(
+        at,
+        at + R"(,"normalTexture":{"index":0,"extensions":["KHR_texture_transform"]})")),
+      ContainsSubstring("normalTexture: its extensions are not an object"));
   }
 }
 

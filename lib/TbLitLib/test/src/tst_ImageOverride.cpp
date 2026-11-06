@@ -341,6 +341,35 @@ TEST_CASE("MaterialService image overrides, the Feed work kind (D96, D100)")
     CHECK(std::ranges::count(ran, std::string{"feed"}) == 20);
   }
 
+  SECTION("V-F.18: a continuous feed lets a model through after eight feed items")
+  {
+    // 2026-11-06: as F2.6's lookup, a model asked after twenty hand-overs is served after
+    // the eighth feed item (until V-F.18 the turn waited for a lookup, a bake or an image
+    // alone, so the model came after the twentieth)
+    holdThread(*service, *hold, *entry);
+    static_cast<void>(kinds->taken());
+    for (auto i = 0; i < 20; ++i)
+    {
+      REQUIRE(service
+                ->setImageOverride(
+                  fmt::format("textures/feed/fair_model_{}", i),
+                  overrideOf(rgba8(64, 64, std::uint8_t(i), 2, 3)))
+                .is_success());
+    }
+    static_cast<void>(service->requestModel("models/vf18/absent.obj"));
+    hold->open();
+    waitForFeeds(*service);
+    REQUIRE(waitUntilIdle(*service));
+    const auto ran = kinds->taken();
+    const auto model = std::ranges::find(ran, std::string{"model"});
+    REQUIRE(model != ran.end());
+    const auto feedsBefore = std::ranges::count(ran.begin(), model, std::string{"feed"});
+    std::cout << fmt::format(
+      "V-F.18: the model served after {} of the 20 feed items\n", feedsBefore);
+    CHECK(feedsBefore == 8);
+    CHECK(std::ranges::count(ran, std::string{"feed"}) == 20);
+  }
+
   SECTION("one item per name: the newest hand-over wins, the older is dropped")
   {
     holdThread(*service, *hold, *entry);

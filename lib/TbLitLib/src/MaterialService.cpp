@@ -985,10 +985,16 @@ private:
     const auto feedTurnOver =
       m_feedStreak >= FeedFairnessItems
       || (m_feedStreak > 0 && Clock::now() - m_feedStreakStart >= FeedFairnessTime);
-    const auto othersWait = !m_shared.lookups.empty()
-                            || !m_shared.entityDefLookups.empty()
-                            || !m_shared.skinLookups.empty() || !m_shared.mapBakes.empty()
-                            || !m_shared.images.empty();
+    // (V-F.18, 2026-11-06: every other kind below the feed waits its turn too: the
+    // measures, the models and a poll that is due)
+    const auto pollDue = !m_autoReloadPending && m_shared.options.pollInterval.count() > 0
+                         && Clock::now() >= m_nextPoll;
+    const auto othersWait =
+      !m_shared.lookups.empty() || !m_shared.entityDefLookups.empty()
+      || !m_shared.skinLookups.empty() || !m_shared.mapBakes.empty()
+      || !m_shared.images.empty()
+      || (!m_shared.measures.empty() && !m_shared.measuresHeld)
+      || !m_shared.models.empty() || m_shared.modelFinished || pollDue;
     if (!m_shared.feeds.empty() && !(feedTurnOver && othersWait))
     {
       auto work = workOf(WorkKind::Feed);

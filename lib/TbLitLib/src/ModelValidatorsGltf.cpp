@@ -42,8 +42,10 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -1487,12 +1489,16 @@ private:
         {
           return problem;
         }
-        if (auto problem = textureInfos(*pbr, what))
+        if (
+          auto problem =
+            textureInfos(*pbr, {"baseColorTexture", "metallicRoughnessTexture"}, what))
         {
           return problem;
         }
       }
-      if (auto problem = textureInfos(material, what))
+      if (
+        auto problem = textureInfos(
+          material, {"normalTexture", "occlusionTexture", "emissiveTexture"}, what))
       {
         return problem;
       }
@@ -1510,7 +1516,9 @@ private:
           {
             return problem;
           }
-          if (auto problem = textureInfos(*gloss, what))
+          if (
+            auto problem =
+              textureInfos(*gloss, {"diffuseTexture", "specularGlossinessTexture"}, what))
           {
             return problem;
           }
@@ -1520,13 +1528,21 @@ private:
     return std::nullopt;
   }
 
-  // a texture info's KHR_texture_transform offset and scale (gltfParser.cpp:975-996)
+  // a texture info's KHR_texture_transform offset and scale (gltfParser.cpp:975-996).
+  // V-F.11 (2026-11-06): only the members the parser reads as texture infos
+  // (gltfItem_texture_info, _normal_texture, _occlusion_texture: gltfParser.cpp:953,
+  // :956, :1003, :1006, :1290-1293); every other member - extras above all, which
+  // gltfItem_Extra keeps as opaque text - is not entered
   static std::optional<std::string> textureInfos(
-    const Json& object, const std::string& what)
+    const Json& object,
+    const std::initializer_list<std::string_view> keys,
+    const std::string& what)
   {
     for (const auto& [key, value] : object.members)
     {
-      if (value.type != Json::Type::Object)
+      if (
+        value.type != Json::Type::Object
+        || std::ranges::find(keys, std::string_view{key}) == keys.end())
       {
         continue;
       }
