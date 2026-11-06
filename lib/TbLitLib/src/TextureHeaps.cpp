@@ -540,6 +540,12 @@ std::size_t TextureHeaps::releaseEmpty(
   return released;
 }
 
+bool TextureHeaps::emptyWaiting() const
+{
+  return std::ranges::any_of(
+    m_heaps, [](const auto& heap) { return heap.live && heap.emptySince.has_value(); });
+}
+
 std::uint64_t TextureHeaps::heapsReleased() const
 {
   return m_heapsReleased;

@@ -20840,6 +20840,107 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
     CHECK(messages.warnings == 0);
   }
 
+  SECTION("(h) V-F.4: a heap emptied at the idle tick is released by the next tick")
+  {
+    // V-F.4 (2026-11-06): the evicting frame frees the second heap's two ranges, which
+    // wait for that frame; no frame follows, so they are reclaimed only by the idle
+    // tick's own framesCompleted, which also starts the heap's keep time. One more tick
+    // a second later releases it, the session idle throughout (before V-F.4 the heap
+    // stayed until the next frame, compaction, park or Stop)
+    namespace ei = engine_image;
+    const auto heapBytes = HeapBytesForTesting{std::uint64_t{2} * 351232};
+    auto messages = ValidationMessages{};
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto events = Events{};
+      auto session = gpuSession(instance, events, 1);
+      session->setExposed(true);
+      REQUIRE(waitFor([&] { return session->framesPresented() >= 1u; }, 5000ms, false));
+      settle(*session);
+      auto ids = std::array<ImageSlotId, 4>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        ids[0] = access.images.provideForTesting(
+          intrinsicImageKey("_vf4_kept_0"), syntheticImage(256, ei::FormatRgba8, 1));
+        ids[1] = access.images.provideForTesting(
+          intrinsicImageKey("_vf4_kept_1"), syntheticImage(256, ei::FormatRgba8, 2));
+      }));
+      REQUIRE(waitForSlots(*session, {ids[0], ids[1]}));
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        ids[2] = access.images.provideForTesting(
+          testImageKey("textures/vf4/second_heap_0"),
+          syntheticImage(256, ei::FormatRgba8, 3));
+        ids[3] = access.images.provideForTesting(
+          testImageKey("textures/vf4/second_heap_1"),
+          syntheticImage(256, ei::FormatRgba8, 4));
+      }));
+      REQUIRE(waitForSlots(*session, {ids[2], ids[3]}));
+      for (auto i = 0; i < 6; ++i)
+      {
+        REQUIRE(oneFrame(*session));
+      }
+      settle(*session);
+      auto heapsBefore = std::size_t{0};
+      auto live = std::uint64_t{0};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        heapsBefore = access.heaps.heaps();
+        live = accountOf(access).live();
+      }));
+      REQUIRE(waitQuiet(*session));
+      REQUIRE(heapsBefore == 2u);
+      const auto allocationsBefore = session->deviceMemoryAllocations();
+
+      // the evicting frame, then nothing but the idle ticks
+      session->setVramBudgetForTesting(live - std::uint64_t{2} * 351232 + 4096);
+      const auto evicting = session->framesPresented();
+      REQUIRE(oneFrame(*session));
+      REQUIRE(waitQuiet(*session, 300ms));
+      const auto presented = session->framesPresented();
+      const auto allocationsEvicted = session->deviceMemoryAllocations();
+      std::this_thread::sleep_for(IdleCollectInterval * 2 + EmptyHeapKeepTime / 2);
+      const auto idlePresented = session->framesPresented();
+      const auto allocationsIdle = session->deviceMemoryAllocations();
+      auto heapsIdle = std::size_t{0};
+      auto states = std::array<ImageSlots::State, 2>{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        heapsIdle = access.heaps.heaps();
+        states[0] = access.images.slot(ids[2])->state;
+        states[1] = access.images.slot(ids[3])->state;
+      }));
+      std::cout << fmt::format(
+        "V-F.4: {} frame(s) after the evicting one; allocations {} -> {} at the eviction "
+        "-> {} after {} ms of idle ticks ({} frames meanwhile); texture_heaps {} -> {}\n",
+        presented - evicting - 1,
+        allocationsBefore,
+        allocationsEvicted,
+        allocationsIdle,
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+          IdleCollectInterval * 2 + EmptyHeapKeepTime / 2)
+          .count(),
+        idlePresented - presented,
+        heapsBefore,
+        heapsIdle);
+      // the case proves the rule only when the eviction's ranges waited for the idle tick
+      CHECK(presented - evicting <= 2u);
+      CHECK(states[0] == ImageSlots::State::Evicted);
+      CHECK(states[1] == ImageSlots::State::Evicted);
+      CHECK(idlePresented == presented);
+      CHECK(allocationsIdle == allocationsBefore - 1);
+      CHECK(heapsIdle == 1u);
+
+      session->setVramBudgetForTesting(0);
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+    }
+    CHECK(resetDispatcher());
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
   SECTION("(f) F2.1: the fixed part alone over the budget; a camera turning under it")
   {
     // Q49 per DQ-1 (2026-11-05): eviction lowers the textures toward the budget less the
@@ -21166,13 +21267,13 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
       CHECK(session->status().texturesFloored >= 5u);
 
       // (2) the device in its band - under its budget, over its budget less an eighth -
-      // for 1.5 s of frames: no lift (until V-F.1 the session's line alone lifted every
+      // for 1.2 s of frames: no lift (until V-F.1 the session's line alone lifted every
       // floor here, and the device's next reading floored them again: for good)
       const auto band = passes.size();
       setDevice(liveFloored * 16 / 15 + 16, 0, 0, 0);
       const auto bandStart = std::chrono::steady_clock::now();
       auto bandFrames = 0;
-      while (std::chrono::steady_clock::now() - bandStart < 1500ms || bandFrames < 8)
+      while (std::chrono::steady_clock::now() - bandStart < 1200ms || bandFrames < 8)
       {
         REQUIRE(oneFrame(*session));
         ++bandFrames;
@@ -21221,10 +21322,23 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
       const auto lifting = passes.size();
       const auto liftStart = std::chrono::steady_clock::now();
       setDevice(liftBudget, 0, liveFloored, 1);
-      while (std::chrono::steady_clock::now() - liftStart < 4000ms)
+      // until a floor returns sticky, and a few frames more (at most 4 s)
+      auto stickySeen = std::optional<std::chrono::steady_clock::time_point>{};
+      while (std::chrono::steady_clock::now() - liftStart < 4000ms
+             && (!stickySeen || std::chrono::steady_clock::now() - *stickySeen < 300ms))
       {
         REQUIRE(oneFrame(*session));
         std::this_thread::sleep_for(80ms);
+        if (!stickySeen)
+        {
+          const auto reports = passes.taken(lifting);
+          if (std::ranges::any_of(reports, [](const BudgetPassReport& report) {
+                return !report.sticky.empty();
+              }))
+          {
+            stickySeen = std::chrono::steady_clock::now();
+          }
+        }
       }
       REQUIRE(settledChain(*session, view));
       REQUIRE(waitQuiet(*session));
@@ -21289,13 +21403,13 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
       }
       CHECK(events.countContaining(SessionEvent::Warning, holdsText) == 1u);
 
-      // (4) the device far under both lines for 1.5 s of frames: the sticky floors hold,
+      // (4) the device far under both lines for 1.2 s of frames: the sticky floors hold,
       // the session settles and goes idle, no still timer
       const auto holding = passes.size();
       setDevice(std::uint64_t{4} << 30, 0, 0, 0);
       const auto holdStart = std::chrono::steady_clock::now();
       auto holdFrames = 0;
-      while (std::chrono::steady_clock::now() - holdStart < 1500ms || holdFrames < 8)
+      while (std::chrono::steady_clock::now() - holdStart < 1200ms || holdFrames < 8)
       {
         REQUIRE(oneFrame(*session));
         ++holdFrames;

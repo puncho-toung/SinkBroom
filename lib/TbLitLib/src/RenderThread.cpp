@@ -3680,7 +3680,10 @@ void RenderThread::idleTick()
       framesCompleted(m_frameIndex);
     }
     device.runGarbageCollection();
-    if (allResolved && allFinished)
+    // V-F.4 (2026-11-06): a heap this tick's own framesCompleted emptied (the frames that
+    // freed its last ranges finished only now) waits out EmptyHeapKeepTime: one more tick
+    // a second later releases it, so an idle session lets it go too
+    if (allResolved && allFinished && !m_textureHeaps.emptyWaiting())
     {
       m_idleWorkPending = false;
     }

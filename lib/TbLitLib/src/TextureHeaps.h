@@ -253,6 +253,9 @@ public:
    */
   std::size_t releaseEmpty(
     std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration keep);
+  // V-F.4 (2026-11-06): whether a live heap holds no range and waits out its keep time
+  // (releaseEmpty has seen it empty and not yet released it)
+  bool emptyWaiting() const;
   // the heaps released so far
   std::uint64_t heapsReleased() const;
 
