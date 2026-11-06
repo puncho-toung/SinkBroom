@@ -86,6 +86,15 @@ public:
     const std::atomic<bool>* cancel = nullptr);
 
   /**
+   * F2.3 (2026-11-05): whether a message of open's failure is the file's own bytes (a
+   * file too short for its header, a magic, table or entry that is not a container's:
+   * "...; it is not read"), which every later open of the same file meets again, rather
+   * than an open, stat or read failure (a sharing lock, an I/O error) or a cancel, which
+   * a later open may not meet. Pure.
+   */
+  static bool failedByItsBytes(std::string_view message);
+
+  /**
    * LP6.3 (C67 (a)): a container whose table a scan read before, as the container index
    * keeps it: its name, path, the file's size and time when the table was read, and the
    * entries in the file's order (their lookup index made as open makes it). nullopt when

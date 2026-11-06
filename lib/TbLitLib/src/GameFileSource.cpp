@@ -305,6 +305,10 @@ bool GameFileSource::scan(
     std::make_move_iterator(listing.resourceWarnings.begin()),
     std::make_move_iterator(listing.resourceWarnings.end()));
 
+  // F2.3 (2026-11-05): the containers without a table by their own bytes; one that could
+  // not be opened or read is not among them, so the tables match no key and are not
+  // stored (GameContainerIndex::makeSource): the next Start opens it again
+  auto tableless = std::vector<std::string>{};
   for (const auto& name : listing.resources)
   {
     if (cancelled())
@@ -323,6 +327,10 @@ bool GameFileSource::scan(
             if (!cancelled())
             {
               m_warnings.push_back(e.msg);
+              if (ResourceContainer::failedByItsBytes(e.msg))
+              {
+                tableless.push_back(name);
+              }
             }
           });
     }
@@ -344,9 +352,14 @@ bool GameFileSource::scan(
     {
       return false;
     }
-    if (auto pk4 = readPk4(listing.base, name))
+    auto byItsBytes = false;
+    if (auto pk4 = readPk4(listing.base, name, byItsBytes))
     {
       m_pk4s.push_back(std::make_unique<Pk4>(Pk4{std::move(pk4), nullptr}));
+    }
+    else if (byItsBytes)
+    {
+      tableless.push_back(name);
     }
     if (afterContainer)
     {
@@ -373,6 +386,7 @@ bool GameFileSource::scan(
     }
     tables->warnings.assign(
       m_warnings.begin() + std::ptrdiff_t(firstWarning), m_warnings.end());
+    tables->tableless = std::move(tableless);
     m_scanned = std::move(tables);
   }
   return true;
@@ -401,8 +415,14 @@ bool GameFileSource::cancelled() const
 }
 
 std::shared_ptr<const Pk4Table> GameFileSource::readPk4(
-  const std::filesystem::path& base, const std::string& name)
+  const std::filesystem::path& base, const std::string& name, bool& byItsBytes)
 {
+  // F2.3: no directory by the pak's own bytes (a binary pak; a file that opens and is not
+  // a zip), or because the file could not be opened (a sharing lock, an I/O error)
+  byItsBytes = false;
+  const auto failed = [&](const std::filesystem::path& file) {
+    byItsBytes = GameFile::open(file).is_success();
+  };
   const auto path = pathFromUtf8(name);
   if (!path)
   {
@@ -459,11 +479,13 @@ std::shared_ptr<const Pk4Table> GameFileSource::readPk4(
              })
            | kdl::transform([&](const bool binary) {
                // "ignore all binary paks", without a message
+               byItsBytes = binary;
                return binary ? nullptr : std::shared_ptr<const Pk4Table>{std::move(pk4)};
              })
            | kdl::transform_error([&](const auto& e) {
                m_warnings.push_back(
                  fmt::format("Unable to open zip file {}: {}", name, e.msg));
+               failed(pk4->path);
                return std::shared_ptr<const Pk4Table>{};
              })
            | kdl::value();
@@ -471,6 +493,7 @@ std::shared_ptr<const Pk4Table> GameFileSource::readPk4(
   catch (const std::exception& e)
   {
     m_warnings.push_back(fmt::format("Unable to open zip file {}: {}", name, e.what()));
+    failed(base / *path);
     return nullptr;
   }
 }

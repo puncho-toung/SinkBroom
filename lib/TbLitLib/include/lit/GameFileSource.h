@@ -194,8 +194,10 @@ private:
     const std::function<void(const std::string&)>& afterContainer);
   // LP6.3: a key's tables found in the index, and the scan's warnings replayed
   void adopt(const GameContainerTables& tables);
+  // byItsBytes (F2.3): no directory and the pak's own bytes the cause (a binary pak, a
+  // file that opens and is not a zip)
   std::shared_ptr<const Pk4Table> readPk4(
-    const std::filesystem::path& base, const std::string& name);
+    const std::filesystem::path& base, const std::string& name, bool& byItsBytes);
   // the loose file a read of this relative path opens, or nullopt; nullopt at once when
   // the folder's listing has no such name (S2.2)
   std::optional<std::filesystem::path> looseFile(const std::filesystem::path& relative);

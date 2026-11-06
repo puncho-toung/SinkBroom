@@ -1262,8 +1262,11 @@ private:
   /**
    * C21, D52, S2.2: the slot of an entry as it is first published: with the test hook's
    * size (measured), else unmeasured with the last Ready size its material had for the
-   * same image chain (D52, S3.15), else the registry's Default; its measure is queued by
-   * the caller.
+   * same image chain (D52, S3.15) while the files that size was measured from are
+   * unchanged (F3.2, 2026-11-05: measure's test; a re-parse served before the poll saw an
+   * image change size would otherwise publish the old size, which sizeFinalIn calls
+   * final), else the registry's Default (the kept size dropped); its measure is queued
+   * by the caller.
    */
   std::shared_ptr<const MaterialSlot> firstSlot(
     std::shared_ptr<const MaterialEntry> entry)
@@ -1286,10 +1289,16 @@ private:
       slot->sizeMeasured = true;
       return slot;
     }
-    if (const auto kept = m_readySizes.find(entry->name);
-        kept != m_readySizes.end() && kept->second.chain == imageChain(*entry))
+    if (const auto kept = m_readySizes.find(entry->name); kept != m_readySizes.end())
     {
-      entry = withSize(std::move(entry), kept->second.size);
+      if (kept->second.chain == imageChain(*entry) && !changedOnDisk(kept->second.files))
+      {
+        entry = withSize(std::move(entry), kept->second.size);
+      }
+      else
+      {
+        m_readySizes.erase(kept);
+      }
     }
     slot->entry = std::move(entry);
     // without a registry's decls nothing can measure it

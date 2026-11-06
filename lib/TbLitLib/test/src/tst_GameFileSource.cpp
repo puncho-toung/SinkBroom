@@ -41,12 +41,37 @@
 #include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 namespace tb::lit
 {
 namespace
 {
 
 using Files = std::vector<std::pair<std::string, std::string>>;
+
+#if defined(_WIN32)
+// F2.3: a file opened with no sharing, as another program (an antivirus, a copy) may
+// hold it: nobody else opens it until the handle closes; a stat still sees it
+std::unique_ptr<void, decltype(&CloseHandle)> lockFile(const std::filesystem::path& path)
+{
+  const auto handle = CreateFileW(
+    path.c_str(),
+    GENERIC_READ,
+    0,
+    nullptr,
+    OPEN_EXISTING,
+    FILE_ATTRIBUTE_NORMAL,
+    nullptr);
+  REQUIRE(handle != INVALID_HANDLE_VALUE);
+  return {handle, &CloseHandle};
+}
+#endif
 
 /**
  * A game folder with loose files, three .pk4 files (one a binary pak) and three
@@ -1006,7 +1031,68 @@ TEST_CASE("GameContainerIndex (LP6.3)")
     CHECK_FALSE(readContainerIndexFile(
       writeContainerIndexFile(restamped), restamped.key, &error, &damaged));
     CHECK(damaged);
+
+    // F2.3: the binary pak is tableless, by its own bytes; tables that hold fewer
+    // containers than their key lists (one that could not be opened) match no key:
+    // neither read nor stored
+    CHECK(tables->tableless == std::vector<std::string>{"binary.pk4"});
+    CHECK(read->tableless == tables->tableless);
+    auto subset = *tables;
+    subset.resources.erase(subset.resources.begin() + 1);
+    CHECK_FALSE(readContainerIndexFile(
+      writeContainerIndexFile(subset), subset.key, &error, &damaged));
+    CHECK(damaged);
+    auto pk4Subset = *tables;
+    pk4Subset.pk4s.pop_back();
+    CHECK_FALSE(readContainerIndexFile(
+      writeContainerIndexFile(pk4Subset), pk4Subset.key, &error, &damaged));
+    CHECK(damaged);
   }
+
+#if defined(_WIN32)
+  SECTION("a container that cannot be opened for one scan is opened at the next Start")
+  {
+    // F2.3: a sharing lock on a .resources and a .pk4 during the first scan: neither is
+    // read and the scan's tables are stored nowhere; the next Start (a new index object,
+    // a relaunch) scans again and reads both
+    {
+      const auto lockedResources = lockFile(game.base() / "second.resources");
+      const auto lockedPk4 = lockFile(game.base() / "zz_second.pk4");
+      auto index = GameContainerIndex{folder};
+      auto locked = index.makeSource(game.path(), nullptr);
+      CHECK(locked->complete());
+      CHECK(locked->containerTablesOrigin().kind == Origin::Scan);
+      const auto warnings = locked->takeWarnings();
+      REQUIRE(warnings.size() == 2u);
+      CHECK(warnings[0] == "Unable to open resource file second.resources");
+      CHECK_THAT(
+        warnings[1],
+        Catch::Matchers::StartsWith("Unable to open zip file zz_second.pk4"));
+      CHECK_FALSE(
+        contains(locked->readFile("materials/both_res.mtr", nullptr), "both_res_second"));
+      REQUIRE(locked->scannedTables() != nullptr);
+      CHECK(locked->scannedTables()->tableless == std::vector<std::string>{"binary.pk4"});
+      CHECK(index.memoryEntriesForTesting() == 0u);
+      CHECK(indexFiles(folder).empty());
+    }
+    auto index = GameContainerIndex{folder};
+    auto again = index.makeSource(game.path(), nullptr);
+    CHECK(again->containerTablesOrigin().kind == Origin::Scan);
+    CHECK(again->takeWarnings().empty());
+    CHECK(
+      contains(again->readFile("materials/both_res.mtr", nullptr), "both_res_second"));
+    CHECK(
+      contains(again->readFile("materials/both_pk4.mtr", nullptr), "both_pk4_second"));
+    auto fresh = GameFileSource{game.path()};
+    checkSameSearch(*again, fresh);
+    CHECK(index.memoryEntriesForTesting() == 1u);
+    CHECK(indexFiles(folder).size() == 1u);
+    auto other = GameContainerIndex{folder};
+    CHECK(
+      other.makeSource(game.path(), nullptr)->containerTablesOrigin().kind
+      == Origin::File);
+  }
+#endif
 
   SECTION("a file hit replays the scan's warnings")
   {

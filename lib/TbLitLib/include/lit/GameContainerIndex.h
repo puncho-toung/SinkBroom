@@ -121,10 +121,18 @@ struct GameContainerTables
   // the .pk4 files whose directories were read (no binary pak), sorted
   std::vector<std::shared_ptr<const Pk4Table>> pk4s;
   std::vector<std::string> warnings;
+  // F2.3 (2026-11-05): the key's containers that gave no table by their own bytes - a
+  // .resources whose header or table is not a container's, a binary pak, a .pk4 that
+  // opens but is not a zip - in the key's order (.resources first): a later scan meets
+  // them again. Every other container of the key holds a table, so a container that
+  // could not be opened or read (a sharing lock, an I/O error) leaves tables that match
+  // no key and are never stored: the next Start opens it again, as the engine does
+  std::vector<std::string> tableless;
 };
 
-// LP6.3: the index file's version; a file of another version is read as none
-inline constexpr auto ContainerIndexFileVersion = std::uint32_t{1};
+// LP6.3: the index file's version; a file of another version is read as none (F2.3,
+// 2026-11-05: 2, the tableless containers after the .pk4 directories)
+inline constexpr auto ContainerIndexFileVersion = std::uint32_t{2};
 
 /**
  * The tables in the index file's format: a header (the magic "SBLITIDX", the version,

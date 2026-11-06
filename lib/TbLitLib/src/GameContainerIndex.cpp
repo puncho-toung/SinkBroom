@@ -339,54 +339,60 @@ public:
   }
 };
 
-// a stored table's container in its key, at or after from: its index, or none
-std::optional<std::size_t> stampOf(
-  const std::vector<ContainerStamp>& stamps,
-  const std::string& name,
-  const std::size_t from)
-{
-  for (auto i = from; i < stamps.size(); ++i)
-  {
-    if (stamps[i].name == name)
-    {
-      return i;
-    }
-  }
-  return std::nullopt;
-}
-
 /**
- * The tables agree with their key: each table is a container the key lists, in the key's
- * order, with the key's size and stamp (a container that changed while the scan read it
- * holds a table of another file than its key's: never stored, never read)
+ * The tables agree with their key: every container the key lists, in the key's order,
+ * holds a table with the key's size and stamp or is one of the tableless ones (a
+ * container that changed while the scan read it holds a table of another file than its
+ * key's; F2.3: one that could not be opened or read holds none: neither stored nor read)
  */
 bool tablesMatchKey(const GameContainerTables& tables)
 {
+  auto tableless = std::size_t{0};
+  const auto isTableless = [&](const std::string& name) {
+    if (tableless < tables.tableless.size() && tables.tableless[tableless] == name)
+    {
+      ++tableless;
+      return true;
+    }
+    return false;
+  };
   auto next = std::size_t{0};
-  for (const auto& container : tables.resources)
+  for (const auto& stamp : tables.key.resources)
   {
-    const auto at = stampOf(tables.key.resources, container->name(), next);
-    if (
-      !at || tables.key.resources[*at].size != container->fileSize()
-      || tables.key.resources[*at].stamp != container->fileTime())
+    if (next < tables.resources.size() && tables.resources[next]->name() == stamp.name)
+    {
+      const auto& container = *tables.resources[next++];
+      if (stamp.size != container.fileSize() || stamp.stamp != container.fileTime())
+      {
+        return false;
+      }
+    }
+    else if (!isTableless(stamp.name))
     {
       return false;
     }
-    next = *at + 1;
+  }
+  if (next != tables.resources.size())
+  {
+    return false;
   }
   next = 0;
-  for (const auto& pk4 : tables.pk4s)
+  for (const auto& stamp : tables.key.pk4s)
   {
-    const auto at = stampOf(tables.key.pk4s, pk4->name, next);
-    if (
-      !at || tables.key.pk4s[*at].size != pk4->size
-      || tables.key.pk4s[*at].stamp != pk4->stamp)
+    if (next < tables.pk4s.size() && tables.pk4s[next]->name == stamp.name)
+    {
+      const auto& pk4 = *tables.pk4s[next++];
+      if (stamp.size != pk4.size || stamp.stamp != pk4.stamp)
+      {
+        return false;
+      }
+    }
+    else if (!isTableless(stamp.name))
     {
       return false;
     }
-    next = *at + 1;
   }
-  return true;
+  return next == tables.pk4s.size() && tableless == tables.tableless.size();
 }
 
 std::string hexOf(const std::uint64_t value)
@@ -528,6 +534,12 @@ std::string writeContainerIndexFile(const GameContainerTables& tables)
       file.text(name);
       file.path(pk4->index.at(name));
     }
+  }
+  // F2.3 (version 2): the containers without a table by their own bytes
+  file.u32(std::uint32_t(tables.tableless.size()));
+  for (const auto& name : tables.tableless)
+  {
+    file.text(name);
   }
 
   auto& bytes = file.bytes();
@@ -677,6 +689,12 @@ std::optional<GameContainerTables> readContainerIndexFile(
     }
     pk4->path = key.base / *path;
     tables.pk4s.push_back(std::move(pk4));
+  }
+  // F2.3: a name's length
+  const auto tableless = reader.count(4);
+  for (std::uint32_t i = 0; i < tableless && !reader.failed(); ++i)
+  {
+    tables.tableless.push_back(reader.text());
   }
   if (reader.failed() || !reader.atEnd())
   {

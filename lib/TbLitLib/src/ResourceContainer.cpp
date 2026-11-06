@@ -187,15 +187,21 @@ Result<ResourceContainer> ResourceContainer::open(
              }
 
              const auto fileSize = file.size();
-             const auto tooShort = fmt::format(
-               "Resource file {} is too short for its header; it is not read", name);
              if (fileSize < HeaderSize)
              {
-               return Error{tooShort};
+               return Error{fmt::format(
+                 "Resource file {} is too short for its header; it is not read", name)};
              }
              auto header = std::array<char, HeaderSize>{};
              auto table = std::string{};
-             return readExactly(file, 0, header.data(), header.size(), tooShort)
+             // F2.3: a header the file holds that cannot be read is a read failure, not
+             // the file's bytes
+             return readExactly(
+                      file,
+                      0,
+                      header.data(),
+                      header.size(),
+                      fmt::format("Resource file {}: its header cannot be read", name))
                     | kdl::and_then([&]() -> Result<void> {
                         if (
                           std::uint32_t(readBigInt32(header.data())) != ResourceFileMagic)
@@ -253,6 +259,11 @@ Result<ResourceContainer> ResourceContainer::open(
                         return container;
                       });
            });
+}
+
+bool ResourceContainer::failedByItsBytes(const std::string_view message)
+{
+  return message.ends_with("; it is not read");
 }
 
 std::optional<ResourceContainer> ResourceContainer::fromTable(
