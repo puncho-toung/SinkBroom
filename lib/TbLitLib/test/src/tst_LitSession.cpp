@@ -20461,7 +20461,7 @@ bool oneFrame(LitSession& session)
 // sixteenth, Evicted (their intrinsics bound, not pending), asked again only when a frame
 // draws them; with no unbound one left and the budget passed, the bound ones' mip floor
 // through the Replacing path; an emptied heap released; at Stop nothing is left
-TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgpu4]")
+TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgpu5]")
 {
   const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
   if (!gamePathValue || !*gamePathValue)
@@ -27040,7 +27040,7 @@ std::string reachMap(const bool inView)
 // Hidden: it needs a GPU and the game's blobs.
 TEST_CASE(
   "LitSession a unit whose bounds meet the view with none of its surfaces (V-F.2)",
-  "[.][litgpu4]")
+  "[.][litgpu5]")
 {
   const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
   if (!gamePathValue || !*gamePathValue)

@@ -17,8 +17,9 @@ stay under:
 - `"[.][litgpu]"` (LP0-LP2's GPU cases), `"[.][litgpu2]"` (LP4's, LPF's and LP3's shadow cases;
   their atlas and picture PNGs go to the folder `TB_LIT_PNG_OUT` names, if set), `"[.][litgpu3]"`
   (LP5's, LP7's and LP3's) and `"[.][litgpu4]"` (LP6's, the four LP6 cases of `[litgpu]` among them
-  since the final fix round, DQ-4, and that round's own cases): a Vulkan device and the game folder
-  `TB_LIT_GAME_PATH` names (read only); 150 s each.
+  since the final fix round, DQ-4, and that round's own cases) and `"[.][litgpu5]"` (the eviction
+  case and V-F.2's case, split from `[litgpu4]` for its clock in the re-check's fix round): a Vulkan
+  device and the game folder `TB_LIT_GAME_PATH` names (read only); 150 s each.
 - `"[.][parity]"`: the parity rows over the preview root of a `parity.py` run
   (`TB_LIT_PARITY_ROOT`), their read-backs and meta written to `TB_LIT_PARITY_OUT`; 180 s.
   `"[.][parity-moc]"` (F3.3): the same rows with the masked occlusion culling on, run after
