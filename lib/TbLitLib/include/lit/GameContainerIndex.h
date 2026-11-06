@@ -59,12 +59,15 @@ struct Pk4Table
 };
 
 // one container of the key: its name as registered and its file's size and change stamp
-// (statGameFile)
+// (statGameFile); F3.12 (2026-11-05): and the digest of its table's bytes as the listing
+// read them (containerTableDigest), so that a replacement of the same size that keeps
+// the time is read again
 struct ContainerStamp
 {
   std::string name;
   std::uint64_t size = 0;
   std::int64_t stamp = 0;
+  std::uint64_t tableDigest = 0;
 
   bool operator==(const ContainerStamp&) const = default;
 };
@@ -75,8 +78,9 @@ struct ContainerStamp
  * current folder) and spelled as the file system spells it (std::filesystem::canonical,
  * when the folder exists: the folders' own case, links resolved); the .resources of base
  * and of base/maps after the duplicate rule, in the registration order, and the .pk4
- * files of base, sorted, each with its file's (size, stamp). Equal keys read the same
- * tables; any other change rebuilds the whole key's (all-or-nothing).
+ * files of base, sorted, each with its file's (size, stamp) and (F3.12) its table's
+ * digest. Equal keys read the same tables; any other change rebuilds the whole key's
+ * (all-or-nothing).
  */
 struct GameContainerKey
 {
@@ -90,8 +94,9 @@ struct GameContainerKey
 /**
  * The containers' listing as GameFileSource's scan takes it (AddGameDirectory,
  * FileSystem.cpp:3174-3252): the names, the listings' warnings and the key. key is
- * nullopt when the listing was cancelled or a listed container could not be statted (no
- * key: no index hit and nothing stored). Any thread; the parse thread's.
+ * nullopt when the listing was cancelled or a listed container could not be statted, or
+ * (F3.12) opened and read for its table's digest (no key: no index hit and nothing
+ * stored). Any thread; the parse thread's.
  */
 struct GameContainerListing
 {
@@ -131,8 +136,20 @@ struct GameContainerTables
 };
 
 // LP6.3: the index file's version; a file of another version is read as none (F2.3,
-// 2026-11-05: 2, the tableless containers after the .pk4 directories)
-inline constexpr auto ContainerIndexFileVersion = std::uint32_t{2};
+// 2026-11-05: 2, the tableless containers after the .pk4 directories; F3.12: 3, each
+// key entry's table digest)
+inline constexpr auto ContainerIndexFileVersion = std::uint32_t{3};
+
+/**
+ * F3.12 (2026-11-05): the digest (the index file's payload hash) of a container's table
+ * as its file holds it now: a .resources file's table (the header's big-endian offset and
+ * length, as ResourceContainer::open reads them), a .pk4's central directory with its
+ * end record (the record found in the file's last 65,557 bytes, its directory's size and
+ * offset); 0 when the file holds no table there (a file that is not a container, which
+ * the scan finds tableless); nullopt when the file cannot be opened or read. Any thread.
+ */
+std::optional<std::uint64_t> containerTableDigest(
+  const std::filesystem::path& path, bool pk4);
 
 /**
  * The tables in the index file's format: a header (the magic "SBLITIDX", the version,
@@ -155,6 +172,14 @@ std::optional<GameContainerTables> readContainerIndexFile(
   const GameContainerKey& key,
   std::string* error = nullptr,
   bool* damaged = nullptr);
+
+/**
+ * F2.13 (2026-11-05): removes the index folder's temporary files
+ * (containers-*.tmp: a write killed before its rename) last written at least age ago;
+ * how many. Never anything else, never a younger one (another index may be writing it).
+ */
+std::size_t removeIndexLeftovers(
+  const std::filesystem::path& folder, std::filesystem::file_time_type::duration age);
 
 /**
  * LP6.3 (C67 (a), A52, Q42, P8.17, P8.18): the game's container tables, kept across
@@ -190,6 +215,9 @@ private:
   std::map<std::filesystem::path::string_type, std::shared_ptr<const GameContainerTables>>
     m_tables;
   std::function<void(const std::string&)> m_afterContainerForTesting;
+  // F2.13 (2026-11-05): the folder's stale temporaries swept at the first store, how many
+  std::atomic<bool> m_leftoversSwept = false;
+  std::atomic<std::size_t> m_leftoversRemoved = 0;
 
 public:
   explicit GameContainerIndex(std::filesystem::path folder);
@@ -209,6 +237,8 @@ public:
     std::vector<std::string>& warnings);
 
   const std::filesystem::path& folder() const;
+  // F2.13: the stale temporary files the first store removed
+  std::size_t leftoversRemoved() const;
   // the index file of a base folder (the key's)
   std::filesystem::path filePath(const std::filesystem::path& base) const;
 

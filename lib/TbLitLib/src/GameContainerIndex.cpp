@@ -28,6 +28,7 @@
 
 #include "lit/GameContainerIndex.h"
 
+#include "LitHelpers.h"
 #include "lit/GameFile.h"
 #include "lit/GameFileSource.h"
 #include "lit/MaterialDecls.h"
@@ -55,11 +56,6 @@ namespace
 {
 
 using Clock = std::chrono::steady_clock;
-
-double secondsSince(const Clock::time_point start)
-{
-  return std::chrono::duration<double>(Clock::now() - start).count();
-}
 
 void sortEnginePaths(std::vector<std::string>& names)
 {
@@ -207,6 +203,7 @@ public:
       text(value.name);
       u64(value.size);
       i64(value.stamp);
+      u64(value.tableDigest);
     }
   }
 
@@ -324,8 +321,8 @@ public:
 
   std::vector<ContainerStamp> stamps()
   {
-    // a name's length, the size, the stamp
-    const auto count = this->count(4 + 8 + 8);
+    // a name's length, the size, the stamp, the table's digest
+    const auto count = this->count(4 + 8 + 8 + 8);
     auto values = std::vector<ContainerStamp>{};
     values.reserve(count);
     for (std::uint32_t i = 0; i < count && !m_failed; ++i)
@@ -333,7 +330,8 @@ public:
       auto name = text();
       const auto size = u64();
       const auto stamp = i64();
-      values.push_back(ContainerStamp{std::move(name), size, stamp});
+      const auto digest = u64();
+      values.push_back(ContainerStamp{std::move(name), size, stamp, digest});
     }
     return values;
   }
@@ -400,7 +398,114 @@ std::string hexOf(const std::uint64_t value)
   return fmt::format("{:016x}", value);
 }
 
+// a big-endian 32-bit integer at bytes (the .resources header's)
+std::uint64_t bigEndian32At(const char* bytes)
+{
+  auto value = std::uint64_t{0};
+  for (auto i = 0; i < 4; ++i)
+  {
+    value = (value << 8) | std::uint64_t(static_cast<unsigned char>(bytes[i]));
+  }
+  return value;
+}
+
+/**
+ * F3.12 (2026-11-05): the scan's tables are those of the key's digests: every container
+ * of the key read again for its table's digest after the scan (the cold path alone), so
+ * that a replacement between the listing and the scan is never stored under the key
+ */
+bool digestsMatchKey(const GameContainerKey& key)
+{
+  const auto match = [&](const std::vector<ContainerStamp>& stamps, const bool pk4) {
+    return std::ranges::all_of(stamps, [&](const ContainerStamp& stamp) {
+      const auto path = pathFromUtf8(stamp.name);
+      return path && containerTableDigest(key.base / *path, pk4) == stamp.tableDigest;
+    });
+  };
+  return match(key.resources, false) && match(key.pk4s, true);
+}
+
 } // namespace
+
+std::optional<std::uint64_t> containerTableDigest(
+  const std::filesystem::path& path, const bool pk4)
+{
+  return GameFile::open(path) | kdl::transform([&](const GameFile& file) {
+           const auto size = file.size();
+           const auto read = [&](
+                               const std::uint64_t offset,
+                               const std::uint64_t length,
+                               std::string& into) {
+             into.resize(std::size_t(length));
+             return file.readAt(offset, into.data(), into.size()).is_success();
+           };
+           auto bytes = std::string{};
+           if (!pk4)
+           {
+             // ResourceContainer::open: the magic, then the table's offset and length
+             constexpr auto HeaderSize = std::uint64_t{12};
+             if (size < HeaderSize)
+             {
+               return std::optional<std::uint64_t>{0};
+             }
+             if (!read(0, HeaderSize, bytes))
+             {
+               return std::optional<std::uint64_t>{};
+             }
+             const auto offset = bigEndian32At(bytes.data() + 4);
+             const auto length = bigEndian32At(bytes.data() + 8);
+             if (
+               offset >= 0x80000000ull || length < 4 || length >= 0x80000000ull
+               || offset + length > size)
+             {
+               return std::optional<std::uint64_t>{0};
+             }
+             if (!read(offset, length, bytes))
+             {
+               return std::optional<std::uint64_t>{};
+             }
+             return std::optional<std::uint64_t>{payloadHash(bytes.data(), bytes.size())};
+           }
+           // the end of central directory record: 22 bytes and a comment of up to 65,535
+           constexpr auto RecordSize = std::uint64_t{22};
+           const auto tail = std::min<std::uint64_t>(size, RecordSize + 65535);
+           if (tail < RecordSize)
+           {
+             return std::optional<std::uint64_t>{0};
+           }
+           if (!read(size - tail, tail, bytes))
+           {
+             return std::optional<std::uint64_t>{};
+           }
+           for (auto at = tail - RecordSize + 1; at-- > 0;)
+           {
+             const auto* record = bytes.data() + at;
+             if (littleEndianAt(record, 4) != 0x06054b50ull)
+             {
+               continue;
+             }
+             const auto directorySize = littleEndianAt(record + 12, 4);
+             const auto directoryOffset = littleEndianAt(record + 16, 4);
+             const auto recordOffset = size - tail + at;
+             if (directoryOffset + directorySize > recordOffset)
+             {
+               continue;
+             }
+             auto directory = std::string{};
+             if (!read(directoryOffset, directorySize, directory))
+             {
+               return std::optional<std::uint64_t>{};
+             }
+             directory.append(record, std::size_t(RecordSize));
+             return std::optional<std::uint64_t>{
+               payloadHash(directory.data(), directory.size())};
+           }
+           return std::optional<std::uint64_t>{0};
+         })
+         | kdl::transform_error(
+           [](const auto&) { return std::optional<std::uint64_t>{}; })
+         | kdl::value();
+}
 
 GameContainerListing listGameContainers(
   const std::filesystem::path& folder, const std::atomic<bool>* cancel)
@@ -451,22 +556,37 @@ GameContainerListing listGameContainers(
     return listing;
   }
 
-  // the key: one stat per container; a container that cannot be statted leaves no key
+  // the key: one stat and (F3.12) one table read per container; a container that cannot
+  // be statted, opened or read leaves no key
   auto key = GameContainerKey{listing.base, {}, {}};
-  const auto stampAll =
-    [&](const std::vector<std::string>& names, std::vector<ContainerStamp>& stamps) {
-      for (const auto& name : names)
+  const auto stampAll = [&](
+                          const std::vector<std::string>& names,
+                          std::vector<ContainerStamp>& stamps,
+                          const bool pk4) {
+    for (const auto& name : names)
+    {
+      if (cancelled())
       {
-        const auto stat = statGameFile(listing.base / *pathFromUtf8(name));
-        if (!stat)
-        {
-          return false;
-        }
-        stamps.push_back(ContainerStamp{name, stat->size, stat->time});
+        return false;
       }
-      return true;
-    };
-  if (stampAll(listing.resources, key.resources) && stampAll(listing.pk4s, key.pk4s))
+      const auto path = listing.base / *pathFromUtf8(name);
+      const auto stat = statGameFile(path);
+      if (!stat)
+      {
+        return false;
+      }
+      const auto digest = containerTableDigest(path, pk4);
+      if (!digest)
+      {
+        return false;
+      }
+      stamps.push_back(ContainerStamp{name, stat->size, stat->time, *digest});
+    }
+    return true;
+  };
+  if (
+    stampAll(listing.resources, key.resources, false)
+    && stampAll(listing.pk4s, key.pk4s, true))
   {
     listing.key = std::move(key);
   }
@@ -725,7 +845,7 @@ std::unique_ptr<GameFileSource> GameContainerIndex::makeSource(
   {
     return source;
   }
-  if (!tablesMatchKey(*tables))
+  if (!tablesMatchKey(*tables) || !digestsMatchKey(tables->key))
   {
     return source;
   }
@@ -840,6 +960,13 @@ void GameContainerIndex::store(
     failed(ec.message());
     return;
   }
+  // F2.13 (2026-11-05): at the first store, the temporary files a write killed before its
+  // rename left behind (a containers-<hash>.idx.<thread>-<time>.tmp, about the index's
+  // size), older than a minute (another index may be writing a younger one)
+  if (!m_leftoversSwept.exchange(true))
+  {
+    m_leftoversRemoved = removeIndexLeftovers(m_folder, std::chrono::minutes{1});
+  }
   {
     auto stream = std::ofstream{temporary, std::ios::binary | std::ios::trunc};
     stream.write(bytes.data(), std::streamsize(bytes.size()));
@@ -863,6 +990,49 @@ void GameContainerIndex::store(
 const std::filesystem::path& GameContainerIndex::folder() const
 {
   return m_folder;
+}
+
+std::size_t GameContainerIndex::leftoversRemoved() const
+{
+  return m_leftoversRemoved;
+}
+
+std::size_t removeIndexLeftovers(
+  const std::filesystem::path& folder,
+  const std::filesystem::file_time_type::duration age)
+{
+  auto removed = std::size_t{0};
+  auto ec = std::error_code{};
+  const auto now = std::filesystem::file_time_type::clock::now();
+  for (auto it = std::filesystem::directory_iterator{folder, ec};
+       !ec && it != std::filesystem::directory_iterator{};
+       it.increment(ec))
+  {
+    const auto name = it->path().filename().native();
+    const auto prefix = std::filesystem::path{"containers-"}.native();
+    const auto suffix = std::filesystem::path{".tmp"}.native();
+    if (
+      name.size() < prefix.size() + suffix.size() || !name.starts_with(prefix)
+      || !name.ends_with(suffix))
+    {
+      continue;
+    }
+    auto entryError = std::error_code{};
+    if (!it->is_regular_file(entryError) || entryError)
+    {
+      continue;
+    }
+    const auto written = it->last_write_time(entryError);
+    if (entryError || now - written < age)
+    {
+      continue;
+    }
+    if (std::filesystem::remove(it->path(), entryError) && !entryError)
+    {
+      ++removed;
+    }
+  }
+  return removed;
 }
 
 std::filesystem::path GameContainerIndex::filePath(
