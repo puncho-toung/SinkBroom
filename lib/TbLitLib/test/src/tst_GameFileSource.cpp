@@ -1135,6 +1135,80 @@ TEST_CASE("GameContainerIndex (LP6.3)")
       other.makeSource(game.path(), nullptr)->containerTablesOrigin().kind
       == Origin::File);
   }
+
+  SECTION("a .pk4 whose directory read fails while it opens is read at the next Start")
+  {
+    // V-F.3 (2026-11-06): after the listing's digests and before the scan reads it, a
+    // byte-range lock on zz_second.pk4's last bytes (its end of central directory record
+    // and its directory), released once the scan has passed it: the file opens, the zip
+    // reader's reads fail. That is no verdict on the pak's bytes, so it is not tableless,
+    // and the scan's tables, which miss it, are stored nowhere; the next Start scans
+    // again and reads it. The binary pak stays tableless by its bytes (F2.3)
+    const auto pak = game.base() / "zz_second.pk4";
+    const auto size = std::filesystem::file_size(pak);
+    const auto lockBytes = DWORD(std::min<std::uintmax_t>(size, 65557));
+    auto overlapped = OVERLAPPED{};
+    overlapped.Offset = DWORD(size - lockBytes);
+    auto holder = std::unique_ptr<void, decltype(&CloseHandle)>{nullptr, &CloseHandle};
+    auto lockedWhileRead = false;
+    {
+      auto index = GameContainerIndex{folder};
+      index.setAfterContainerForTesting([&](const std::string& name) {
+        if (name == "binary.pk4")
+        {
+          holder.reset(CreateFileW(
+            pak.c_str(),
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            nullptr));
+          REQUIRE(holder.get() != INVALID_HANDLE_VALUE);
+          REQUIRE(LockFileEx(
+            holder.get(),
+            LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+            0,
+            lockBytes,
+            0,
+            &overlapped));
+        }
+        else if (name == "zz_second.pk4" && holder)
+        {
+          lockedWhileRead = true;
+          CHECK(UnlockFileEx(holder.get(), 0, lockBytes, 0, &overlapped));
+          holder.reset();
+        }
+      });
+      auto locked = index.makeSource(game.path(), nullptr);
+      index.setAfterContainerForTesting({});
+      CHECK(lockedWhileRead);
+      CHECK(locked->complete());
+      CHECK(locked->containerTablesOrigin().kind == Origin::Scan);
+      const auto warnings = locked->takeWarnings();
+      REQUIRE(warnings.size() == 1u);
+      CHECK_THAT(
+        warnings[0],
+        Catch::Matchers::StartsWith("Unable to open zip file zz_second.pk4"));
+      CHECK_FALSE(
+        contains(locked->readFile("materials/both_pk4.mtr", nullptr), "both_pk4_second"));
+      // the listing read every digest: the scan has its key, and its tables miss the pak
+      REQUIRE(locked->scannedTables() != nullptr);
+      CHECK(locked->scannedTables()->tableless == std::vector<std::string>{"binary.pk4"});
+      CHECK(index.memoryEntriesForTesting() == 0u);
+      CHECK(indexFiles(folder).empty());
+    }
+    auto index = GameContainerIndex{folder};
+    auto again = index.makeSource(game.path(), nullptr);
+    CHECK(again->containerTablesOrigin().kind == Origin::Scan);
+    CHECK(again->takeWarnings().empty());
+    CHECK(
+      contains(again->readFile("materials/both_pk4.mtr", nullptr), "both_pk4_second"));
+    REQUIRE(again->scannedTables() != nullptr);
+    CHECK(again->scannedTables()->tableless == std::vector<std::string>{"binary.pk4"});
+    CHECK(index.memoryEntriesForTesting() == 1u);
+    CHECK(indexFiles(folder).size() == 1u);
+  }
 #endif
 
   SECTION("a file hit replays the scan's warnings")

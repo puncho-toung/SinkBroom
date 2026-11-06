@@ -47,6 +47,7 @@
 #include <chrono>
 #include <cwctype>
 #include <exception>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -413,12 +414,7 @@ bool GameFileSource::cancelled() const
 std::shared_ptr<const Pk4Table> GameFileSource::readPk4(
   const std::filesystem::path& base, const std::string& name, bool& byItsBytes)
 {
-  // F2.3: no directory by the pak's own bytes (a binary pak; a file that opens and is not
-  // a zip), or because the file could not be opened (a sharing lock, an I/O error)
   byItsBytes = false;
-  const auto failed = [&](const std::filesystem::path& file) {
-    byItsBytes = GameFile::open(file).is_success();
-  };
   const auto path = pathFromUtf8(name);
   if (!path)
   {
@@ -434,64 +430,97 @@ std::shared_ptr<const Pk4Table> GameFileSource::readPk4(
     pk4->size = stat->size;
   }
 
-  try
-  {
-    return openZip(pk4->path)
-           | kdl::and_then([&](std::unique_ptr<fs::ZipFileSystem> zipFileSystem) {
-               // the entries, and whether the .pk4 is a binary one
-               return zipFileSystem->find("", fs::TraversalMode::Recursive)
-                      | kdl::transform(
-                        [&](const std::vector<std::filesystem::path>& paths) {
-                          auto binary = false;
-                          for (const auto& entryPath : paths)
-                          {
-                            if (
-                              static_cast<const fs::FileSystem&>(*zipFileSystem)
-                                .pathInfo(entryPath)
-                              != fs::PathInfo::File)
+  // the entries, and whether the .pk4 is a binary one; an error when the zip reader
+  // could not read its directory
+  const auto readDirectory = [&]() -> Result<bool> {
+    pk4->index.clear();
+    pk4->names.clear();
+    try
+    {
+      return openZip(pk4->path)
+             | kdl::and_then([&](std::unique_ptr<fs::ZipFileSystem> zipFileSystem) {
+                 return zipFileSystem->find("", fs::TraversalMode::Recursive)
+                        | kdl::transform(
+                          [&](const std::vector<std::filesystem::path>& paths) {
+                            auto binary = false;
+                            for (const auto& entryPath : paths)
                             {
-                              continue;
+                              if (
+                                static_cast<const fs::FileSystem&>(*zipFileSystem)
+                                  .pathInfo(entryPath)
+                                != fs::PathInfo::File)
+                              {
+                                continue;
+                              }
+                              // A3.13: the name as the zip stores it, byte for byte; G3:
+                              // a name that cannot be given back is skipped, never thrown
+                              // for
+                              const auto raw = rawZipName(entryPath);
+                              if (!raw)
+                              {
+                                m_warnings.push_back(fmt::format(
+                                  "Zip file {}: an entry name is not valid Unicode; it "
+                                  "is "
+                                  "skipped",
+                                  name));
+                                continue;
+                              }
+                              const auto entryName = canonicalResourceName(*raw);
+                              binary = binary || entryName == BinaryConfig;
+                              if (pk4->index.emplace(entryName, entryPath).second)
+                              {
+                                pk4->names.push_back(entryName);
+                              }
                             }
-                            // A3.13: the name as the zip stores it, byte for byte; G3: a
-                            // name that cannot be given back is skipped, never thrown for
-                            const auto raw = rawZipName(entryPath);
-                            if (!raw)
-                            {
-                              m_warnings.push_back(fmt::format(
-                                "Zip file {}: an entry name is not valid Unicode; it is "
-                                "skipped",
-                                name));
-                              continue;
-                            }
-                            const auto entryName = canonicalResourceName(*raw);
-                            binary = binary || entryName == BinaryConfig;
-                            if (pk4->index.emplace(entryName, entryPath).second)
-                            {
-                              pk4->names.push_back(entryName);
-                            }
-                          }
-                          return binary;
-                        });
-             })
-           | kdl::transform([&](const bool binary) {
-               // "ignore all binary paks", without a message
-               byItsBytes = binary;
-               return binary ? nullptr : std::shared_ptr<const Pk4Table>{std::move(pk4)};
-             })
-           | kdl::transform_error([&](const auto& e) {
-               m_warnings.push_back(
-                 fmt::format("Unable to open zip file {}: {}", name, e.msg));
-               failed(pk4->path);
-               return std::shared_ptr<const Pk4Table>{};
-             })
+                            return binary;
+                          });
+               });
+    }
+    catch (const std::exception& e)
+    {
+      return Error{e.what()};
+    }
+  };
+
+  // F2.3, V-F.3 (2026-11-06): no table by the pak's own bytes, never by a failure to
+  // read them. After the zip reader's refusal, the end of central directory record and
+  // the directory as the file holds them now (containerTableDigest): none there (0: not a
+  // zip) is the bytes' verdict, tableless; a failed or short read (nullopt: a sharing or
+  // byte-range lock, an I/O error) leaves the pak out, so the scan's tables match no key
+  // and are not stored and the next Start reads it again; a record and a directory read
+  // whole make the zip reader try once more, and its second refusal of bytes read whole
+  // is theirs (a damaged directory: tableless)
+  auto failure = std::optional<std::string>{};
+  const auto attempt = [&] {
+    failure.reset();
+    return readDirectory() | kdl::transform_error([&](const auto& e) {
+             failure = e.msg;
+             return false;
+           })
            | kdl::value();
-  }
-  catch (const std::exception& e)
+  };
+  auto binary = attempt();
+  if (failure)
   {
-    m_warnings.push_back(fmt::format("Unable to open zip file {}: {}", name, e.what()));
-    failed(base / *path);
+    const auto digest = containerTableDigest(pk4->path, true);
+    if (digest && *digest != 0)
+    {
+      binary = attempt();
+    }
+    if (failure)
+    {
+      m_warnings.push_back(fmt::format("Unable to open zip file {}: {}", name, *failure));
+      byItsBytes = digest.has_value();
+      return nullptr;
+    }
+  }
+  // "ignore all binary paks", without a message
+  if (binary)
+  {
+    byItsBytes = true;
     return nullptr;
   }
+  return pk4;
 }
 
 std::vector<std::string> GameFileSource::listFiles(
