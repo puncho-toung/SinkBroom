@@ -507,16 +507,32 @@ std::optional<HeapPlacement> TextureHeaps::heapOfForTesting(
   return placementOf(texture);
 }
 
-std::size_t TextureHeaps::releaseEmpty()
+std::size_t TextureHeaps::releaseEmpty(
+  const std::chrono::steady_clock::time_point now,
+  const std::chrono::steady_clock::duration keep)
 {
   auto released = std::size_t{0};
   for (auto& heap : m_heaps)
   {
-    if (heap.live && heap.ranges.usedBytes() == 0 && heap.ranges.pendingBytes() == 0)
+    if (!heap.live)
+    {
+      continue;
+    }
+    if (heap.ranges.usedBytes() != 0 || heap.ranges.pendingBytes() != 0)
+    {
+      heap.emptySince.reset();
+      continue;
+    }
+    if (!heap.emptySince)
+    {
+      heap.emptySince = now;
+    }
+    if (now - *heap.emptySince >= keep)
     {
       heap.heap = nullptr;
       heap.ranges = RangeAllocator{m_heapBytes, HeapUnit};
       heap.live = false;
+      heap.emptySince.reset();
       ++released;
     }
   }

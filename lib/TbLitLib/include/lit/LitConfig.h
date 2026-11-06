@@ -74,6 +74,15 @@ constexpr auto DefaultVramBudgetBytes = std::uint64_t{1024} * 1024 * 1024;
 constexpr auto EvictionIdleFrames = std::uint64_t{4};
 constexpr auto EvictionsPerFrame = std::size_t{64};
 constexpr auto MipFloorExtent = 256;
+// F2.1 (2026-11-05, Q49 per DQ-1): and for this long as well (the frames' start times),
+// so that a camera moving at the pacer's rate does not evict and ask again what it turns
+// back to; an emptied texture heap is kept this long before it is released (the next
+// placement takes it instead of a new allocation); F2.2: a frame whose live figure is
+// under the budget less an eighth lifts at most UnfloorsPerFrame mip floors, the largest
+// first, each only while the live figure with the full textures stays under that line
+constexpr auto EvictionIdleTime = std::chrono::milliseconds{2000};
+constexpr auto EmptyHeapKeepTime = std::chrono::milliseconds{1000};
+constexpr auto UnfloorsPerFrame = std::size_t{4};
 
 // LP6.4b (C68 (d), D174, A60): a compaction a settled frame marked runs in the next frame
 // drawn for another reason, or, when none comes within this, as an uploads-only idle

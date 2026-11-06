@@ -1507,6 +1507,41 @@ void RenderThread::budgetPass()
   m_images.clearWanted();
   m_budgetLeft = false;
 
+  // F2.1 (2026-11-05): this frame's start among the recent ones; a slot last bound in the
+  // newest frame that started EvictionIdleTime ago or earlier, or before it, is idle by
+  // the clock as well
+  const auto now = FrameClock::now();
+  {
+    const auto at = [&](const std::size_t i) -> auto& {
+      return m_frameStarts[(m_frameStartsFirst + i) % m_frameStarts.size()];
+    };
+    if (
+      m_frameStartsCount == 0
+      || now - at(m_frameStartsCount - 1).second >= FrameStartSample)
+    {
+      if (m_frameStartsCount == m_frameStarts.size())
+      {
+        m_frameStartsFirst = (m_frameStartsFirst + 1) % m_frameStarts.size();
+        --m_frameStartsCount;
+      }
+      at(m_frameStartsCount) = {frame, now};
+      ++m_frameStartsCount;
+    }
+    while (m_frameStartsCount >= 2 && at(1).second + EvictionIdleTime <= now)
+    {
+      m_frameStartsFirst = (m_frameStartsFirst + 1) % m_frameStarts.size();
+      --m_frameStartsCount;
+    }
+  }
+  const auto& oldest = m_frameStarts[m_frameStartsFirst];
+  const auto idleThrough =
+    oldest.second + EvictionIdleTime <= now ? std::optional{oldest.first} : std::nullopt;
+  // a slot whose own complete texture is bound (no intrinsic slot, Resident)
+  const auto complete = [&](const ImageSlots::Slot& slot) {
+    return slot.state == ImageSlots::State::Resident && slot.intrinsic != NoImageSlot
+           && slot.texture && slot.firstWrittenMip == 0 && slot.mipLevels > 0;
+  };
+
   // Q48: the session's budget against the live figure, and VK_EXT_memory_budget's
   // budget against its usage (read at the first frame, after a settled one, and while
   // it says over: a driver call)
@@ -1524,15 +1559,79 @@ void RenderThread::budgetPass()
   report.liveBytes = live;
   report.budgetBytes = budget;
   report.over = live > budget || m_extensionOver;
+  // F2.1 (Q49, the director's provisional answer per DQ-1): eviction lowers the textures
+  // (the heaps' used bytes and the dedicated textures) toward their allowance, the budget
+  // less the fixed part (the targets and buffers, the arenas used, what waits for its
+  // frames); live passes the budget exactly when the textures pass the allowance
+  const auto textures = account.heapUsedBytes + account.dedicatedTextureBytes;
+  const auto fixed = live > textures ? live - textures : std::uint64_t{0};
+  const auto allowance = budget > fixed ? budget - fixed : std::uint64_t{0};
   if (!report.over)
   {
     m_budgetExhaustedLive.reset();
+    // F2.2 (2026-11-05): under the budget less an eighth, the mip floors are lifted, the
+    // largest first, at most UnfloorsPerFrame a frame, each only while the live figure
+    // with its full texture (the floor's kept until that one is written) stays under the
+    // line: the session draws the full mips again once the pressure has ended
+    if (live < budget - budget / 8 && m_images.floored() > 0)
+    {
+      struct Lift
+      {
+        std::uint64_t full = 0;
+        ImageSlotId id = NoImageSlot;
+      };
+      auto lifts = std::vector<Lift>{};
+      for (ImageSlotId id = 0; id < ImageSlotId(m_images.size()); ++id)
+      {
+        const auto& slot = *m_images.slot(id);
+        if (slot.floored && complete(slot))
+        {
+          lifts.push_back(Lift{std::max(slot.flooredFrom, slot.textureBytes), id});
+        }
+      }
+      std::ranges::sort(lifts, [](const Lift& a, const Lift& b) {
+        return a.full != b.full ? a.full > b.full : a.id < b.id;
+      });
+      auto projected = live;
+      for (const auto& lift : lifts)
+      {
+        if (report.unfloored.size() == UnfloorsPerFrame)
+        {
+          m_budgetLeft = true;
+          break;
+        }
+        if (projected + lift.full >= budget - budget / 8)
+        {
+          continue;
+        }
+        if (m_images.unfloor(lift.id, frame))
+        {
+          projected += lift.full;
+          report.unfloored.push_back(lift.id);
+        }
+      }
+    }
     return;
   }
   // nothing was left to let go at this live figure: no further pass until it changes
   if (m_budgetExhaustedLive == live)
   {
     return;
+  }
+  // F2.1: the targets and geometry alone pass the budget, or leave the textures under an
+  // eighth of it: said once, and nothing is evicted or floored for the session's budget
+  // (no eviction brings the live figure under it)
+  report.fixedOver = live > budget && allowance < budget / 8;
+  if (report.fixedOver && !std::exchange(m_fixedBudgetWarned, true))
+  {
+    m_events.post(
+      SessionEvent::Warning,
+      fmt::format(
+        "The lit preview's render targets and geometry use {} MB of its GPU memory "
+        "budget of {} MB: the targets and geometry alone pass the budget, so no texture "
+        "is evicted for it",
+        fixed / (1024 * 1024),
+        budget / (1024 * 1024)));
   }
 
   // what is let go already and waits for its frames, and the complete textures the
@@ -1547,7 +1646,7 @@ void RenderThread::budgetPass()
   };
   auto needed = std::uint64_t{0};
   auto passing = std::uint64_t{0};
-  if (live > budget)
+  if (live > budget && !report.fixedOver)
   {
     needed = excess(live, budget - budget / 16);
     passing = excess(live, budget);
@@ -1561,32 +1660,42 @@ void RenderThread::budgetPass()
   }
   if (needed == 0)
   {
+    if (report.fixedOver)
+    {
+      m_budgetExhaustedLive = live;
+    }
     return;
   }
 
   // the candidates: Resident slots, no intrinsic, their own complete texture bound, no
   // frame has bound for EvictionIdleFrames frames (the max lastUsed over their sets, the
-  // stamp of C64's record path, A54; 0 when no set holds them); never one of this frame
+  // stamp of C64's record path, A54; 0 when no set holds them) and (F2.1) none since
+  // EvictionIdleTime ago; never one of this frame
   struct Candidate
   {
     std::uint64_t lastBound = 0;
     ImageSlotId id = NoImageSlot;
   };
   auto candidates = std::vector<Candidate>{};
-  const auto complete = [&](const ImageSlots::Slot& slot) {
-    return slot.state == ImageSlots::State::Resident && slot.intrinsic != NoImageSlot
-           && slot.texture && slot.firstWrittenMip == 0 && slot.mipLevels > 0;
-  };
   for (ImageSlotId id = 0; id < ImageSlotId(m_images.size()); ++id)
   {
     if (!complete(*m_images.slot(id)))
     {
       continue;
     }
-    const auto last = m_bindingSets.lastBound(id).value_or(0);
-    if (last + EvictionIdleFrames <= frame)
+    const auto bound = m_bindingSets.lastBound(id);
+    const auto last = bound.value_or(0);
+    if (last + EvictionIdleFrames > frame)
+    {
+      continue;
+    }
+    if (!bound || (idleThrough && *bound <= *idleThrough))
     {
       candidates.push_back(Candidate{last, id});
+    }
+    else
+    {
+      ++report.waiting;
     }
   }
   // least recently bound first
@@ -1618,7 +1727,8 @@ void RenderThread::budgetPass()
   // itself still passed: the bound slots not at their floor, the largest first, through
   // the Replacing path, to the budget less a sixteenth; a floor's saving as its levels'
   // share of the texture (a level a quarter of the one before)
-  if (freed < passing && !m_budgetLeft)
+  // (F2.1: not while an unbound slot waits for its idle time: that one goes first)
+  if (freed < passing && !m_budgetLeft && report.waiting == 0)
   {
     struct FloorCandidate
     {
@@ -1668,7 +1778,7 @@ void RenderThread::budgetPass()
 
   // every bound slot at its floor and the budget still passed: said once (D77 accepts
   // the floor)
-  if (done == 0 && passing > 0)
+  if (done == 0 && passing > 0 && report.waiting == 0)
   {
     m_budgetExhaustedLive = live;
     if (m_extensionOver)
@@ -3087,8 +3197,9 @@ void RenderThread::framesCompleted(const std::uint64_t completedFrames)
   m_images.collectRetired(m_completedFrames);
   // LP6.4a (C68 (a), D35): the heap ranges freed in those frames, after their textures
   m_textureHeaps.reclaim(m_completedFrames);
-  // LP6.4b (the director's reading (7)): a heap left with no range is released
-  m_textureHeaps.releaseEmpty();
+  // LP6.4b (the director's reading (7)): a heap left with no range is released; F2.1:
+  // once it held none for EmptyHeapKeepTime
+  m_textureHeaps.releaseEmpty(FrameClock::now(), EmptyHeapKeepTime);
 }
 
 void RenderThread::refreshImages()

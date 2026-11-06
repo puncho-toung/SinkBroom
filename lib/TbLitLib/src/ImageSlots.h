@@ -184,8 +184,10 @@ public:
     bool waitsForRoom = false;
     // LP6.4b (C68 (b), the director's reading (4)): at the mip floor: its textures are
     // made from the image's levels from the first of at most MipFloorExtent on; kept
-    // until the slot is evicted
+    // until the slot is evicted or (F2.2, 2026-11-05) the budget lifts it (unfloor), and
+    // the complete texture's bytes when it was floored (what lifting it costs again)
     bool floored = false;
+    std::uint64_t flooredFrom = 0;
     // why the service has no image (Default)
     std::string reason;
   };
@@ -227,6 +229,7 @@ private:
   std::unordered_set<ImageSlotId> m_wanted;
   std::uint64_t m_evictions = 0;
   std::uint64_t m_floors = 0;
+  std::uint64_t m_unfloors = 0;
   // LP6.4b (C68 (c)): the in-place rule, and the fed images written in place so far
   InPlaceRule m_inPlace;
   std::uint64_t m_inPlaceWrites = 0;
@@ -307,10 +310,19 @@ public:
    * already floored
    */
   bool floor(ImageSlotId slot, std::uint64_t frame);
+  /**
+   * F2.2 (2026-11-05): a floored Resident slot whose floor texture is complete is asked
+   * again at its full levels through the Replacing path (the floor texture bound until
+   * the full one is written; the mark cleared, so no later request keeps the floor);
+   * false when it is not floored, Resident and complete
+   */
+  bool unfloor(ImageSlotId slot, std::uint64_t frame);
   // the session's evictions and floors so far, and the slots at the floor now
   std::uint64_t evictions() const;
   std::uint64_t floors() const;
   std::size_t floored() const;
+  // F2.2: the floors lifted so far
+  std::uint64_t unfloors() const;
   // the replaced bytes of the floors in flight (Replacing with the floor mark), which
   // their swaps let go
   std::uint64_t flooringBytes() const;

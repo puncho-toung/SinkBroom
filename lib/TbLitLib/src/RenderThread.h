@@ -528,6 +528,16 @@ private:
   bool m_extensionOver = false;
   std::optional<std::uint64_t> m_budgetExhaustedLive;
   bool m_budgetLeft = false;
+  // F2.1 (2026-11-05, Q49 per DQ-1): whether the session said once that its targets and
+  // geometry alone pass the budget, and for the time-based idle rule the recent frames'
+  // indexes and start times, one every FrameStartSample at most (a ring of fixed size,
+  // no allocation per frame), the oldest the newest that started EvictionIdleTime ago or
+  // earlier
+  static constexpr auto FrameStartSample = std::chrono::milliseconds{100};
+  bool m_fixedBudgetWarned = false;
+  std::array<std::pair<std::uint64_t, FrameClock::time_point>, 32> m_frameStarts{};
+  std::size_t m_frameStartsFirst = 0;
+  std::size_t m_frameStartsCount = 0;
   // LP6.4b (C68 (b)) test hook: called after every frame's budget pass (m_mutex)
   std::function<void(const BudgetPassReport&)> m_budgetPassHook;
   // LP6.4b (C68 (d), D174, A60): the compaction a settled frame marked, when, and the

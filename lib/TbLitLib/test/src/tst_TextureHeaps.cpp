@@ -293,13 +293,33 @@ TEST_CASE("TextureHeaps")
     REQUIRE(a);
     REQUIRE(b);
     CHECK(b->heap == 1u);
-    CHECK(heaps.releaseEmpty() == 0u);
+    // F2.1 (2026-11-05): released once it held no range for the keep time, by the clock
+    // the caller gives
+    const auto t0 = std::chrono::steady_clock::time_point{} + std::chrono::hours{1};
+    const auto keep = std::chrono::milliseconds{1000};
+    CHECK(heaps.releaseEmpty(t0, keep) == 0u);
     // freed in frame 4: pending, never released while a range waits
     CHECK(heaps.retire(textures[1].Get(), 4));
-    CHECK(heaps.releaseEmpty() == 0u);
+    CHECK(heaps.releaseEmpty(t0, keep) == 0u);
     heaps.reclaim(5);
     CHECK(heaps.pendingBytes() == 0u);
-    CHECK(heaps.releaseEmpty() == 1u);
+    // empty from t0 + 10 ms; a placement before the keep time takes the heap again, which
+    // survives: no free and allocate again
+    CHECK(heaps.releaseEmpty(t0 + std::chrono::milliseconds{10}, keep) == 0u);
+    CHECK(heaps.releaseEmpty(t0 + std::chrono::milliseconds{900}, keep) == 0u);
+    const auto again = heaps.place(textures[1].Get(), requirements(64 * KiB, 4 * KiB));
+    REQUIRE(again);
+    CHECK(again->heap == 1u);
+    CHECK(heaps.releaseEmpty(t0 + std::chrono::milliseconds{1500}, keep) == 0u);
+    CHECK(heaps.heapsReleased() == 0u);
+    CHECK(heaps.heaps() == 2u);
+    CHECK(heaps.retire(textures[1].Get(), 5));
+    heaps.reclaim(6);
+    // empty again from t0 + 2 s: kept for the keep time, then released
+    CHECK(heaps.releaseEmpty(t0 + std::chrono::milliseconds{2000}, keep) == 0u);
+    CHECK(heaps.releaseEmpty(t0 + std::chrono::milliseconds{2999}, keep) == 0u);
+    CHECK(heaps.heaps() == 2u);
+    CHECK(heaps.releaseEmpty(t0 + std::chrono::milliseconds{3000}, keep) == 1u);
     CHECK(heaps.heapsReleased() == 1u);
     CHECK(heaps.heaps() == 1u);
     CHECK(heaps.capacityBytes() == 128 * KiB);
@@ -312,10 +332,11 @@ TEST_CASE("TextureHeaps")
     CHECK(*c == HeapPlacement{1, ArenaRange{0, 32 * KiB}});
     CHECK(heaps.heaps() == 2u);
     CHECK(heaps.placementOf(textures[2].Get()) == c);
-    CHECK(heaps.retire(textures[0].Get(), 6));
-    CHECK(heaps.retire(textures[2].Get(), 6));
-    heaps.reclaim(7);
-    CHECK(heaps.releaseEmpty() == 2u);
+    CHECK(heaps.retire(textures[0].Get(), 7));
+    CHECK(heaps.retire(textures[2].Get(), 7));
+    heaps.reclaim(8);
+    CHECK(heaps.releaseEmpty(t0 + std::chrono::seconds{4}, keep) == 0u);
+    CHECK(heaps.releaseEmpty(t0 + std::chrono::seconds{5}, keep) == 2u);
     CHECK(heaps.heaps() == 0u);
     heaps.releaseAll();
   }

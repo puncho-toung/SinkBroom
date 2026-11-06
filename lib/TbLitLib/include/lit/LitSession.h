@@ -455,6 +455,12 @@ struct BudgetPassReport
   std::vector<std::pair<std::uint32_t, std::uint64_t>> evicted;
   std::vector<std::uint32_t> floored;
   std::vector<std::uint32_t> reRequested;
+  // F2.2 (2026-11-05): the floors this pass lifted; F2.1: the candidates idle for
+  // EvictionIdleFrames frames that are not yet idle for EvictionIdleTime, and whether the
+  // targets and geometry alone passed the budget (nothing evicted or floored for it)
+  std::vector<std::uint32_t> unfloored;
+  std::size_t waiting = 0;
+  bool fixedOver = false;
   std::vector<std::uint32_t> drawn;
   std::uint64_t liveBytes = 0;
   std::uint64_t budgetBytes = 0;

@@ -25,6 +25,7 @@
 #include <nvrhi/nvrhi.h>
 #include <vulkan/vulkan.hpp>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -182,6 +183,8 @@ private:
     // LP6.4b (the director's reading (7)): false once released (its index kept, reused
     // by the next heap made)
     bool live = true;
+    // F2.1: since when it holds no range (released after EmptyHeapKeepTime)
+    std::optional<std::chrono::steady_clock::time_point> emptySince;
   };
 
   nvrhi::IDevice* m_device = nullptr;
@@ -243,9 +246,13 @@ public:
    * LP6.4b (C68 (b), the director's reading (7)), after reclaim: a heap with no range
    * handed out (none placed, none pending) is released, its handle let go (its memory
    * freed once no texture bound into it lives: a retired texture holds its heap); its
-   * index stays (a placement's heap) and the next heap made takes it. How many.
+   * index stays (a placement's heap) and the next heap made takes it. How many. F2.1
+   * (2026-11-05): only once it has held no range for keep (EmptyHeapKeepTime) by now's
+   * clock: an emptied heap the next placement can take is kept (no free and allocate
+   * again while a moving camera evicts and asks again)
    */
-  std::size_t releaseEmpty();
+  std::size_t releaseEmpty(
+    std::chrono::steady_clock::time_point now, std::chrono::steady_clock::duration keep);
   // the heaps released so far
   std::uint64_t heapsReleased() const;
 

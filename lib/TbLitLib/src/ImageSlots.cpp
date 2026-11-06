@@ -290,6 +290,7 @@ std::uint64_t ImageSlots::evict(const ImageSlotId id, const std::uint64_t frame)
   slot.writeInPlace = false;
   slot.waitsForRoom = false;
   slot.floored = false;
+  slot.flooredFrom = 0;
   slot.state = State::Evicted;
   ++m_stateVersion;
   ++m_evictions;
@@ -352,9 +353,36 @@ bool ImageSlots::floor(const ImageSlotId id, const std::uint64_t frame)
   }
   m_frame = std::max(m_frame, frame);
   slot.floored = true;
+  slot.flooredFrom = slot.textureBytes;
   ++m_floors;
   reRequest(id, frame, true, false);
   return true;
+}
+
+bool ImageSlots::unfloor(const ImageSlotId id, const std::uint64_t frame)
+{
+  if (id >= m_slots.size())
+  {
+    return false;
+  }
+  auto& slot = m_slots[id];
+  const auto complete = slot.state == State::Resident && slot.texture
+                        && slot.firstWrittenMip == 0 && slot.mipLevels > 0;
+  if (!complete || !slot.floored)
+  {
+    return false;
+  }
+  m_frame = std::max(m_frame, frame);
+  slot.floored = false;
+  slot.flooredFrom = 0;
+  ++m_unfloors;
+  reRequest(id, frame, true, false);
+  return true;
+}
+
+std::uint64_t ImageSlots::unfloors() const
+{
+  return m_unfloors;
 }
 
 std::uint64_t ImageSlots::evictions() const
