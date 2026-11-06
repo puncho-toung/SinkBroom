@@ -803,16 +803,6 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
   // Occlusion::cullSurfaces). Then R_AddSingleModel's test of every listed surface, the
   // world's included (FAM:660-727): a hidden surface leaves the lists (no draw, no
   // interaction); its shadow is the caster sets', on screen or off (FAL's rules)
-  // F3.4 (2026-11-05): before it, the units with a surface in the view, the engine's
-  // directly visible entities (IsDirectlyVisible, FAL:76-90: a view entity the flow made
-  // with a scissor), which cast whatever the view; the others cast only where their
-  // shadow bounds meet the view (FAL:577-615, the caster loop below)
-  auto directlyVisible = std::set<CasterUnit>{};
-  for (const auto& surface : visible)
-  {
-    directlyVisible.insert(casterUnitOf(
-      surface.chunk->key, !surface.instance && !stateOf(surface.chunk->key.entity)));
-  }
   if (inputs.occlusion)
   {
     auto occluder = std::vector<char>(visible.size(), 0);
@@ -1186,6 +1176,32 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
   auto fresh = std::optional<CasterSets>{};
   auto& sets = inputs.casterSets ? *inputs.casterSets : fresh.emplace();
   sets.beginBuild(casterSetsKeyOf(inputs, flow.flowed));
+  // V-F.2 (2026-11-06): the engine's directly visible entities (IsDirectlyVisible,
+  // FAL:79-92), which cast whatever the view: a view entity the flow gave a scissor
+  // (FAM:340, modelIsVisible) - its reference bounds through the flowed areas' portal
+  // stacks (CullEntityByPortals, the flow's entityRects; an area model referenced in its
+  // own area, a world area the flow reached) - whatever its listed surfaces' own culls;
+  // the outside set (D81) and every unit without a tree (D94, K58), which no flow
+  // judges, by their reference bounds in the view's frustum
+  auto directlyVisible = std::map<CasterUnit, bool>{};
+  const auto unitDirectlyVisible = [&](const CasterUnit& unit) {
+    if (flow.flowed)
+    {
+      if (unit.world && unit.area >= 0 && std::size_t(unit.area) < numAreas)
+      {
+        return flow.worldRects[std::size_t(unit.area)].has_value();
+      }
+      if (!unit.world)
+      {
+        if (const auto* state = stateOf(unit.entity); state && !state->areas.empty())
+        {
+          return flow.entityRects.contains(unit.entity);
+        }
+      }
+    }
+    const auto* bounds = sets.unitBounds(inputs, unit);
+    return bounds && !engineCullBoundsToMvp(view.worldMvp, *bounds, false);
+  };
   for (auto& viewLight : lists.lights)
   {
     if (viewLight.shadowLod < 0 || !viewLight.shader)
@@ -1211,7 +1227,12 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       const auto& kept = set.casters[c];
       const auto unit =
         casterUnitOf(kept.key, !kept.isInstance && !stateOf(kept.key.entity));
-      if (!directlyVisible.contains(unit))
+      const auto [seen, judged] = directlyVisible.try_emplace(unit, false);
+      if (judged)
+      {
+        seen->second = unitDirectlyVisible(unit);
+      }
+      if (!seen->second)
       {
         const auto [it, made] = unitCasts.try_emplace(unit, true);
         if (made)

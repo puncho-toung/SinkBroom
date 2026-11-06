@@ -26310,6 +26310,179 @@ TEST_CASE("LitSession a light whose casters are all off the view (F3.4)", "[.][l
   std::filesystem::remove_all(root);
 }
 
+namespace
+{
+
+/**
+ * V-F.2: lp3_point's room with lp3_reach (origin -145 0 128, radius 85 300 150: x -230 to
+ * -60, y -300 to 300) lighting a noShadows panel in front of the camera at -200 0 128 (x
+ * -70 to -66), and lp3_reach_unit, a func_static of two boxes: off the view, one behind
+ * the camera inside lp3_reach (its only caster), one far beyond the view's left side
+ * outside every light; the unit's reference bounds meet the view, neither box does, and
+ * its shadow bounds in lp3_reach (y 230 to 300 over x -230 to -60) miss it. inView: the
+ * first box stands in front of the camera inside lp3_reach instead (a caster in view)
+ */
+std::string reachMap(const bool inView)
+{
+  auto map = lp3MapText("lp3_point.map");
+  const auto entity1 = map.find("// entity 1");
+  map.insert(map.rfind('}', entity1), boxBrush(-70, -40, 100, -66, 40, 156, "lp3/room"));
+  map +=
+    "// entity 4\n{\n\"classname\" \"light\"\n\"name\" \"lp3_reach\"\n\"origin\" \"-145 "
+    "0 "
+    "128\"\n\"light_radius\" \"85 300 150\"\n\"_color\" \"1 1 1\"\n\"noshadows\" "
+    "\"0\"\n}\n";
+  map +=
+    "// entity 5\n{\n\"classname\" \"func_static\"\n\"name\" "
+    "\"lp3_reach_unit\"\n\"model\" "
+    "\"lp3_reach_unit\"\n\"origin\" \"-220 240 128\"\n";
+  map += inView ? boxBrush(-100, 30, 120, -90, 50, 136, "lp3/box")
+                : boxBrush(-225, 230, 120, -215, 250, 136, "lp3/box");
+  map += boxBrush(200, 650, 120, 220, 670, 136, "lp3/box") + "}\n";
+  return map;
+}
+
+} // namespace
+
+// V-F.2 (2026-11-06, K49): the engine's directly visible entity is the view entity the
+// flow gave a scissor (FAM:340 modelIsVisible, IsDirectlyVisible FAL:79-92), judged on
+// its reference bounds, and every surface it has in a light casts whatever the view
+// (FAM:384-394): lp3_reach_unit, whose bounds meet the view (no tree: the frustum, D94)
+// while neither of its boxes does, and whose shadow bounds in lp3_reach miss the view, is
+// lp3_reach's only caster - a record, a tile, shadow draws, interactionSM - and the two
+// lights are packed as in the scene whose caster stands in view. Before V-F.2 a unit was
+// directly visible only with a listed surface: no tile and the plain interaction program.
+// Hidden: it needs a GPU and the game's blobs.
+TEST_CASE(
+  "LitSession a unit whose bounds meet the view with none of its surfaces (V-F.2)",
+  "[.][litgpu4]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto root = assembleLp3Root(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  const auto roomView = litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1});
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto service = rootService(root);
+    auto events = Events{};
+    auto session = mocSession(instance, events, *service, root, false, true);
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+    auto sequence = std::uint64_t{0};
+    const auto anyRecord = [](const LightRecord&) { return true; };
+    const auto drawLog = [&] {
+      REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+        access.passes.setDrawLogForTesting(true);
+      }));
+    };
+
+    // the control: the caster in view
+    offerMocScene(
+      *session,
+      lp3Snapshot(reachMap(true), root, "lp3_reach.map", ++sequence),
+      "lp3_reach",
+      anyRecord);
+    drawLog();
+    const auto control = settledShadowFrame(*session, roomView, 2, true);
+    REQUIRE(control);
+    // the unit whose bounds alone meet the view
+    offerMocScene(
+      *session,
+      lp3Snapshot(reachMap(false), root, "lp3_reach.map", ++sequence),
+      "lp3_reach",
+      anyRecord);
+    drawLog();
+    const auto unit = settledShadowFrame(*session, roomView, 2, true);
+    REQUIRE(unit);
+    const auto reach = lightNamed(*session, "lp3_reach");
+    const auto point = lightNamed(*session, "lp3_point");
+    REQUIRE(reach);
+    REQUIRE(point);
+
+    auto reachShadowDraws = std::size_t{0};
+    auto reachInteractions = std::size_t{0};
+    auto reachPlain = std::size_t{0};
+    for (const auto& draw : unit->drawLog)
+    {
+      if (draw.pass == LitDrawRecord::Pass::Shadow && draw.light == reach->id)
+      {
+        ++reachShadowDraws;
+      }
+      if (draw.pass == LitDrawRecord::Pass::Interaction && draw.light == reach->id)
+      {
+        ++reachInteractions;
+        reachPlain += draw.program == EngineBuiltinInteraction ? 1 : 0;
+      }
+    }
+    const auto recordOf = [](const ShadowFrame& frame, const PreviewId light) {
+      return std::ranges::find_if(
+        frame.records, [&](const ShadowLightRecord& r) { return r.light == light; });
+    };
+    std::cout << fmt::format(
+      "V-F.2: lights [{}]; casting {} (records {}, the control's {}), casters off the "
+      "view {}; lp3_reach's shadow draws {}, interactions {} ({} of the plain program)\n",
+      fmt::join(unit->lights, " "),
+      unit->stats.lightsCasting,
+      unit->records.size(),
+      control->records.size(),
+      unit->stats.castersOffView,
+      reachShadowDraws,
+      reachInteractions,
+      reachPlain);
+    CHECK(unit->lights.size() == 2u);
+    CHECK(unit->stats.castersOffView == 0u);
+    REQUIRE(recordOf(*unit, reach->id) != unit->records.end());
+    CHECK(reachShadowDraws > 0u);
+    CHECK(reachInteractions > 0u);
+    CHECK(reachPlain == 0u);
+    // both lights packed as in the control (a tile's place and size are the light's, not
+    // its casters')
+    CHECK(unit->records.size() == control->records.size());
+    for (const auto light : {reach->id, point->id})
+    {
+      CAPTURE(light);
+      const auto mine = recordOf(*unit, light);
+      const auto theirs = recordOf(*control, light);
+      REQUIRE(mine != unit->records.end());
+      REQUIRE(theirs != control->records.end());
+      CHECK(mine->imageSize == theirs->imageSize);
+      CHECK(mine->sides == theirs->sides);
+      for (std::size_t s = 0; s < std::size_t(mine->sides); ++s)
+      {
+        CAPTURE(s);
+        CHECK(mine->placements[s].placed == theirs->placements[s].placed);
+        CHECK(mine->placements[s].x == theirs->placements[s].x);
+        CHECK(mine->placements[s].y == theirs->placements[s].y);
+        CHECK(mine->placements[s].size == theirs->placements[s].size);
+      }
+    }
+
+    teardown(*session, std::nullopt);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  CHECK(resetDispatcher());
+  CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+  messages.print("V-F.2, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+  std::filesystem::remove_all(root);
+}
+
 } // namespace tb::lit
 
 #endif

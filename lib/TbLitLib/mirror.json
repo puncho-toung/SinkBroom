@@ -32334,6 +32334,15 @@
           "sha256": "23da91c39386f4f0825710019e01ad4632c6bc89c41c4575683c8fa458133f7d"
         },
         {
+          "file": "neo/renderer/tr_frontend_addmodels.cpp",
+          "lines": [
+            339,
+            341
+          ],
+          "anchor": "R_AddSingleModel: modelIsVisible, the view entity's portal-flow scissor not empty (an entity added for light shadows alone has none)",
+          "sha256": "edce3abd00bfab1948b14caf74db6c2511098d211bf2a3f64f3c6a9c2626fee4"
+        },
+        {
           "file": "neo/renderer/tr_frontend_addlights.cpp",
           "lines": [
             576,
@@ -32355,7 +32364,7 @@
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/src/LitFrontend.cpp",
-          "symbol": "engineShadowBounds; buildFrontendLists (directlyVisible before the masked occlusion cull, the caster loop's off-view rule, ViewLight::casterHash and casterCount, FrontendLists::castersOffView)"
+          "symbol": "engineShadowBounds; buildFrontendLists (unitDirectlyVisible: the flow's worldRects and entityRects, the frustum for the outside set and without a tree; the caster loop's off-view rule, ViewLight::casterHash and casterCount, FrontendLists::castersOffView)"
         },
         {
           "file": "lib/TbLitLib/src/LitFrontend.h",
@@ -32376,9 +32385,13 @@
         {
           "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
           "symbol": "LitSession a light whose casters are all off the view (F3.4), [.][litgpu4]"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession a unit whose bounds meet the view with none of its surfaces (V-F.2), [.][litgpu4]"
         }
       ],
-      "note": "F3.4 (the final review cycle, 2026-11-05; K49 exceeded at LP3: a light whose casters were all off-screen took tiles and interactionSM where the engine has globalShadows NULL): R_AddSingleLight's entity loop transcribed over the preview's units (CasterUnit): an entity's chunks and model instances, or the world's chunks of one area (the engine's _areaN models; without a tree the world chunks' key area). A unit with a surface in the build's visible list (after the flow and the frustum, before the masked occlusion cull: the engine's view entity with a scissor) is directly visible and its casters cast; every other unit's casters cast only when engineShadowBounds (R_ShadowBounds, the __fsels transcribed) of its global reference bounds (CasterSets::unitBounds: the union of its chunks' and instances' local bounds, every cast class, through ProjectedBounds( OffsetScaleForBounds( modelRenderMatrix, bounds ), unit cube ) as R_DeriveEntityData; the world's at identity), the light's globalLightBounds and globalLightOrigin pass engineCullBoundsToMvp( the view's unjittered worldMvp ) (the engine's worldSpace.mvp; parity runs without jitter). The casters left out move the record key's caster hash by their places in the set and its caster count, so a tile is drawn again when the view moves one in or out; a light left with no caster has no shadow surface: no tile, no shadow draw, the plain interaction program, and the other lights packed without it (D160's shape). The caster sets stay the view-free sets of M-SHADOW-CAST-02 (kept across camera moves); the rule is applied per build when each light's casters are taken from its set. r_skipSuppress and the suppressShadow ids have no editor counterpart. The remaining difference is the unit's granularity and its visibility test (M-SHADOW-DIFF-03)"
+      "note": "F3.4 (the final review cycle, 2026-11-05; K49 exceeded at LP3: a light whose casters were all off-screen took tiles and interactionSM where the engine has globalShadows NULL): R_AddSingleLight's entity loop transcribed over the preview's units (CasterUnit): an entity's chunks and model instances, or the world's chunks of one area (the engine's _areaN models; without a tree the world chunks' key area). A unit is directly visible as the engine's view entity is (IsDirectlyVisible, FAL:79-92; FAM:340 modelIsVisible: the scissor the portal flow gave it, AddAreaViewEntities' CullEntityByPortals of its reference bounds), whatever its listed surfaces' own culls (V-F.2, the verifier's fix round, 2026-11-06; until then a unit counted only with a surface in the build's visible list, so one whose bounds met the view while each of its surfaces was culled per surface lost its casters and a light its tile): with a tree, a world area the flow reached (worldRects; an area model is referenced in its own area alone) or an entity with references the flow gave a scissor (entityRects); the outside set (D81) and every unit without a tree (D94, K58), which no flow judges, by its reference bounds (CasterSets::unitBounds) in the view's frustum (engineCullBoundsToMvp of the unjittered worldMvp). A directly visible unit's every casting surface in the light casts (FAM:384-394: no shadow-bounds test for it); every other unit's casters cast only when engineShadowBounds (R_ShadowBounds, the __fsels transcribed) of its global reference bounds (CasterSets::unitBounds: the union of its chunks' and instances' local bounds, every cast class, through ProjectedBounds( OffsetScaleForBounds( modelRenderMatrix, bounds ), unit cube ) as R_DeriveEntityData; the world's at identity), the light's globalLightBounds and globalLightOrigin pass engineCullBoundsToMvp( the view's unjittered worldMvp ) (the engine's worldSpace.mvp; parity runs without jitter). The casters left out move the record key's caster hash by their places in the set and its caster count, so a tile is drawn again when the view moves one in or out; a light left with no caster has no shadow surface: no tile, no shadow draw, the plain interaction program, and the other lights packed without it (D160's shape). The caster sets stay the view-free sets of M-SHADOW-CAST-02 (kept across camera moves); the rule is applied per build when each light's casters are taken from its set. r_skipSuppress and the suppressShadow ids have no editor counterpart. The remaining difference is the unit's granularity and its visibility test (M-SHADOW-DIFF-03)"
     },
     {
       "id": "M-SHADOW-COPY-05",
@@ -32855,7 +32868,7 @@
           "symbol": "LitPasses::shadowMapPass"
         }
       ],
-      "note": "K49 restated (F3.4, the final review cycle, 2026-11-05): the engine leaves out of a light's shadows an entity that is not directly visible and whose shadow bounds (R_ShadowBounds of its reference bounds from the light origin) the view's MVP culls; the preview applies the same rule since F3.4 (M-SHADOW-CAST-03), over its own units: an entity, or the world's chunks of one area for the engine's area model, directly visible when a surface of it is in the build's visible list (the flow and the frustum of the editor's chunks, where the engine's view entity takes the portal-flow scissor of its reference bounds), the reference bounds the union of the unit's chunks and instances. A unit whose chunks all miss the frustum while its bounds meet it, or one the two flows treat differently, can be judged on one side only; the cull is conservative either way, so a shadow in view is the same and only the PCF taps at the view's edges can differ (K49's envelope). Until F3.4 the preview kept every caster on screen or off, so a light whose casters were all off-screen took tiles and the shadow-atlas program where the engine drew the plain interaction"
+      "note": "K49 restated (F3.4, the final review cycle, 2026-11-05): the engine leaves out of a light's shadows an entity that is not directly visible and whose shadow bounds (R_ShadowBounds of its reference bounds from the light origin) the view's MVP culls; the preview applies the same rule since F3.4 (M-SHADOW-CAST-03), over its own units: an entity, or the world's chunks of one area for the engine's area model, directly visible as the engine's view entity is (V-F.2, 2026-11-06: the flow's scissor of its reference bounds, FAM:340, whatever its surfaces; the outside set and the no-tree world by those bounds in the frustum), the reference bounds the union of the unit's chunks and instances. A unit the two flows treat differently (the editor's chunks against dmap's, K28), or one of the outside set, which the engine has not, can be judged on one side only; the cull is conservative either way, so a shadow in view is the same and only the PCF taps at the view's edges can differ (K49's envelope). Until F3.4 the preview kept every caster on screen or off, so a light whose casters were all off-screen took tiles and the shadow-atlas program where the engine drew the plain interaction"
     },
     {
       "id": "M-SHADOW-DIFF-04",
