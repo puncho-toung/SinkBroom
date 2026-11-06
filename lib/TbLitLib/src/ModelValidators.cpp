@@ -1403,11 +1403,13 @@ private:
       }
       corners += 3 * object.mesh.numFaces;
     }
-    if (corners > static_cast<long long>(MaxObjCorners))
+    if (corners > static_cast<long long>(MaxObjSourceCorners))
     {
       fail(fmt::format(
-        "more than {} face corners (the conversion's 16-bit indexes, Model.cpp:2033)",
-        MaxObjCorners));
+        "more than {} face corners (the preview's memory guard; the engine's limit is "
+        "65,536 welded vertices per surface, Model.cpp:2033's 16-bit indexes, tested "
+        "after the finish)",
+        MaxObjSourceCorners));
     }
   }
 
@@ -1568,7 +1570,6 @@ private:
   static constexpr auto MaxLayers = std::size_t{256};
   static constexpr auto MaxPoints = std::size_t{1} << 20;
   static constexpr auto MaxPolygons = std::size_t{1} << 20;
-  static constexpr auto MaxFirstLayerPolygons = std::size_t{32767};
   static constexpr auto MaxTags = std::size_t{256};
   static constexpr auto MaxSurfaces = std::size_t{256};
   static constexpr auto MaxVmapDimension = std::size_t{16};
@@ -2365,21 +2366,16 @@ private:
       fail(0, "surfaces without points in the first layer (Model.cpp:2212-2216)");
       return;
     }
-    if (first.polygons > MaxFirstLayerPolygons)
-    {
-      fail(
-        0,
-        fmt::format("more than {} polygons in the first layer", MaxFirstLayerPolygons));
-      return;
-    }
-    if (3 * first.triangles > MaxObjCorners)
+    if (3 * first.triangles > MaxObjSourceCorners)
     {
       fail(
         0,
         fmt::format(
-          "more than {} triangle corners (the conversion's 16-bit indexes, "
-          "Model.cpp:2477)",
-          MaxObjCorners));
+          "more than {} triangle corners (the preview's memory guard; the engine's limit "
+          "is 65,536 welded vertices per surface, Model.cpp:2477's 16-bit indexes, "
+          "tested "
+          "after the finish)",
+          MaxObjSourceCorners));
     }
   }
 

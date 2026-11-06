@@ -1361,8 +1361,8 @@ private:
     if (*vertices > MaxGltfPrimitiveVerts)
     {
       return fmt::format(
-        "{}: {} vertices, more than the {} the preview takes (16-bit triIndex_t, "
-        "Model_gltf.cpp:99-115)",
+        "{}: {} vertices, more than the {} the engine's 16-bit triIndex_t numbers "
+        "(Model_gltf.cpp:99-115, sys_types.h:145)",
         what,
         *vertices,
         MaxGltfPrimitiveVerts);

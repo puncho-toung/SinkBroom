@@ -68,9 +68,11 @@ namespace tb::lit
  */
 std::optional<std::string> objFileProblem(std::string_view bytes);
 
-// the corner bound the ASE and LWO validators apply (LP7.1b; their conversions' 16-bit
-// indexes, Model.cpp:2033, :2477)
-inline constexpr std::size_t MaxObjCorners = 32767;
+// F3.17 (2026-11-05): the ASE and LWO validators' corner bound is objFileProblem's
+// memory guard (MaxObjSourceCorners). The engine's bound is a finished surface's 65,536
+// welded vertices (its conversions number them in 16-bit indexes, Model.cpp:2033, :2477,
+// sys_types.h:145), which modelSurfaceProblem tests after the finish, as for an OBJ
+// (LP7.1b's 32,767 corners per file refused models the engine loads)
 // LP7.2: objFileProblem's memory guards (the preview's own)
 inline constexpr std::size_t MaxObjSourceCorners = std::size_t{1} << 22;
 inline constexpr std::size_t MaxObjObjects = 65536;
@@ -108,9 +110,11 @@ inline constexpr std::size_t MaxModelSurfaceVerts = 65536;
  *   index in range (Model.cpp:1959-1962, then vRemap[v]), a *MESH_TFACELIST with indexes
  *   in range when the coordinates are used (:1966-1974), a *MESH_CFACELIST when the mesh
  *   has colours (:1985-1989: else uninitialised), every *MATERIAL_REF naming a material
- *   (:1803, :1815, :2058 index unchecked; :1859 lets a negative through), at most 32,767
- *   face corners in the objects' meshes (the 16-bit indexes, :2033), at most 1,024
- *   objects (the _alloca of :1779) and 1,024 materials;
+ *   (:1803, :1815, :2058 index unchecked; :1859 lets a negative through), at most
+ *   MaxObjSourceCorners face corners in the objects' meshes (the preview's memory guard;
+ *   F3.17: the engine's bound, a surface's 65,536 welded vertices in :2033's 16-bit
+ *   indexes, is modelSurfaceProblem's after the finish), at most 1,024 objects (the
+ *   _alloca of :1779) and 1,024 materials;
  * - every number atof or atoi reads a plain finite decimal (at most 1e30 in size: the
  *   conversion's bounds and idVectorSubset's boxes stay finite), *BITMAP and
  *   *MATERIAL_NAME under 256 characters (OSPathToRelativePath and the idStr buffers).
@@ -157,8 +161,10 @@ std::optional<std::string> aseFileProblem(std::string_view bytes);
  *   sub-chunk (:4444-4458 never end on one), its ordinal non-empty (:4544), FUNC once;
  * - what the conversion reads: points in the first layer when there are surfaces
  *   (Model.cpp:2212-2216 return after adding them, FinishSurfaces' NULL geometry, :1241),
- *   at most 32,767 polygons and 32,767 triangle corners in the first layer (the 16-bit
- *   indexes, :2477), 256 SURF chunks and 256 tags (the _alloca of :2155), 256 layers.
+ *   at most MaxObjSourceCorners triangle corners in the first layer (the preview's memory
+ *   guard; F3.17: the engine's bound, a surface's 65,536 welded vertices in :2477's
+ * 16-bit indexes, is modelSurfaceProblem's after the finish), 256 SURF chunks and 256
+ * tags (the _alloca of :2155), 256 layers.
  *
  * nullopt when the file passes, else the reason with its byte offset. Pure; any thread.
  */
@@ -167,13 +173,14 @@ std::optional<std::string> lwoFileProblem(std::string_view bytes);
 // LP7.5: gltfFileProblem's bounds (the preview's own, far above any model the engine
 // draws): the counts of nodes, meshes, materials, animations and skins, of accessors
 // and views, of primitives in the file; a primitive's vertices (a surface's 16-bit
-// triIndex_t, Model_gltf.cpp:98-114); a material name's characters (FindMaterial's)
+// triIndex_t, Model_gltf.cpp:98-114: F3.17, 65,536, the vertices its indexes number,
+// sys_types.h:145); a material name's characters (FindMaterial's)
 inline constexpr std::size_t MaxGltfNodes = 65536;
 inline constexpr std::size_t MaxGltfMeshes = 65536;
 inline constexpr std::size_t MaxGltfMaterials = 65536;
 inline constexpr std::size_t MaxGltfAccessors = std::size_t{1} << 20;
 inline constexpr std::size_t MaxGltfPrimitives = 65536;
-inline constexpr std::size_t MaxGltfPrimitiveVerts = 65535;
+inline constexpr std::size_t MaxGltfPrimitiveVerts = 65536;
 inline constexpr std::size_t MaxGltfMaterialName = 256;
 
 // what gltfFileProblem counted in a file that passes: the BIN chunk's bytes (0 for none,
