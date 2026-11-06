@@ -492,6 +492,9 @@ struct BudgetPassReport
   std::vector<std::uint32_t> sticky;
   std::size_t atFloor = 0;
   std::size_t lifting = 0;
+  // V-R.1 (2026-11-06): the device reads the idle ticks have made so far (their polls of
+  // a liftable floor)
+  std::uint64_t idleDeviceReads = 0;
 };
 
 // C30: what the session's device tells the engine's rules (P2.10, P2.13)

@@ -20885,17 +20885,14 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
       // floored 1 -> 0, the floor's texture its full 1024 x 1024 and every level again -
       // and the settled picture is the one before the floor (V-F.1, 2026-11-06: once the
       // live figure has been under the line for UnfloorDwellTime and UnfloorDwellFrames
-      // drawn frames: the camera's frames for 1.5 s)
+      // drawn frames; V-R.1: with no frame driven by the test - the idle tick sees both
+      // figures under their lines and asks a frame, and the dwell draws its own)
       const auto lifting = passes.size();
       session->setVramBudgetForTesting(0);
-      const auto liftStart = std::chrono::steady_clock::now();
-      for (auto frames = 0;
-           std::chrono::steady_clock::now() - liftStart < 1500ms || frames < 8;
-           ++frames)
-      {
-        REQUIRE(oneFrame(*session));
-        std::this_thread::sleep_for(100ms);
-      }
+      REQUIRE(waitFor(
+        [&] { return session->status().texturesFloored == 0u; },
+        UnfloorDwellTime + IdleCollectInterval + 3000ms,
+        false));
       REQUIRE(settledChain(*session, view1));
       REQUIRE(waitQuiet(*session));
       settle(*session);
@@ -21106,6 +21103,132 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
       CHECK(events.count(SessionEvent::Error) == 0u);
     }
     CHECK(resetDispatcher());
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("(i) V-R.1: the pressure ends after the last frame: the floors lift unasked")
+  {
+    // V-R.1 (2026-11-06): the device's pressure floors the fed slots and the session
+    // settles; the pressure then ends with no frame drawn after it and none driven by
+    // the test: the idle tick polls both figures, asks a frame once they are under their
+    // lines, and the dwell draws frames of its own, so every floor is lifted and the
+    // session settles again (before V-R.1 the dwell had no frame of its own and the idle
+    // session kept its floors until an interaction)
+    const auto view = litCamera({-250, 0, 64}, {1, 0, 0}, {0, 0, 1});
+    struct Device
+    {
+      std::mutex mutex;
+      std::uint64_t budget = std::uint64_t{4} << 30;
+    };
+    auto device = std::make_shared<Device>();
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = rootSession(instance, events, *service, root);
+      auto passes = BudgetPasses{};
+      session->setBudgetPassHookForTesting(passes.hook());
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+      REQUIRE(settledChain(*session, view));
+      for (const auto& [name, size] :
+           {std::pair{"textures/lp1b/floor", 1024}, std::pair{"textures/lp1b/wall", 512}})
+      {
+        REQUIRE(
+          service->setImageOverride(name, constantOverride(size, size, {90, 120, 200}))
+            .is_success());
+      }
+      REQUIRE(waitForFeed(*service));
+      REQUIRE(settledChain(*session, view));
+      REQUIRE(waitQuiet(*session));
+      auto live = std::uint64_t{0};
+      REQUIRE(inFrame(
+        *session, [&](RenderFrameAccess& access) { live = accountOf(access).live(); }));
+      session->setDeviceVramForTesting(
+        [device](const std::uint64_t used) -> std::optional<VramUsage> {
+          const auto lock = std::scoped_lock{device->mutex};
+          return VramUsage{used, device->budget};
+        });
+      std::this_thread::sleep_for(EvictionIdleTime + 100ms);
+      // the device's budget well under the live figure: the fed slots floored
+      {
+        const auto lock = std::scoped_lock{device->mutex};
+        device->budget = live / 2;
+      }
+      REQUIRE(oneFrame(*session));
+      REQUIRE(settledChain(*session, view));
+      REQUIRE(waitQuiet(*session));
+      const auto flooredBefore = session->status().texturesFloored;
+      REQUIRE(flooredBefore >= 1u);
+      // the pressure ends after the last frame; nothing is drawn by the test
+      const auto firingsBefore = session->stillTimerFiringsForTesting();
+      const auto presented = session->framesPresented();
+      const auto ended = std::chrono::steady_clock::now();
+      {
+        const auto lock = std::scoped_lock{device->mutex};
+        device->budget = std::uint64_t{4} << 30;
+      }
+      const auto lifted = waitFor(
+        [&] { return session->status().texturesFloored == 0u; },
+        UnfloorDwellTime + IdleCollectInterval + 3000ms,
+        false);
+      const auto liftedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - ended)
+                              .count();
+      const auto ownFrames = session->framesPresented() - presented;
+      const auto idle = waitQuiet(*session);
+      auto idleReads = std::uint64_t{0};
+      auto dwelling = std::size_t{0};
+      for (const auto& report : passes.taken())
+      {
+        idleReads = std::max(idleReads, report.idleDeviceReads);
+        dwelling += report.dwelling ? 1u : 0u;
+      }
+      std::cout << fmt::format(
+        "V-R.1: {} slots floored; the pressure ended with the session idle: every floor "
+        "lifted {} after {} ms, {} frames of the session's own ({} dwelling passes), the "
+        "idle ticks' device reads {}; settled and idle {}; still-timer firings {} -> "
+        "{}\n",
+        flooredBefore,
+        lifted,
+        liftedMs,
+        ownFrames,
+        dwelling,
+        idleReads,
+        idle,
+        firingsBefore,
+        session->stillTimerFiringsForTesting());
+      CHECK(lifted);
+      CHECK(liftedMs < (UnfloorDwellTime + IdleCollectInterval + 1000ms).count());
+      CHECK(ownFrames >= UnfloorDwellFrames);
+      CHECK(idleReads >= 1u);
+      CHECK(idle);
+      CHECK(session->lastFrameSettledForTesting());
+      CHECK(session->stillTimerFiringsForTesting() == firingsBefore);
+
+      session->setDeviceVramForTesting({});
+      session->setBudgetPassHookForTesting({});
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+    messages.print("V-R.1, validation");
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }

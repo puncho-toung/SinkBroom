@@ -830,7 +830,8 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
     m_chunksVersion,
     tableVersion,
     m_renderTargetGeneration,
-    lit.camera};
+    lit.camera,
+    m_budgetDwellSteps};
   if (!convergence.retriggers())
   {
     m_stalledFrames = 0;
@@ -1626,6 +1627,9 @@ void RenderThread::budgetPass()
   }
   report.atFloor = m_images.floored();
   report.lifting = m_lifting.size();
+  report.idleDeviceReads = m_idleDeviceReads;
+  m_lastPassLive = live;
+  m_lastPassInFlight = inFlight;
   if (
     !m_budgetChecked || m_lastSettled || m_extensionOver || report.atFloor > 0
     || !m_lifting.empty())
@@ -1710,7 +1714,12 @@ void RenderThread::budgetPass()
       frame < m_underSince->first + UnfloorDwellFrames
       || now - m_underSince->second < UnfloorDwellTime)
     {
+      // V-R.1 (2026-11-06): the dwell draws frames of its own (each one progress for the
+      // livelock guard), so a session whose pressure ended near its last frames does not
+      // settle with its floors kept
       report.dwelling = true;
+      m_budgetLeft = true;
+      ++m_budgetDwellSteps;
       return;
     }
     std::ranges::sort(lifts, [](const Lift& a, const Lift& b) {
@@ -1947,6 +1956,51 @@ void RenderThread::budgetPass()
     {
       warnVramBudget(live, budget);
     }
+  }
+}
+
+bool RenderThread::liftableFloor() const
+{
+  if (m_images.floored() == 0)
+  {
+    return false;
+  }
+  for (ImageSlotId id = 0; id < ImageSlotId(m_images.size()); ++id)
+  {
+    const auto& slot = *m_images.slot(id);
+    if (
+      slot.floored && slot.state == ImageSlots::State::Resident
+      && slot.intrinsic != NoImageSlot && slot.texture && slot.firstWrittenMip == 0
+      && slot.mipLevels > 0 && !m_stickyFloors.contains(id))
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+void RenderThread::pollFloorsWhileIdle()
+{
+  auto provider = std::function<std::optional<VramUsage>(std::uint64_t)>{};
+  {
+    const auto lock = std::scoped_lock{m_mutex};
+    provider = m_deviceVramProvider;
+  }
+  const auto device = provider ? provider(m_lastPassLive) : m_device.vram();
+  ++m_idleDeviceReads;
+  const auto budget = vramBudget();
+  const auto under =
+    m_lastPassLive + m_lastPassInFlight < budget - budget / 8
+    && (!device || device->usedBytes + m_lastPassInFlight < device->budgetBytes - device->budgetBytes / 8);
+  if (!under)
+  {
+    m_underSince.reset();
+    return;
+  }
+  // a dwell already begun draws its own frames; one not begun begins at this frame
+  if (!m_underSince)
+  {
+    requestFrame();
   }
 }
 
@@ -3683,7 +3737,16 @@ void RenderThread::idleTick()
     // V-F.4 (2026-11-06): a heap this tick's own framesCompleted emptied (the frames that
     // freed its last ranges finished only now) waits out EmptyHeapKeepTime: one more tick
     // a second later releases it, so an idle session lets it go too
-    if (allResolved && allFinished && !m_textureHeaps.emptyWaiting())
+    // V-R.1 (2026-11-06): and while a liftable floor stands the idle tick polls both
+    // figures, a second apart, and asks a frame once they are under their lines (its
+    // pass starts the dwell): a floor whose pressure ended while the preview idled lifts
+    // without an interaction
+    const auto floorWatch = liftableFloor();
+    if (floorWatch)
+    {
+      pollFloorsWhileIdle();
+    }
+    if (allResolved && allFinished && !m_textureHeaps.emptyWaiting() && !floorWatch)
     {
       m_idleWorkPending = false;
     }

@@ -264,6 +264,8 @@ struct FrameProgress
   std::uint64_t tableVersion = 0;
   std::uint64_t renderTargetGeneration = 0;
   CameraState camera;
+  // V-R.1 (2026-11-06): the budget pass's dwell steps (each dwell frame one more)
+  std::uint64_t budgetDwellSteps = 0;
 
   bool operator==(const FrameProgress&) const = default;
 };
@@ -565,6 +567,13 @@ private:
   std::vector<PendingLift> m_lifting;
   std::optional<std::pair<std::uint64_t, FrameClock::time_point>> m_underSince;
   std::unordered_map<ImageSlotId, FrameClock::time_point> m_liftedAt;
+  // V-R.1 (2026-11-06): the dwell's frames so far (FrameProgress), the last pass's live
+  // figure, lifts in flight and budget (the idle poll's under-the-lines test), and the
+  // device reads the idle ticks made
+  std::uint64_t m_budgetDwellSteps = 0;
+  std::uint64_t m_lastPassLive = 0;
+  std::uint64_t m_lastPassInFlight = 0;
+  std::uint64_t m_idleDeviceReads = 0;
   std::unordered_set<ImageSlotId> m_stickyFloors;
   bool m_stickyWarned = false;
   std::uint64_t m_stickyBudget = 0;
@@ -850,6 +859,11 @@ public:
   // from provider (with the live bytes) until an empty function restores the device's
   void setDeviceVramProvider(
     std::function<std::optional<VramUsage>(std::uint64_t)> provider);
+  // V-R.1 (2026-11-06), render thread: whether a floored slot could be lifted (complete,
+  // not held), and the idle tick's poll of both figures for it: a frame is asked when
+  // both are under their lines
+  bool liftableFloor() const;
+  void pollFloorsWhileIdle();
   // LP6.4b, any thread: while held, no settled frame marks a compaction (tests)
   void holdCompaction(bool hold);
   // F2.5 (2026-11-05, DQ-8), any thread: while held, every frame's convergence is behind
