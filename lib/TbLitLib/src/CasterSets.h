@@ -35,6 +35,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <optional>
 #include <unordered_map>
@@ -70,6 +71,24 @@ struct CasterSetsKey
 
   bool operator==(const CasterSetsKey&) const = default;
 };
+
+/**
+ * F3.4 (2026-11-05): one of R_AddSingleLight's entities (FAL:510-626): a brush or model
+ * entity's chunks and instances (entity), or the world's chunks of one area (world: the
+ * engine's area model; area -1 the pieces in solid; without a tree every world chunk's
+ * area as the chunk keys hold it)
+ */
+struct CasterUnit
+{
+  bool world = false;
+  PreviewId entity = NoPreviewId;
+  int area = 0;
+
+  auto operator<=>(const CasterUnit&) const = default;
+};
+
+// F3.4: the unit of a chunk key (world: no entity state and not an instance's). Pure
+CasterUnit casterUnitOf(const ChunkKey& key, bool world);
 
 /**
  * LP6.2 (C66, D168): one caster of a kept set. Its identity is its ChunkKey, by value,
@@ -192,6 +211,8 @@ private:
   // the light table the last sweep saw
   const LightTable* m_sweptLights = nullptr;
   std::uint64_t m_sweptVersion = 0;
+  // F3.4: the units' global reference bounds under the common key (made at the first ask)
+  std::optional<std::map<CasterUnit, std::optional<EngineBounds>>> m_unitBounds;
 
 public:
   // a light's set, and whether this build made it
@@ -220,6 +241,15 @@ public:
   // a kept set of light holds the light-triangle cache's entry of chunk (a chunk's key or
   // an instance's)
   bool holds(PreviewId light, const ChunkKey& chunk) const;
+  /**
+   * F3.4 (2026-11-05): a unit's global reference bounds (R_DeriveEntityData,
+   * RenderWorld_defs.cpp: ProjectedBounds( OffsetScaleForBounds( modelRenderMatrix,
+   * localReferenceBounds ), bounds_unitCube ); the world's identity), its local bounds
+   * those of every chunk and instance of the unit (a cast class or not); made for every
+   * unit at the first ask under a common key. Null for an invisible entity or a unit with
+   * no chunk.
+   */
+  const EngineBounds* unitBounds(const FrontendInputs& inputs, const CasterUnit& unit);
   const CasterSet* find(PreviewId light) const;
   std::size_t size() const;
   void clear();

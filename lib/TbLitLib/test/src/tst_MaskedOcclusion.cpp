@@ -24,12 +24,15 @@
 // and rects behind it and in front of it, the depth buffer read back, and the MXCSR's
 // FTZ | DAZ set around the calls and given back.
 
+#include "MaskedOcclusion.h"
 #include "lit/EngineGeometry.h"
 #include "lit/EngineMaskedOcclusion.h"
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -205,6 +208,25 @@ TEST_CASE("EngineMaskedOcclusion")
 
   moc.reset();
   CHECK((engineMxcsr() & ControlBits) == (mxcsrBefore & ControlBits));
+}
+
+// F3.11 (2026-11-05): a spot's TestRect depth takes the engine's Max( wmin2, 0.0f )
+// (sys_types.h:83, FAL:371): a box corner on the eye plane (w -0) or a NaN corner gives
+// +0, where std::max kept the -0 or the NaN; a positive depth stands
+TEST_CASE("MaskedOcclusion: the spot's TestRect depth (F3.11)")
+{
+  const auto negativeZero = engineMocRectWmin(0.5f, -0.0f);
+  CHECK(negativeZero == 0.0f);
+  CHECK_FALSE(std::signbit(negativeZero));
+  const auto nan = engineMocRectWmin(0.5f, std::numeric_limits<float>::quiet_NaN());
+  CHECK_FALSE(std::isnan(nan));
+  CHECK(nan == 0.0f);
+  CHECK_FALSE(std::signbit(nan));
+  // a negative w (a corner behind the eye) clamps to +0, a positive one is wmin / ( 1 -
+  // zmin )
+  CHECK(engineMocRectWmin(0.5f, -3.0f) == 0.0f);
+  CHECK(engineMocRectWmin(0.5f, 3.0f) == 6.0f);
+  CHECK(engineMocRectWmin(0.0f, 3.0f) == 3.0f);
 }
 
 } // namespace tb::lit

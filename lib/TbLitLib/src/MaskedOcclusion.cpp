@@ -82,6 +82,18 @@ bool boundsContainPoint(const EngineBounds& bounds, const EngineVec3& point)
 
 } // namespace
 
+float engineMocRectWmin(const float scissorZmin, const float wmin)
+{
+  auto zmin = scissorZmin;
+  zmin = float(1.0 - double(zmin)); // reverse depth
+  auto wmin2 = float(1.0 / double(zmin));
+  wmin2 *= wmin;
+  // F3.11 (2026-11-05): the engine's Max( wmin2, 0.0f ) (sys_types.h:83: ( x > y ) ? x :
+  // y), which gives +0 for a -0 or a NaN where std::max keeps them
+  wmin2 = wmin2 > 0.0f ? wmin2 : 0.0f;
+  return wmin2;
+}
+
 MaskedOcclusion::MaskedOcclusion()
   : m_zeroOneCube{engineMocZeroOneCubeVerts()}
   , m_unitCube{engineMocUnitCubeVerts()}
@@ -155,6 +167,14 @@ std::optional<MaskedOcclusion::SurfaceCull> MaskedOcclusion::cullSurfaces(
   {
     // must be multiple of 4
     viewHeight = (viewHeight + 3) & ~3;
+  }
+  // F3.10 (2026-11-05): a view side of 1 halves to a buffer side of 0, for which the
+  // library makes no buffer (MaskedOcclusionCullingCommon.inl:244-248; its ClearBuffer
+  // and tests would read it, :277): no fill and no test in this build - nothing tested,
+  // every count 0, the buffer made and its implementation's name kept
+  if (viewWidth == 0 || viewHeight == 0)
+  {
+    return std::nullopt;
   }
   const auto zNear = EngineFrame.znear;
   m_moc->setResolution(unsigned(viewWidth), unsigned(viewHeight));
@@ -364,13 +384,7 @@ bool MaskedOcclusion::lightVisible(
     const auto y1 = -1.0f + (float(scissor.y1) / screenHeight) * 2.0f;
     const auto y2 = -1.0f + (float(scissor.y2) / screenHeight) * 2.0f;
 
-    auto zmin = scissor.zmin;
-    zmin = float(1.0 - double(zmin)); // reverse depth
-    auto wmin2 = float(1.0 / double(zmin));
-    wmin2 *= wmin;
-    wmin2 = std::max(wmin2, 0.0f);
-
-    result = m_moc->testRect(x1, y1, x2, y2, wmin2);
+    result = m_moc->testRect(x1, y1, x2, y2, engineMocRectWmin(scissor.zmin, wmin));
   }
   ms += millisecondsSince(start);
   return result == EngineMocResult::Visible;
@@ -387,6 +401,13 @@ std::vector<float> MaskedOcclusion::depthForTesting(
   }
   const auto floatScope = EngineMocFloatScope{};
   m_moc->resolution(width, height);
+  // F3.10: a buffer made but never sized (its first build at a view side of 1) has none
+  if (width == 0 || height == 0)
+  {
+    width = 0;
+    height = 0;
+    return {};
+  }
   auto depth = std::vector<float>(std::size_t(width) * height);
   m_moc->computePixelDepthBuffer(depth.data(), false);
   return depth;

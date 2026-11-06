@@ -303,6 +303,10 @@ struct FrontendLists
   // the fill's and every test's time in this build (steady clock), in milliseconds:
   // inside surfacesMs (the fill and the surface tests) and lightsMs (the light tests)
   double mocMs = 0.0;
+
+  // F3.4 (2026-11-05): the casters of the casting lights left out because their unit is
+  // not directly visible and its shadow bounds miss the view (FAL:599-615)
+  std::size_t castersOffView = 0;
 };
 
 /**
@@ -407,6 +411,16 @@ bool engineCullModelBoundsToLight(
  * 0 in registers; whether one of them is then above 0.
  */
 bool engineSnapLightRegisters(const MaterialEntry& shader, std::vector<float>& registers);
+
+/**
+ * F3.4 (2026-11-05): R_ShadowBounds (tr_frontend_addlights.cpp:65-72): per axis the
+ * model's bounds extended to the light's bounds on the side away from the light origin
+ * (__fsels( a, b, c ): a >= 0 ? b : c). Pure.
+ */
+EngineBounds engineShadowBounds(
+  const EngineBounds& modelBounds,
+  const EngineBounds& lightBounds,
+  const EngineVec3& lightOrigin);
 
 /**
  * The light's scissor (tr_frontend_addlights.cpp:244-284, r_useLightScissors 3, D67):

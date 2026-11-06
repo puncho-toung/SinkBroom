@@ -49,6 +49,13 @@ struct Chunk;
 struct LitSurface;
 
 /**
+ * FAL:367-371: a spot light's TestRect depth, wmin / ( 1 - zmin ) in the engine's double
+ * steps, then Max( wmin2, 0.0f ) (F3.11: +0 for a -0 or a NaN, as the engine's macro
+ * gives). Pure.
+ */
+float engineMocRectWmin(float scissorZmin, float wmin);
+
+/**
  * LP6.7 (C75, D183, P8.15, P8.22): the lists' masked occlusion culling, the engine's
  * r_useMaskedOcclusionCulling 1 path on one buffer of Intel's library (the copy in
  * idtech/engine/libs/moc, through lit/EngineMaskedOcclusion.h), serial as the engine's
@@ -102,7 +109,7 @@ public:
    * in the surfaces' order then the runs'); then every surface tested unless the
    * view is inside its bounds: culled[i] true where the buffer hides it. chunksVersion
    * keeps the index copies. Nothing (nullopt, culled untouched) where the library is not
-   * built.
+   * built, or (F3.10) where a buffer side is 0 (a view side of 1).
    */
   std::optional<SurfaceCull> cullSurfaces(
     const LitView& view,

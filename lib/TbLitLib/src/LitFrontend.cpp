@@ -48,6 +48,7 @@
 #include <cstring>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -113,6 +114,25 @@ bool engineCullModelBoundsToLight(
   const auto modelLightProject =
     engineMatrixMultiply(baseLightProject, modelRenderMatrix);
   return engineCullBoundsToMvp(modelLightProject, localBounds, true);
+}
+
+EngineBounds engineShadowBounds(
+  const EngineBounds& modelBounds,
+  const EngineBounds& lightBounds,
+  const EngineVec3& lightOrigin)
+{
+  const auto fsels = [](const float a, const float b, const float c) {
+    return a >= 0.0f ? b : c;
+  };
+  auto shadowBounds = EngineBounds{};
+  for (std::size_t i = 0; i < 3; i++)
+  {
+    shadowBounds[0][i] =
+      fsels(modelBounds[0][i] - lightOrigin[i], modelBounds[0][i], lightBounds[0][i]);
+    shadowBounds[1][i] =
+      fsels(lightOrigin[i] - modelBounds[1][i], modelBounds[1][i], lightBounds[1][i]);
+  }
+  return shadowBounds;
 }
 
 bool engineSnapLightRegisters(const MaterialEntry& shader, std::vector<float>& registers)
@@ -783,6 +803,16 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
   // Occlusion::cullSurfaces). Then R_AddSingleModel's test of every listed surface, the
   // world's included (FAM:660-727): a hidden surface leaves the lists (no draw, no
   // interaction); its shadow is the caster sets', on screen or off (FAL's rules)
+  // F3.4 (2026-11-05): before it, the units with a surface in the view, the engine's
+  // directly visible entities (IsDirectlyVisible, FAL:76-90: a view entity the flow made
+  // with a scissor), which cast whatever the view; the others cast only where their
+  // shadow bounds meet the view (FAL:577-615, the caster loop below)
+  auto directlyVisible = std::set<CasterUnit>{};
+  for (const auto& surface : visible)
+  {
+    directlyVisible.insert(casterUnitOf(
+      surface.chunk->key, !surface.instance && !stateOf(surface.chunk->key.entity)));
+  }
   if (inputs.occlusion)
   {
     auto occluder = std::vector<char>(visible.size(), 0);
@@ -1165,8 +1195,41 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
     const auto answer = sets.set(inputs, viewLight.record, viewLight.shader->spectrum);
     const auto& set = *answer.set;
     viewLight.casters.reserve(set.casters.size());
-    for (const auto& kept : set.casters)
+    // F3.4 (2026-11-05): a caster whose unit is not directly visible casts only when
+    // R_ShadowBounds of its unit's global reference bounds passes the view's
+    // CullBoundsToMVP (FAL:599-615); a light left with no caster has no shadow surface
+    // (globalShadows NULL): no tile, the plain interaction program (RB:1417, :1541,
+    // :3670), and the other lights packed without it. The casters left out move the
+    // record key's caster hash (their places in the set)
+    const auto& projection = viewLight.record->derived.projection;
+    auto unitCasts = std::map<CasterUnit, bool>{};
+    auto casterHash = set.casterHash;
+    auto casterCount = set.casterCount;
+    for (std::size_t c = 0; c < set.casters.size(); ++c)
     {
+      const auto& kept = set.casters[c];
+      const auto unit =
+        casterUnitOf(kept.key, !kept.isInstance && !stateOf(kept.key.entity));
+      if (!directlyVisible.contains(unit))
+      {
+        const auto [it, made] = unitCasts.try_emplace(unit, true);
+        if (made)
+        {
+          if (const auto* bounds = sets.unitBounds(inputs, unit))
+          {
+            const auto shadowBounds = engineShadowBounds(
+              *bounds, projection.globalLightBounds, projection.globalLightOrigin);
+            it->second = !engineCullBoundsToMvp(view.worldMvp, shadowBounds, false);
+          }
+        }
+        if (!it->second)
+        {
+          casterHash = (casterHash ^ (std::uint64_t(c) + 1)) * 1099511628211ull;
+          --casterCount;
+          ++lists.castersOffView;
+          continue;
+        }
+      }
       const auto index = space(kept.key.entity);
       if (!index)
       {
@@ -1186,13 +1249,13 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       }
       viewLight.casters.push_back(std::move(caster));
     }
-    viewLight.casterHash = set.casterHash;
-    viewLight.casterCount = set.casterCount;
+    viewLight.casterHash = casterHash;
+    viewLight.casterCount = casterCount;
     viewLight.perforatedHash = set.perforatedHash;
     lists.casterPairs += set.pairs;
     lists.casterPairsResident += set.pairsResident;
     lists.casterPairsPending += set.pairsPending;
-    lists.casters += set.casters.size();
+    lists.casters += set.casters.size() - (set.casterCount - casterCount);
     lists.pending = lists.pending || set.pending;
     // D52: a kept set's Perforated candidates keep their registers' standing
     if (!answer.made && inputs.keepRegisters)

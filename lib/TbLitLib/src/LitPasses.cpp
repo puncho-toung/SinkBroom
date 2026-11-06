@@ -383,6 +383,7 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
   m_stats.casterPairsResident = m_lists.casterPairsResident;
   m_stats.casterPairsPending = m_lists.casterPairsPending;
   m_stats.casters = m_lists.casters;
+  m_stats.castersOffView = m_lists.castersOffView;
   m_stats.casterMs = m_stats.listsRebuilt ? m_lists.casterMs : 0.0;
   // LP6.2 (C66): the caster sets made by this frame's build
   m_stats.casterSetsBuilt = m_stats.listsRebuilt ? m_lists.casterSetsBuilt : 0;
@@ -873,6 +874,25 @@ void LitPasses::rebuildLists(const LitFrameInputs& inputs, const LitView& view)
   if (m_listsKey == key && !(m_lists.pending && tableVersion != m_listsTableVersion))
   {
     return;
+  }
+  // F3.1 (2026-11-05): a build for anything but the view (its camera and size), the
+  // light triangles' answers (the casters' part, pass 6's casting-light rule) and the
+  // grid atlases' states - a pending build's new table among them - is a new scene
+  // version: the cells, the materials, the lights, the bake, a switch
+  {
+    auto sceneOf = key;
+    if (m_listsKey)
+    {
+      sceneOf.camera = m_listsKey->camera;
+      sceneOf.width = m_listsKey->width;
+      sceneOf.height = m_listsKey->height;
+      sceneOf.lightTrianglesVersion = m_listsKey->lightTrianglesVersion;
+      sceneOf.gridValidity = m_listsKey->gridValidity;
+    }
+    if (!m_listsKey || *m_listsKey != sceneOf || *m_listsKey == key)
+    {
+      ++m_listsSceneVersion;
+    }
   }
   // LPF.1 (C43): built again for a new registry or a re-parse (the key's table part)
   m_stats.listsTableChanged = !m_listsKey || m_listsKey->table != key.table;
@@ -3172,10 +3192,17 @@ void LitPasses::recordShadowAtlas(Frame& frame)
   // early cells): such a frame and the first one after it settle as a still camera's
   // (the engine's packing, every LOD exact), so the whole batch's lights hold nothing of
   // the early frame's (its lights' order, and so the packing, may differ)
+  // F3.1 (2026-11-05): and only across frames built from one scene version: a frame whose
+  // lists were built for a scene change (the cells, the materials and their registers,
+  // the lights, the bake, a switch) inside the moving window, or whose casting lights
+  // differ from the last frame's at the same camera (the casters' light triangles
+  // answered: a light that loses or gains its shadow surfaces), settles as a still
+  // camera's, so that a light-set, caster or interaction change restarts the hold instead
+  // of drifting the held layout (the session's first camera set stays a move); decided
+  // after loop 1 below, which reads nothing of it
   const auto recordsWhole = std::exchange(m_shadowRecordsWhole, frame.inputs->sceneWhole);
-  const auto moving = m_shadowsMovingForTesting.value_or(
-    frame.inputs->shadowsMoving && frame.inputs->sceneWhole && recordsWhole);
-  m_stats.shadowsMoving = moving;
+  const auto sameScene =
+    std::exchange(m_shadowSceneVersion, m_listsSceneVersion) == m_listsSceneVersion;
   if (!m_heldLayout)
   {
     m_heldLayout.emplace(EngineFrame.shadowMapAtlasSize, AtlasMinTile);
@@ -3252,6 +3279,22 @@ void LitPasses::recordShadowAtlas(Frame& frame)
     m_shadowRecords.push_back(record);
   }
   m_stats.lightsCasting = m_shadowRecords.size();
+  // F3.1: the casting lights against the last frame's, at the same camera
+  auto castingNow = std::vector<PreviewId>{};
+  castingNow.reserve(m_shadowRecords.size());
+  for (const auto& record : m_shadowRecords)
+  {
+    castingNow.push_back(record.light);
+  }
+  std::ranges::sort(castingNow);
+  const auto sameCamera = m_shadowCamera == frame.inputs->camera;
+  const auto castingMoved = sameCamera && castingNow != m_shadowCasting;
+  m_shadowCamera = frame.inputs->camera;
+  m_shadowCasting = std::move(castingNow);
+  const auto moving = m_shadowsMovingForTesting.value_or(
+    frame.inputs->shadowsMoving && frame.inputs->sceneWhole && recordsWhole && sameScene
+    && !castingMoved);
+  m_stats.shadowsMoving = moving;
   // LP3.3 (C61, A46): the records of lights that take no tiles this frame go, their
   // tiles' rects back to the held layout
   {

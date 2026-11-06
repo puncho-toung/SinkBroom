@@ -85,6 +85,7 @@ void CasterSets::beginBuild(const CasterSetsKey& key)
     m_candidates.clear();
     m_references.clear();
     m_sets.clear();
+    m_unitBounds.reset();
   }
   ++m_build;
   m_built = 0;
@@ -407,6 +408,66 @@ void CasterSets::clear()
   m_built = 0;
   m_sweptLights = nullptr;
   m_sweptVersion = 0;
+  m_unitBounds.reset();
+}
+
+CasterUnit casterUnitOf(const ChunkKey& key, const bool world)
+{
+  return world ? CasterUnit{true, NoPreviewId, key.area}
+               : CasterUnit{false, key.entity, 0};
+}
+
+const EngineBounds* CasterSets::unitBounds(
+  const FrontendInputs& inputs, const CasterUnit& unit)
+{
+  if (!m_unitBounds)
+  {
+    // the units' local bounds: every chunk with vertices and every instance
+    auto local = std::map<CasterUnit, EngineBounds>{};
+    const auto add = [&](const CasterUnit& of, const EngineBounds& bounds) {
+      const auto [it, made] = local.try_emplace(of, bounds);
+      if (!made)
+      {
+        it->second = engineAddBounds(it->second, bounds);
+      }
+    };
+    if (inputs.chunks)
+    {
+      for (const auto& [key, chunk] : *inputs.chunks)
+      {
+        if (!chunk.verts.empty())
+        {
+          add(casterUnitOf(key, !entityState(inputs, key.entity)), chunk.bounds);
+        }
+      }
+    }
+    if (inputs.instances)
+    {
+      for (const auto& [key, instance] : *inputs.instances)
+      {
+        add(casterUnitOf(instance.key(), false), instance.header.bounds);
+      }
+    }
+    auto& global = m_unitBounds.emplace();
+    for (const auto& [of, bounds] : local)
+    {
+      if (of.world)
+      {
+        global.emplace(of, bounds);
+        continue;
+      }
+      const auto* model = modelOf(inputs, of.entity);
+      global.emplace(
+        of,
+        model ? std::optional{engineProjectedBounds(
+                  engineOffsetScaleForBounds(model->modelRenderMatrix, bounds),
+                  engineUnitCube(),
+                  false)}
+              : std::nullopt);
+    }
+  }
+  const auto it = m_unitBounds->find(unit);
+  return it != m_unitBounds->end() && it->second ? &*it->second : nullptr;
 }
 
 } // namespace tb::lit

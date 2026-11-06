@@ -387,6 +387,8 @@ struct LitFrameStats
   std::size_t casterPairsResident = 0;
   std::size_t casterPairsPending = 0;
   std::size_t casters = 0;
+  // F3.4: the casters left out off the view (FrontendLists::castersOffView)
+  std::size_t castersOffView = 0;
   double casterMs = 0.0;
   std::size_t lightTriangleEntries = 0;
   // LP3.0 (D151, C62, A49), LP3.3: the shadows' convergence term, a placed tile not
@@ -1219,6 +1221,15 @@ private:
   // LP6.4a step 0b: the last frame that made shadow records drew a whole scene
   // (LitFrameInputs::sceneWhole): its records may be held
   bool m_shadowRecordsWhole = true;
+  // F3.1 (2026-11-05): the lists' scene version (moved by every build for anything but
+  // the view: the cells, the materials and their registers, the lights, the bake, the
+  // casters' light triangles, a switch) and the one of the last frame that made shadow
+  // records: pass 6 holds its layout and LODs only across frames of one scene version
+  std::uint64_t m_listsSceneVersion = 0;
+  std::uint64_t m_shadowSceneVersion = 0;
+  // and the last such frame's camera and casting lights (sorted ids)
+  std::optional<CameraState> m_shadowCamera;
+  std::vector<PreviewId> m_shadowCasting;
   // LP6.2 (D169): the slots' state version and count when pass 6 last checked its kept
   // tiles' images (a complete slot's version moves only with its state, a slot made moves
   // the count: unchanged, no image term can have moved), and the tiles drawn again for an
