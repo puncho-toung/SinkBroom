@@ -1,18 +1,18 @@
 # The engine's decl output, captured by TOOLS/lit-preview/capture_goldens.py for the
 # LP1a golden tests ([.][retail]).
 # engine commit 285ea4d18a0aaedf46b0803ea656e4850eba5a01 (the exe: RBDOOM 3 BFG 1.6.0.1405 win-x64 Oct 18 2026 19:55:35)
-# captured 2026-10-21 15:13 from the game folder TB_LIT_GAME_PATH names,
-# fs_game tb_capture in the sandbox; pass 1 exited with 0 after 26 s; pass 2 exited with 0 after 27 s
+# captured 2026-11-05 18:47 from the game folder TB_LIT_GAME_PATH names,
+# fs_game tb_capture in the sandbox; pass 1 exited with 0 after 31 s; pass 2 exited with 0 after 29 s
 # blocks: '@@ <kind> <name>', the log lines between the touch and the next marker;
 # '@@ names <type>': count, hash of the sorted names, the names SinkBroom lacks;
 # '@@ warnings all': every distinct warning line of pass 2, in the log's order
 @@ list decls
   41k  309 table
-3833k 7788 material
+3845k 7812 material
   91k  675 skin
  389k 3091 sound
-3515k 2826 entityDef
- 849k  842 model
+3517k 2828 entityDef
+ 850k  843 model
   10k   93 fx
   77k  784 particle
   35k  134 articulatedFigure
@@ -22,11 +22,11 @@
   63k  257 email
    0k    0 export
   71k   61 mapDef
-17045 total decls is 925 decl files
-8175KB in text, 9031KB in structures
+17072 total decls is 930 decl files
+8183KB in text, 9045KB in structures
 @@ names material
-count 7788
-hash ea7a084af3b96f07
+count 7812
+hash 63365c666c505269
 only _doomclassic
 only _imguifont
 only _white
@@ -64,6 +64,25 @@ only newfonts/arial_narrow/48
 only newfonts/bankgothic_md_bt/48
 only newfonts/chainlink_semi_bold/48
 only newfonts/sarasori_rg/48
+only textures/lp1b/crate
+only textures/lp1b/floor
+only textures/lp1b/glass
+only textures/lp1b/grate
+only textures/lp1b/patch
+only textures/lp1b/wall
+only textures/lp1c/bumpy
+only textures/lp1c/flat
+only textures/lp1c/flat_blend
+only textures/lp1c/flat_bump
+only textures/lp1c/gradient
+only textures/lp1c/light
+only textures/lp1c/metal
+only textures/lp1c/pano_exr
+only textures/lp1c/pano_hdr
+only textures/lp1c/pic
+only textures/lp1c/rle
+only textures/lp1c/sixteen
+only textures/lp1c/sky
 only ui/assets/guicursor_arrow
 only ui/assets/guicursor_hand
 only ui/assets/guicursor_hand_a
@@ -382,9 +401,6 @@ Currently referenced this level.
 register 21: 1.000000
 
 @@ material models/mapobjects/materialorb/orb
-Binarize File: 'models/mapobjects/pbr/materialorb/substance/metal04_basecolor#__0100' - reason 'binarize: binary file not found 'models/mapobjects/pbr/materialorb/substance/metal04_basecolor#__0100''
-Binarize File: 'models/mapobjects/pbr/materialorb/substance/metal04_normal#__0300' - reason 'binarize: binary file not found 'models/mapobjects/pbr/materialorb/substance/metal04_normal#__0300''
-Binarize File: 'models/mapobjects/pbr/materialorb/substance/metal04_rmao#__1200' - reason 'binarize: binary file not found 'models/mapobjects/pbr/materialorb/substance/metal04_rmao#__1200''
 material models/mapobjects/materialorb/orb:
 source: materials/materialorb.mtr:1
 ----------
