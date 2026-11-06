@@ -483,13 +483,13 @@ struct BudgetPassReport
   bool left = false;
   // V-F.1 (2026-11-06): the device's figure the pass used and whether it read it in this
   // pass; the floors waiting for the dwell (both figures under their lines, not yet for
-  // UnfloorDwellTime and UnfloorDwellFrames); the slots floored again within
-  // RefloorStickyTime of their lift (sticky from here); the slots at their floor and the
-  // lifts in flight when the pass began
+  // UnfloorDwellTime and UnfloorDwellFrames); V-R.2: the slots floored again within
+  // RefloorStickyTime of their lift (their dwell doubled, up to UnfloorBackoffCap); the
+  // slots at their floor and the lifts in flight when the pass began
   std::optional<VramUsage> device;
   bool deviceRead = false;
   bool dwelling = false;
-  std::vector<std::uint32_t> sticky;
+  std::vector<std::uint32_t> backedOff;
   std::size_t atFloor = 0;
   std::size_t lifting = 0;
   // V-R.1 (2026-11-06): the device reads the idle ticks have made so far (their polls of
@@ -943,6 +943,14 @@ public:
    */
   void setDeviceVramForTesting(
     std::function<std::optional<VramUsage>(std::uint64_t liveBytes)> provider);
+  /**
+   * V-R.2 (2026-11-06), any thread: the budget pass's UnfloorDwellTime, RefloorStickyTime
+   * and UnfloorBackoffCap from the next pass on; zero durations for the defaults again
+   */
+  void setBudgetTimesForTesting(
+    std::chrono::milliseconds dwell,
+    std::chrono::milliseconds refloorWindow,
+    std::chrono::milliseconds backoffCap);
   // LP6.4b (C68 (d)), any thread: while held, no settled frame marks an arena
   // compaction; tests only
   void holdCompactionForTesting(bool hold);

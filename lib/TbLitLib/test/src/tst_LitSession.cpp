@@ -21492,18 +21492,23 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
     CHECK(messages.warnings == 0);
   }
 
-  SECTION("(g) V-F.1: the device's budget floors; the lift waits for both lines; sticky")
+  SECTION("(g) V-F.1, V-R.2: the device's budget floors; the lift waits; the back-off")
   {
     // V-F.1 (2026-11-06): VK_EXT_memory_budget's figure through the test's provider (the
     // session's live plus what a test adds), the session's own budget the default's
     // (1 GB, the live figure far under it): the device alone floors; in its hysteresis
     // band (under its budget, over its budget less an eighth) nothing is lifted however
     // long; under the line the floors are lifted after the dwell, at most four a frame,
-    // the largest first; the lifted textures pushing the device over again floor them
-    // once more, and those keep their floor (sticky, said once) until the session's
-    // budget changes; then the full textures again and the picture of before the floor
+    // the largest first. V-R.2 (2026-11-06), under shortened times (a dwell of 250 ms, a
+    // re-floor window of 4 s, a cap of 2 s): the lifted textures push the device over
+    // again at each lift, so a slot is floored again and again, each lift after twice the
+    // last dwell (1, 2, 4, 8 x 250 ms), the cap said once; then the pressure ends for
+    // good with the session idle and every slot is full again within one cap period, the
+    // picture the one before the floor
     const auto view = litCamera({-250, 0, 64}, {1, 0, 0}, {0, 0, 1});
-    const auto holdsText = std::string_view{"the device's budget holds the floor"};
+    const auto holdsText = std::string_view{"the lift is retried every"};
+    const auto dwell = 250ms;
+    const auto cap = 2000ms;
     struct Device
     {
       std::mutex mutex;
@@ -21537,6 +21542,7 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
       auto session = rootSession(instance, events, *service, root);
       auto passes = BudgetPasses{};
       session->setBudgetPassHookForTesting(passes.hook());
+      session->setBudgetTimesForTesting(dwell, 4000ms, cap);
       session->setExposed(true);
       REQUIRE(waitFor(
         [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
@@ -21695,11 +21701,11 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
       CHECK(readEveryFrame);
 
       // (3) the device far under its line, its usage then growing by twice what the
-      // session places (a driver's own share): after the dwell (1 s, four frames) the
-      // floors lifted, at most four a frame, the largest first; landed, the first four
-      // pass the device's budget again (its line lets them through at their own size,
-      // 7 / 5 of their full bytes over the floor's figure): floored once more, sticky,
-      // said once
+      // session places (a driver's own share): after the dwell the floors lifted, at
+      // most four a frame, the largest first; landed, the largest pass the device's
+      // budget again and are floored again, each lift then after twice the last dwell,
+      // the cap said once; no frame driven by the test (the retries are the idle
+      // tick's)
       auto fullSizes = std::vector<std::uint64_t>{};
       for (const auto id : floored)
       {
@@ -21715,33 +21721,87 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
       const auto lifting = passes.size();
       const auto liftStart = std::chrono::steady_clock::now();
       setDevice(liftBudget, 0, liveFloored, 1);
-      // until a floor returns sticky, and a few frames more (at most 4 s)
-      auto stickySeen = std::optional<std::chrono::steady_clock::time_point>{};
-      while (std::chrono::steady_clock::now() - liftStart < 4000ms
-             && (!stickySeen || std::chrono::steady_clock::now() - *stickySeen < 300ms))
-      {
-        REQUIRE(oneFrame(*session));
-        std::this_thread::sleep_for(80ms);
-        if (!stickySeen)
+      // the service's publications forwarded as an owner does (tableChanged); no frame
+      // asked by the test
+      const auto forward = [&](const std::chrono::milliseconds span, const auto& until) {
+        const auto from = std::chrono::steady_clock::now();
+        while (std::chrono::steady_clock::now() - from < span)
         {
-          const auto reports = passes.taken(lifting);
-          if (std::ranges::any_of(reports, [](const BudgetPassReport& report) {
-                return !report.sticky.empty();
-              }))
+          session->tableChanged();
+          if (until())
           {
-            stickySeen = std::chrono::steady_clock::now();
+            return true;
+          }
+          std::this_thread::sleep_for(20ms);
+        }
+        return false;
+      };
+      // the first wave: lifted, the largest pass the device's budget again and are
+      // floored again (their dwell doubled); the others stay lifted
+      const auto backedOffSeen = [&] {
+        return std::ranges::any_of(passes.taken(lifting), [](const auto& report) {
+          return !report.backedOff.empty();
+        });
+      };
+      REQUIRE(forward(8000ms, backedOffSeen));
+      forward(1500ms, [] { return false; });
+      // the ladder: the first slot backed off, still at its floor, alone pushes the
+      // device over when its full texture lands (the device's usage grows by seven times
+      // what that slot adds over the floors' state), and fits under the line at the floor
+      const auto ladderSlot = [&] {
+        for (const auto& report : passes.taken(lifting))
+        {
+          if (!report.backedOff.empty())
+          {
+            return report.backedOff.front();
           }
         }
+        return NoImageSlot;
+      }();
+      auto ladderLive = std::uint64_t{0};
+      auto ladderFloored = false;
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        ladderLive = accountOf(access).live();
+        ladderFloored = access.images.slot(ladderSlot)->floored;
+      }));
+      REQUIRE(ladderFloored);
+      const auto ladderBudget = (ladderLive + slots.at(ladderSlot).bytes) * 8 / 7 + 65536;
+      setDevice(ladderBudget, 0, ladderLive, 6);
+      const auto capSaid = forward(20000ms, [&] {
+        return events.countContaining(SessionEvent::Warning, holdsText) >= 1u;
+      });
+      if (!capSaid)
+      {
+        const auto all = passes.taken(lifting);
+        for (std::size_t r = 0; r < all.size(); ++r)
+        {
+          const auto& report = all[r];
+          std::cout << fmt::format(
+            "  pass {} at {} ms: over {} dev {} / {} floored [{}] unfloored [{}] "
+            "backedOff [{}] dwelling {} atFloor {}\n",
+            report.frame,
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+              passes.timeOf(lifting + r) - liftStart)
+              .count(),
+            report.over,
+            report.device ? report.device->usedBytes : 0,
+            report.device ? report.device->budgetBytes : 0,
+            fmt::join(report.floored, " "),
+            fmt::join(report.unfloored, " "),
+            fmt::join(report.backedOff, " "),
+            report.dwelling,
+            report.atFloor);
+        }
       }
-      REQUIRE(settledChain(*session, view));
-      REQUIRE(waitQuiet(*session));
+      REQUIRE(capSaid);
+      // one cap period more: the capped slot's next turn
+      forward(cap + IdleCollectInterval, [] { return false; });
       const auto liftReports = passes.taken(lifting);
       auto unfloored = std::vector<ImageSlotId>{};
       auto firstLift = std::optional<std::size_t>{};
       auto dwellBefore = std::size_t{0};
       auto perPassMax = std::size_t{0};
-      auto sticky = std::set<ImageSlotId>{};
-      auto refloored = std::set<ImageSlotId>{};
+      auto backedOff = std::set<ImageSlotId>{};
       for (std::size_t r = 0; r < liftReports.size(); ++r)
       {
         const auto& report = liftReports[r];
@@ -21753,117 +21813,89 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
         perPassMax = std::max(perPassMax, report.unfloored.size());
         unfloored.insert(
           unfloored.end(), report.unfloored.begin(), report.unfloored.end());
-        sticky.insert(report.sticky.begin(), report.sticky.end());
-        refloored.insert(report.floored.begin(), report.floored.end());
+        backedOff.insert(report.backedOff.begin(), report.backedOff.end());
       }
-      auto ordered = true;
-      for (std::size_t i = 1; i < unfloored.size(); ++i)
+      REQUIRE(firstLift);
+      REQUIRE_FALSE(backedOff.empty());
+      // the ladder slot's floors and lifts in time order
+      auto events2 =
+        std::vector<std::pair<bool, std::chrono::steady_clock::time_point>>{};
+      for (std::size_t r = 0; r < liftReports.size(); ++r)
       {
-        const auto a = slots.at(unfloored[i - 1]).bytes;
-        const auto b = slots.at(unfloored[i]).bytes;
-        ordered = ordered && (a > b || (a == b && unfloored[i - 1] < unfloored[i]));
+        const auto at = passes.timeOf(lifting + r);
+        if (containsSlot(liftReports[r].floored, ladderSlot))
+        {
+          events2.emplace_back(false, at);
+        }
+        if (containsSlot(liftReports[r].unfloored, ladderSlot))
+        {
+          events2.emplace_back(true, at);
+        }
       }
-      const auto liftedIds = std::set<ImageSlotId>{unfloored.begin(), unfloored.end()};
-      const auto firstLiftMs = firstLift
-                                 ? std::chrono::duration_cast<std::chrono::milliseconds>(
-                                     passes.timeOf(lifting + *firstLift) - liftStart)
-                                     .count()
-                                 : -1;
+      // each lift's wait since the slot's floor before it (the first: since the end of
+      // the pressure)
+      auto waits = std::vector<std::int64_t>{};
+      auto since = liftStart;
+      for (const auto& [lift, at] : events2)
+      {
+        if (lift)
+        {
+          waits.push_back(
+            std::chrono::duration_cast<std::chrono::milliseconds>(at - since).count());
+        }
+        else
+        {
+          since = at;
+        }
+      }
+      const auto ladderLifts = waits.size();
+      const auto maxLifts =
+        std::size_t(std::ceil(std::log2(double(cap.count()) / double(dwell.count()))))
+        + 2;
       std::cout << fmt::format(
-        "V-F.1 (3): the device's budget {} (overhead 1 over {}): {} dwelling passes "
-        "before "
-        "the first lift, {} ms after; lifted {} (at most {} a pass, largest first {}); "
-        "floored again {}, sticky {}; the warning {} time(s)\n",
+        "V-R.2 (3): the device's budget {} (overhead 1 over {}): {} dwelling passes "
+        "before the first lift; lifted {} in all (at most {} a pass); backed off {}; "
+        "slot "
+        "{}'s lifts after {} ms (the dwell {} ms, the cap {} ms); the warning {} "
+        "time(s)\n",
         liftBudget,
         liveFloored,
         dwellBefore,
-        firstLiftMs,
         unfloored.size(),
         perPassMax,
-        ordered,
-        refloored.size(),
-        sticky.size(),
+        backedOff.size(),
+        ladderSlot,
+        fmt::join(waits, ", "),
+        dwell.count(),
+        cap.count(),
         events.countContaining(SessionEvent::Warning, holdsText));
-      REQUIRE(firstLift);
       CHECK(dwellBefore >= UnfloorDwellFrames);
-      CHECK(firstLiftMs >= UnfloorDwellTime.count());
       CHECK(perPassMax == UnfloorsPerFrame);
-      CHECK(ordered);
-      CHECK_FALSE(sticky.empty());
-      for (const auto id : sticky)
+      CHECK(ladderLifts >= 3u);
+      for (std::size_t k = 0; k < std::min<std::size_t>(3, ladderLifts); ++k)
       {
-        CHECK(liftedIds.contains(id));
+        CAPTURE(k);
+        CHECK(waits[k] >= dwell.count() << k);
       }
+      CHECK(ladderLifts <= maxLifts);
       CHECK(events.countContaining(SessionEvent::Warning, holdsText) == 1u);
 
-      // (4) the device far under both lines for 1.2 s of frames: the sticky floors hold,
-      // the session settles and goes idle, no still timer
-      const auto holding = passes.size();
+      // (4) the pressure ends for good with the session idle (nothing driven by the
+      // test): within one cap period every fed slot is full again, the session settles
+      // and the settled picture is the one before the floor
       setDevice(std::uint64_t{4} << 30, 0, 0, 0);
-      const auto holdStart = std::chrono::steady_clock::now();
-      auto holdFrames = 0;
-      while (std::chrono::steady_clock::now() - holdStart < 1200ms || holdFrames < 8)
-      {
-        REQUIRE(oneFrame(*session));
-        ++holdFrames;
-        std::this_thread::sleep_for(100ms);
-      }
-      REQUIRE(settledChain(*session, view));
-      auto liftedSticky = std::size_t{0};
-      for (const auto& report : passes.taken(holding))
-      {
-        for (const auto id : report.unfloored)
-        {
-          liftedSticky += sticky.contains(id) ? 1 : 0;
-        }
-      }
-      auto stillFloored = std::size_t{0};
-      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
-        for (const auto id : sticky)
-        {
-          stillFloored += access.images.slot(id)->floored ? 1 : 0;
-        }
-      }));
-      const auto idle = waitQuiet(*session);
-      std::cout << fmt::format(
-        "V-F.1 (4): the device far under for {} frames: sticky lifted {}, still at the "
-        "floor {} of {}; settled {}, idle {}, still-timer firings {}; the warning {} "
-        "time(s)\n",
-        holdFrames,
-        liftedSticky,
-        stillFloored,
-        sticky.size(),
-        session->lastFrameSettledForTesting(),
-        idle,
-        session->stillTimerFiringsForTesting(),
-        events.countContaining(SessionEvent::Warning, holdsText));
-      CHECK(liftedSticky == 0u);
-      CHECK(stillFloored == sticky.size());
-      CHECK(session->lastFrameSettledForTesting());
-      CHECK(idle);
-      CHECK(session->stillTimerFiringsForTesting() == 0u);
-      CHECK(events.countContaining(SessionEvent::Warning, holdsText) == 1u);
-
-      // (5) the session's budget changed: the sticky floors go after the dwell, every
-      // fed slot is full again and the settled picture is the one before the floor
-      const auto changed = passes.size();
-      session->setVramBudgetForTesting(DefaultVramBudgetBytes * 2);
-      for (auto i = 0; i < 40; ++i)
-      {
-        REQUIRE(oneFrame(*session));
-        std::this_thread::sleep_for(60ms);
-        if (session->status().texturesFloored == 0u)
-        {
-          break;
-        }
-      }
-      REQUIRE(settledChain(*session, view));
+      const auto ended = std::chrono::steady_clock::now();
+      const auto allLifted = waitFor(
+        [&] {
+          session->tableChanged();
+          return session->status().texturesFloored == 0u;
+        },
+        cap + dwell + IdleCollectInterval * 2 + 1000ms,
+        false);
+      const auto endedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - ended)
+                             .count();
       REQUIRE(waitQuiet(*session));
-      auto liftedFinally = std::size_t{0};
-      for (const auto& report : passes.taken(changed))
-      {
-        liftedFinally += report.unfloored.size();
-      }
       auto slotsAfter = std::map<ImageSlotId, BudgetSlot>{};
       REQUIRE(inFrame(
         *session, [&](RenderFrameAccess& access) { slotsAfter = budgetSlots(access); }));
@@ -21874,25 +21906,34 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
       }
       const auto pictureAfter = settledHdr(*session, view, 1);
       REQUIRE(pictureAfter);
+      const auto idle = waitQuiet(*session);
       std::cout << fmt::format(
-        "V-F.1 (5): the session's budget changed: lifted {}; full again {} of {}; "
-        "textures_floored {}; the picture equal to the one before the floor {}; the "
-        "device read {} times\n",
-        liftedFinally,
+        "V-R.2 (4): the pressure ended for good: every floor lifted {} after {} ms (one "
+        "cap period {} ms); full again {} of {}; the picture equal to the one before the "
+        "floor {}; settled {}, idle {}, still-timer firings {}; the device read {} "
+        "times\n",
+        allLifted,
+        endedMs,
+        cap.count(),
         full,
         large.size(),
-        session->status().texturesFloored,
         pictureAfter->first.rgba == pictureBefore->first.rgba,
+        session->lastFrameSettledForTesting(),
+        idle,
+        session->stillTimerFiringsForTesting(),
         [&] {
           const auto lock = std::scoped_lock{device->mutex};
           return device->reads;
         }());
-      CHECK(liftedFinally >= sticky.size());
+      CHECK(allLifted);
+      CHECK(endedMs < (cap + dwell + IdleCollectInterval * 2 + 1000ms).count());
       CHECK(full == large.size());
-      CHECK(session->status().texturesFloored == 0u);
       CHECK(pictureAfter->first.rgba == pictureBefore->first.rgba);
+      CHECK(session->lastFrameSettledForTesting());
+      CHECK(idle);
       CHECK(session->stillTimerFiringsForTesting() == 0u);
 
+      session->setBudgetTimesForTesting(0ms, 0ms, 0ms);
       session->setVramBudgetForTesting(0);
       session->setDeviceVramForTesting({});
       session->setBudgetPassHookForTesting({});

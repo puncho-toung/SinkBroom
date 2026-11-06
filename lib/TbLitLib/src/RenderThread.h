@@ -555,9 +555,10 @@ private:
   // the floors lifted whose full textures are not written yet, with the bytes each costs
   // again (counted into both figures until they land); since when (frame, time) both
   // figures are under their lines with floors waiting (the dwell); when each slot was
-  // last lifted, the slots floored again within RefloorStickyTime of it (kept until the
-  // next Start, material change or budget change), whether that was said, and the
-  // budget, materials revision and image changes the sticky marks were taken under
+  // last lifted; V-R.2: each backed-off slot's dwell multiplier (1 when absent: doubled
+  // by a re-floor within RefloorStickyTime of its lift, up to UnfloorBackoffCap), whether
+  // the cap was said, and the budget, materials revision and image changes the
+  // multipliers were taken under (a change resets them)
   std::function<std::optional<VramUsage>(std::uint64_t)> m_deviceVramProvider;
   struct PendingLift
   {
@@ -567,18 +568,19 @@ private:
   std::vector<PendingLift> m_lifting;
   std::optional<std::pair<std::uint64_t, FrameClock::time_point>> m_underSince;
   std::unordered_map<ImageSlotId, FrameClock::time_point> m_liftedAt;
-  // V-R.1 (2026-11-06): the dwell's frames so far (FrameProgress), the last pass's live
-  // figure, lifts in flight and budget (the idle poll's under-the-lines test), and the
-  // device reads the idle ticks made
+  // V-R.1 (2026-11-06): the dwell's frames so far (FrameProgress) and the device reads
+  // the idle ticks made
   std::uint64_t m_budgetDwellSteps = 0;
-  std::uint64_t m_lastPassLive = 0;
-  std::uint64_t m_lastPassInFlight = 0;
   std::uint64_t m_idleDeviceReads = 0;
-  std::unordered_set<ImageSlotId> m_stickyFloors;
-  bool m_stickyWarned = false;
-  std::uint64_t m_stickyBudget = 0;
-  std::uint64_t m_stickyMaterials = 0;
-  std::uint64_t m_stickyImageChanges = 0;
+  std::unordered_map<ImageSlotId, std::int64_t> m_dwellMultiplier;
+  bool m_backoffWarned = false;
+  std::uint64_t m_backoffBudget = 0;
+  std::uint64_t m_backoffMaterials = 0;
+  std::uint64_t m_backoffImageChanges = 0;
+  // V-R.2: the three durations (tests set them, setBudgetTimes), in milliseconds
+  std::atomic<std::int64_t> m_dwellTimeMs = UnfloorDwellTime.count();
+  std::atomic<std::int64_t> m_refloorWindowMs = RefloorStickyTime.count();
+  std::atomic<std::int64_t> m_backoffCapMs = UnfloorBackoffCap.count();
   // LP6.4b (C68 (d), D174, A60): the compaction a settled frame marked, when, and the
   // uploads-only idle submissions so far
   std::optional<GeometryArenas::Compaction> m_compactionWanted;
@@ -864,6 +866,14 @@ public:
   // both are under their lines
   bool liftableFloor() const;
   void pollFloorsWhileIdle();
+  // V-R.2: a slot's dwell (the dwell time times its multiplier)
+  FrameClock::duration slotDwell(ImageSlotId slot) const;
+  // V-R.2 (2026-11-06), any thread: the budget pass's dwell time, re-floor window and
+  // back-off cap from the next pass on; zero for the defaults
+  void setBudgetTimes(
+    std::chrono::milliseconds dwell,
+    std::chrono::milliseconds refloorWindow,
+    std::chrono::milliseconds backoffCap);
   // LP6.4b, any thread: while held, no settled frame marks a compaction (tests)
   void holdCompaction(bool hold);
   // F2.5 (2026-11-05, DQ-8), any thread: while held, every frame's convergence is behind

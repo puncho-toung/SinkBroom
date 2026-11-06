@@ -794,6 +794,14 @@ void LitSession::setDeviceVramForTesting(
   m_renderThread->setDeviceVramProvider(std::move(provider));
 }
 
+void LitSession::setBudgetTimesForTesting(
+  const std::chrono::milliseconds dwell,
+  const std::chrono::milliseconds refloorWindow,
+  const std::chrono::milliseconds backoffCap)
+{
+  m_renderThread->setBudgetTimes(dwell, refloorWindow, backoffCap);
+}
+
 void LitSession::skipInteractionsForTesting(const bool skip)
 {
   m_renderThread->setSkipInteractions(skip);

@@ -1628,8 +1628,6 @@ void RenderThread::budgetPass()
   report.atFloor = m_images.floored();
   report.lifting = m_lifting.size();
   report.idleDeviceReads = m_idleDeviceReads;
-  m_lastPassLive = live;
-  m_lastPassInFlight = inFlight;
   if (
     !m_budgetChecked || m_lastSettled || m_extensionOver || report.atFloor > 0
     || !m_lifting.empty())
@@ -1644,19 +1642,30 @@ void RenderThread::budgetPass()
   report.budgetBytes = budget;
   report.device = m_extensionVram;
   report.over = live > budget || m_extensionOver;
-  // V-F.1: a new budget or a material change (a re-parse, a fed image) lets the sticky
-  // floors go (a new Start makes a new thread)
+  // V-F.1, V-R.2: a new budget or a material change (a re-parse, a fed image) resets
+  // every slot's back-off (a new Start makes a new thread)
   if (
-    budget != m_stickyBudget || m_frameMaterialsRevision != m_stickyMaterials
-    || m_frameImageChanges != m_stickyImageChanges)
+    budget != m_backoffBudget || m_frameMaterialsRevision != m_backoffMaterials
+    || m_frameImageChanges != m_backoffImageChanges)
   {
-    m_stickyBudget = budget;
-    m_stickyMaterials = m_frameMaterialsRevision;
-    m_stickyImageChanges = m_frameImageChanges;
-    m_stickyFloors.clear();
-    m_stickyWarned = false;
+    m_backoffBudget = budget;
+    m_backoffMaterials = m_frameMaterialsRevision;
+    m_backoffImageChanges = m_frameImageChanges;
+    m_dwellMultiplier.clear();
+    m_backoffWarned = false;
     m_liftedAt.clear();
   }
+  // V-R.2: a lift that held for the re-floor window resets its slot's back-off
+  const auto refloorWindow = std::chrono::milliseconds{m_refloorWindowMs.load()};
+  std::erase_if(m_liftedAt, [&](const auto& entry) {
+    const auto* slot = m_images.slot(entry.first);
+    if (now - entry.second <= refloorWindow || (slot && slot->floored))
+    {
+      return false;
+    }
+    m_dwellMultiplier.erase(entry.first);
+    return true;
+  });
   // F2.1 (Q49, the director's provisional answer per DQ-1): eviction lowers the textures
   // (the heaps' used bytes and the dedicated textures) toward their allowance, the budget
   // less the fixed part (the targets and buffers, the arenas used, what waits for its
@@ -1675,7 +1684,7 @@ void RenderThread::budgetPass()
     // less an eighth, and where the device reports its budget, its usage under that less
     // an eighth (the floor's hysteresis toward a sixteenth) -, each with the lifts in
     // flight, for UnfloorDwellTime and UnfloorDwellFrames drawn frames since the last
-    // floor; a sticky floor is never lifted
+    // floor; V-R.2: a backed-off slot for its multiplied dwell
     const auto sessionLine = budget - budget / 8;
     const auto deviceLine =
       m_extensionVram ? m_extensionVram->budgetBytes - m_extensionVram->budgetBytes / 8
@@ -1695,7 +1704,7 @@ void RenderThread::budgetPass()
       for (ImageSlotId id = 0; id < ImageSlotId(m_images.size()); ++id)
       {
         const auto& slot = *m_images.slot(id);
-        if (slot.floored && complete(slot) && !m_stickyFloors.contains(id))
+        if (slot.floored && complete(slot))
         {
           lifts.push_back(Lift{std::max(slot.flooredFrom, slot.textureBytes), id});
         }
@@ -1710,16 +1719,29 @@ void RenderThread::budgetPass()
     {
       m_underSince = std::pair{frame, now};
     }
-    if (
-      frame < m_underSince->first + UnfloorDwellFrames
-      || now - m_underSince->second < UnfloorDwellTime)
+    // V-R.2 (2026-11-06): each slot ready after its own (multiplied) dwell; a slot whose
+    // longer dwell has not passed waits, its retry asked by the idle tick's poll
+    const auto dwellFramesDone = frame >= m_underSince->first + UnfloorDwellFrames;
+    const auto baseDwell = std::chrono::milliseconds{m_dwellTimeMs.load()};
+    auto waitingBase = false;
+    std::erase_if(lifts, [&](const Lift& lift) {
+      const auto dwell = slotDwell(lift.id);
+      const auto ready = now - m_underSince->second >= dwell;
+      waitingBase = waitingBase || (!ready && dwell <= baseDwell);
+      return !ready;
+    });
+    if (lifts.empty() || !dwellFramesDone)
     {
       // V-R.1 (2026-11-06): the dwell draws frames of its own (each one progress for the
       // livelock guard), so a session whose pressure ended near its last frames does not
-      // settle with its floors kept
+      // settle with its floors kept: while a slot waits the base dwell, or a ready slot
+      // waits for the dwell's frames
       report.dwelling = true;
-      m_budgetLeft = true;
-      ++m_budgetDwellSteps;
+      if (waitingBase || !lifts.empty())
+      {
+        m_budgetLeft = true;
+        ++m_budgetDwellSteps;
+      }
       return;
     }
     std::ranges::sort(lifts, [](const Lift& a, const Lift& b) {
@@ -1888,6 +1910,7 @@ void RenderThread::budgetPass()
       const auto kept = slot.textureBytes >> std::min(2 * level, 62);
       floors.push_back(FloorCandidate{slot.textureBytes, slot.textureBytes - kept, id});
     }
+    auto backoffCapped = std::vector<ImageSlotId>{};
     std::ranges::sort(floors, [](const FloorCandidate& a, const FloorCandidate& b) {
       return a.bytes != b.bytes ? a.bytes > b.bytes : a.id < b.id;
     });
@@ -1907,39 +1930,59 @@ void RenderThread::budgetPass()
         freed += candidate.saving;
         ++done;
         report.floored.push_back(candidate.id);
-        // V-F.1 (2026-11-06): floored again within RefloorStickyTime of its lift: the
-        // figure that floors it holds the floor (no further lift until the next Start or
-        // the next material or budget change), so the two never take turns for good
-        if (const auto lifted = m_liftedAt.find(candidate.id);
-            lifted != m_liftedAt.end() && now - lifted->second <= RefloorStickyTime)
+        // V-R.2 (2026-11-06): floored again within the re-floor window of its lift: the
+        // slot's dwell doubles (the floor and the lift take turns ever more slowly, the
+        // lift retried at least every UnfloorBackoffCap), so no floor outlives the
+        // pressure by more than the cap; a re-floor after the window starts it afresh
+        if (const auto lifted = m_liftedAt.find(candidate.id); lifted != m_liftedAt.end())
         {
-          m_stickyFloors.insert(candidate.id);
-          report.sticky.push_back(candidate.id);
+          if (now - lifted->second <= refloorWindow)
+          {
+            const auto capMultiplier = std::max<std::int64_t>(
+              1, m_backoffCapMs.load() / std::max<std::int64_t>(1, m_dwellTimeMs.load()));
+            auto& multiplier =
+              m_dwellMultiplier.try_emplace(candidate.id, 1).first->second;
+            multiplier = std::min(multiplier * 2, capMultiplier);
+            report.backedOff.push_back(candidate.id);
+            if (multiplier == capMultiplier)
+            {
+              backoffCapped.push_back(candidate.id);
+            }
+          }
+          else
+          {
+            m_dwellMultiplier.erase(candidate.id);
+          }
         }
       }
     }
-    if (!report.sticky.empty() && !std::exchange(m_stickyWarned, true))
+    // V-R.2: said once, when a slot's dwell first reaches the cap
+    if (!backoffCapped.empty() && !std::exchange(m_backoffWarned, true))
     {
       auto names = std::vector<std::string>{};
-      for (const auto id : report.sticky)
+      for (const auto id : backoffCapped)
       {
         names.push_back(m_images.slot(id)->key.name);
       }
+      const auto capSeconds = m_backoffCapMs.load() / 1000;
       m_events.post(
         SessionEvent::Warning,
         m_extensionOver
           ? fmt::format(
-              "The lit preview keeps {} at its mip floor: the device's budget holds the "
-              "floor (VK_EXT_memory_budget: {} MB used of {} MB)",
+              "The lit preview draws {} at its mip floor: the device's budget holds the "
+              "floor (VK_EXT_memory_budget: {} MB used of {} MB); the lift is retried "
+              "every {} s",
               fmt::join(names, ", "),
               m_extensionVram->usedBytes / (1024 * 1024),
-              m_extensionVram->budgetBytes / (1024 * 1024))
+              m_extensionVram->budgetBytes / (1024 * 1024),
+              capSeconds)
           : fmt::format(
-              "The lit preview keeps {} at its mip floor: the session's budget holds the "
-              "floor ({} MB live of {} MB)",
+              "The lit preview draws {} at its mip floor: the session's budget holds the "
+              "floor ({} MB live of {} MB); the lift is retried every {} s",
               fmt::join(names, ", "),
               live / (1024 * 1024),
-              budget / (1024 * 1024)));
+              budget / (1024 * 1024),
+              capSeconds));
     }
   }
 
@@ -1971,7 +2014,7 @@ bool RenderThread::liftableFloor() const
     if (
       slot.floored && slot.state == ImageSlots::State::Resident
       && slot.intrinsic != NoImageSlot && slot.texture && slot.firstWrittenMip == 0
-      && slot.mipLevels > 0 && !m_stickyFloors.contains(id))
+      && slot.mipLevels > 0)
     {
       return true;
     }
@@ -1986,22 +2029,71 @@ void RenderThread::pollFloorsWhileIdle()
     const auto lock = std::scoped_lock{m_mutex};
     provider = m_deviceVramProvider;
   }
-  const auto device = provider ? provider(m_lastPassLive) : m_device.vram();
+  // the account as it stands at the tick (the last pass's figure may hold textures the
+  // frames since have let go), the lifts still in flight
+  const auto live =
+    accountGpuMemory(
+      m_frameResources, m_arenas, m_images, m_passes, m_tonemap, m_textureHeaps)
+      .live();
+  auto inFlight = std::uint64_t{0};
+  for (const auto& lift : m_lifting)
+  {
+    const auto* slot = m_images.slot(lift.id);
+    inFlight += slot && !slot->floored && slot->state == ImageSlots::State::Replacing
+                  ? lift.bytes
+                  : 0;
+  }
+  const auto device = provider ? provider(live) : m_device.vram();
   ++m_idleDeviceReads;
   const auto budget = vramBudget();
   const auto under =
-    m_lastPassLive + m_lastPassInFlight < budget - budget / 8
-    && (!device || device->usedBytes + m_lastPassInFlight < device->budgetBytes - device->budgetBytes / 8);
+    live + inFlight < budget - budget / 8
+    && (!device || device->usedBytes + inFlight < device->budgetBytes - device->budgetBytes / 8);
   if (!under)
   {
     m_underSince.reset();
     return;
   }
-  // a dwell already begun draws its own frames; one not begun begins at this frame
+  // a dwell not begun begins at this frame; a begun one draws its own frames, but for a
+  // backed-off slot whose longer dwell has now passed (V-R.2: its retry needs no
+  // interaction)
   if (!m_underSince)
   {
     requestFrame();
+    return;
   }
+  const auto now = FrameClock::now();
+  for (ImageSlotId id = 0; id < ImageSlotId(m_images.size()); ++id)
+  {
+    const auto& slot = *m_images.slot(id);
+    if (
+      slot.floored && slot.state == ImageSlots::State::Resident
+      && slot.intrinsic != NoImageSlot && slot.texture && slot.firstWrittenMip == 0
+      && slot.mipLevels > 0 && now - m_underSince->second >= slotDwell(id))
+    {
+      requestFrame();
+      return;
+    }
+  }
+}
+
+FrameClock::duration RenderThread::slotDwell(const ImageSlotId slot) const
+{
+  const auto it = m_dwellMultiplier.find(slot);
+  return std::chrono::milliseconds{m_dwellTimeMs.load()}
+         * (it != m_dwellMultiplier.end() ? it->second : std::int64_t{1});
+}
+
+void RenderThread::setBudgetTimes(
+  const std::chrono::milliseconds dwell,
+  const std::chrono::milliseconds refloorWindow,
+  const std::chrono::milliseconds backoffCap)
+{
+  m_dwellTimeMs = dwell.count() > 0 ? dwell.count() : UnfloorDwellTime.count();
+  m_refloorWindowMs =
+    refloorWindow.count() > 0 ? refloorWindow.count() : RefloorStickyTime.count();
+  m_backoffCapMs =
+    backoffCap.count() > 0 ? backoffCap.count() : UnfloorBackoffCap.count();
 }
 
 void RenderThread::runFrameHooks(nvrhi::ICommandList& commandList)
