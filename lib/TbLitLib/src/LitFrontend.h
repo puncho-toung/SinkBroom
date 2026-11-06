@@ -301,8 +301,11 @@ struct FrontendLists
   std::vector<PreviewId> mocTestedLights;
   std::vector<PreviewId> mocCulledLights;
   // the fill's and every test's time in this build (steady clock), in milliseconds:
-  // inside surfacesMs (the fill and the surface tests) and lightsMs (the light tests)
-  double mocMs = 0.0;
+  // inside surfacesMs (the fill and the surface tests) and lightsMs (the light tests);
+  // F2.11 (2026-11-05): the fill apart (the engine's pc.mocMicroSec times it alone) from
+  // the surface and light tests together
+  double mocFillMs = 0.0;
+  double mocTestMs = 0.0;
 
   // F3.4 (2026-11-05): the casters of the casting lights left out because their unit is
   // not directly visible and its shadow bounds miss the view (FAL:599-615)

@@ -395,7 +395,9 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
   m_stats.mocOccluders = m_lists.mocOccluders;
   m_stats.mocSurfaceTests = m_lists.mocSurfaceTests;
   m_stats.mocLightTests = m_lists.mocTestedLights.size();
-  m_stats.mocMs = m_stats.listsRebuilt ? m_lists.mocMs : 0.0;
+  m_stats.mocFillMs = m_stats.listsRebuilt ? m_lists.mocFillMs : 0.0;
+  m_stats.mocTestMs = m_stats.listsRebuilt ? m_lists.mocTestMs : 0.0;
+  m_stats.mocIndexCopyBytes = m_occlusion.indexCopyBytes();
   m_stats.mocImplementation = m_occlusion.implementationName();
   m_stats.lightTriangleEntries = m_lightTriangles.size();
 
@@ -769,6 +771,21 @@ void LitPasses::recordFrame(const LitFrameInputs& inputs)
       recordStages(frame, processed, true);
       m_stats.stagePostProcessDraws = m_stats.stageDraws - drawsBefore;
       m_logPostProcess = false;
+    }
+    else
+    {
+      // F3.9 (2026-11-05): no copy, so none of the surfaces from the first
+      // SS_POST_PROCESS one on is drawn: the frame is unconverged (FrameConvergence's
+      // passesDisabled) and the status says which were dropped
+      m_stats.postProcessDisabled = true;
+      m_stats.postProcessDropped = m_stageOrder.size() - processed;
+      if (m_stats.disabledReason.empty())
+      {
+        m_stats.disabledReason = fmt::format(
+          "the _currentRender copy cannot be made: the {} post-process surfaces from "
+          "the first SS_POST_PROCESS one on are not drawn",
+          m_stats.postProcessDropped);
+      }
     }
     closeStageTimer();
     m_stats.stageRecordMs += recordMsSince(start);
@@ -4191,6 +4208,8 @@ bool LitPasses::shadowMapPass(
     {
     case DrawOutcome::Drawn:
       ++m_stats.shadowDraws;
+      // F3.15 (2026-11-05): a model instance's shadow draw, inside modelDraws
+      m_stats.modelShadowDraws += caster.instance ? 1 : 0;
       ++drawn.draws;
       if (perforated)
       {

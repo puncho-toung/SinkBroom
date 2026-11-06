@@ -32,6 +32,7 @@
 #include "MaskedOcclusion.h"
 
 #include "LitFrontend.h"
+#include "LitHelpers.h"
 #include "lit/ChunkBuilder.h"
 #include "lit/EngineTables.h"
 
@@ -46,11 +47,6 @@ namespace
 {
 
 using MocClock = std::chrono::steady_clock;
-
-double millisecondsSince(const MocClock::time_point start)
-{
-  return std::chrono::duration<double, std::milli>(MocClock::now() - start).count();
-}
 
 // a chunk's idDrawVerts as RenderTriangles reads them: x at 0, y at 4, z at 8 (xyz is
 // EngineDrawVert's first member; with a matrix the library reads z, VertexLayout's
@@ -259,6 +255,9 @@ std::optional<MaskedOcclusion::SurfaceCull> MaskedOcclusion::cullSurfaces(
     result.runsViewCulled += rendered == EngineMocResult::ViewCulled ? 1 : 0;
     ++result.runs;
   }
+  // F2.11 (2026-11-05): the fill ends here, the surface tests begin
+  const auto fillEnd = MocClock::now();
+  result.fillMs = std::chrono::duration<double, std::milli>(fillEnd - start).count();
 
   // FAM:660-727: every surface; the unit cube over its bounds through its model matrix
   // and the unjittered MVP, BACKFACE_NONE, skipped with the view inside its bounds (no
@@ -308,7 +307,7 @@ std::optional<MaskedOcclusion::SurfaceCull> MaskedOcclusion::cullSurfaces(
       return entry.second.chunksVersion != m_chunksVersion;
     });
   }
-  result.ms = millisecondsSince(start);
+  result.testMs = millisecondsSince(fillEnd);
   return result;
 }
 
@@ -385,6 +384,7 @@ bool MaskedOcclusion::lightVisible(
     const auto y2 = -1.0f + (float(scissor.y2) / screenHeight) * 2.0f;
 
     result = m_moc->testRect(x1, y1, x2, y2, engineMocRectWmin(scissor.zmin, wmin));
+    ++m_rectTests;
   }
   ms += millisecondsSince(start);
   return result == EngineMocResult::Visible;
@@ -417,6 +417,11 @@ std::string_view MaskedOcclusion::implementationName() const
 {
   return m_moc ? engineMocImplementationName(m_moc->implementation())
                : std::string_view{};
+}
+
+std::uint64_t MaskedOcclusion::rectTests() const
+{
+  return m_rectTests;
 }
 
 std::thread::id MaskedOcclusion::lastThread() const

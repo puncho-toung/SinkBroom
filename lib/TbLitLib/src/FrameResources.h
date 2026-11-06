@@ -359,6 +359,13 @@ private:
   // not, or nullopt), and _currentRender at an extent
   std::optional<std::string> makeNormals(Targets& targets) const;
   nvrhi::TextureHandle makeCurrentRender(vk::Extent2D extent) const;
+
+public:
+  // F3.9 (2026-11-05): while set, no _currentRender is made (an allocation failure);
+  // process-wide, tests only
+  static void refuseCurrentRenderForTesting(bool refuse);
+
+private:
   // LP6.6: the four TAA targets into targets at their extent (why not, or nullopt)
   std::optional<std::string> makeTaaTargets(Targets& targets) const;
   // LP6.6 (C74): _ao0 and SSAO's arrays into targets at their extent (why not, or

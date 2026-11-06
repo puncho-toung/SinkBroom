@@ -478,8 +478,11 @@ struct LitFrameStats
   // pipeline, the budget)
   std::size_t stageDraws = 0;
   // LP7.2 (C52, D129): the draws of model instances (a shared placement), every pass's
-  // (the frame log's model_draws)
+  // (the frame log's model_draws); F3.15 (2026-11-05, DQ-14): pass 6's among them (a
+  // settled frame that keeps its tiles cached draws none: the parity rows pin the view's
+  // draws, modelDraws - modelShadowDraws, the parity meta's model_view_draws)
   std::size_t modelDraws = 0;
+  std::size_t modelShadowDraws = 0;
   std::size_t stageSkipped = 0;
   // the surfaces skipped because their material or registers are pending (D124: the
   // frame is unconverged) and (LP5.2b, C48) the cube-program draws made with the zero
@@ -497,6 +500,11 @@ struct LitFrameStats
   std::size_t stageCopies = 0;
   bool stageSecondCall = false;
   std::size_t stagePostProcessDraws = 0;
+  // F3.9 (2026-11-05): the _currentRender copy could not be made: the surfaces from the
+  // first SS_POST_PROCESS one on were not drawn (how many), the frame unconverged and
+  // disabledReason naming them
+  bool postProcessDisabled = false;
+  std::size_t postProcessDropped = 0;
   // LP6.5b (C72, D176, D180): the drawn surfaces whose material has a TG_REFLECT_CUBE2
   // stage with a bump stage (the lists' count when they were built: pass 3's consumer),
   // the frame's bumpyenvironment2 (59) draws (inside stageDraws), and its stages not
@@ -663,7 +671,11 @@ struct LitFrameStats
   std::size_t mocOccluders = 0;
   std::size_t mocSurfaceTests = 0;
   std::size_t mocLightTests = 0;
-  double mocMs = 0.0;
+  // F2.11 (2026-11-05): the fill's and the tests' time of this frame's build, and the
+  // occluders' index copies' bytes (DQ-17)
+  double mocFillMs = 0.0;
+  double mocTestMs = 0.0;
+  std::uint64_t mocIndexCopyBytes = 0;
   std::string_view mocImplementation;
 };
 

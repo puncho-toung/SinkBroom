@@ -88,7 +88,10 @@ public:
     std::size_t runsViewCulled = 0;
     std::size_t tests = 0;
     std::size_t culled = 0;
-    double ms = 0.0;
+    // F2.11 (2026-11-05): the fill's time (the engine's pc.mocMicroSec) and the surface
+    // tests', in milliseconds
+    double fillMs = 0.0;
+    double testMs = 0.0;
   };
 
   MaskedOcclusion();
@@ -147,6 +150,8 @@ public:
   // the occluders' index copies kept, and their bytes
   std::size_t indexCopies() const;
   std::uint64_t indexCopyBytes() const;
+  // F3.20 (2026-11-05, tests): the spot lights' TestRect calls since construction
+  std::uint64_t rectTests() const;
   // Stop: the buffer and the copies freed (the next build makes them again)
   void release();
 
@@ -164,6 +169,7 @@ private:
   std::unordered_map<const Chunk*, OccluderIndexes> m_indexes;
   std::uint64_t m_chunksVersion = 0;
   std::thread::id m_thread;
+  std::uint64_t m_rectTests = 0;
   EngineMocCubeVerts m_zeroOneCube;
   EngineMocCubeVerts m_unitCube;
   EngineMocCubeIndexes m_cubeIndexes;

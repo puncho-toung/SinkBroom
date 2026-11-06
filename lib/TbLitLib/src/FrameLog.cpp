@@ -330,7 +330,7 @@ std::string_view frameLogHeader()
          "resolves,surfaces_ms,lights_ms,links_ms,caster_sets_built,tiles_image_"
          "redrawn,texture_heaps,heap_bytes,textures_dedicated,textures_evicted,"
          "textures_floored,feeds_in_place,arena_moved_bytes,taa_history,lights_moc_"
-         "culled,surfaces_moc_culled,moc_ms\n";
+         "culled,surfaces_moc_culled,moc_fill_ms,moc_test_ms\n";
 }
 
 std::string formatFrameLogRow(const FrameLogRow& row)
@@ -344,12 +344,17 @@ std::string formatFrameLogRow(const FrameLogRow& row)
     // the frame's columns empty (gpu_prepass_ms ... gpu_fog_ms), then proc_bytes, then
     // LP7's twelve counts, LP3.1's twenty-one, LP3.2's three, LP3.4's one, LP6.0's ten
     // and three, LP6.1's two and LP6.2's five empty; then LP6.4a's three (the stop row's)
-    // and LP6.4b's four (an event row's own); LP6.6's one and LP6.7's three empty
+    // and LP6.4b's four (an event row's own); LP6.6's one and LP6.7's four empty (F2.11:
+    // moc_ms split in two)
     return fmt::format(
-      "{},{},,,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,{},,,,,,,,,,,,"
-      ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,{},{},,,,\n",
+      "{},{},{},,,,,,,,,,{},{},,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,{},,,,,,,,,,,,"
+      ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,{},{},,,,,\n",
       row.session,
       eventName(row.event),
+      // the frame-row index gap (2026-11-05): a compaction submission takes a frame
+      // number (its retire stamps), which its row carries; the other events none
+      row.event == FrameLogEvent::Compaction ? fmt::format("{}", row.frameIndex)
+                                             : std::string{},
       vram,
       resourceFields(row),
       optionalCount(row.procBytes),
@@ -358,7 +363,7 @@ std::string formatFrameLogRow(const FrameLogRow& row)
   }
   return fmt::format(
     "{},{},{},{:.3f},{:.3f},{:.3f},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},"
-    "{},{},{},{},{},{},{},{},{},{},{}\n",
+    "{},{},{},{},{},{},{},{},{},{},{},{}\n",
     row.session,
     eventName(row.event),
     row.frameIndex,
@@ -393,7 +398,8 @@ std::string formatFrameLogRow(const FrameLogRow& row)
     optionalCount(row.taaHistory),
     optionalCount(row.lightsMocCulled),
     optionalCount(row.surfacesMocCulled),
-    optionalField(row.mocMs, "{:.3f}"));
+    optionalField(row.mocFillMs, "{:.3f}"),
+    optionalField(row.mocTestMs, "{:.3f}"));
 }
 
 std::optional<std::string> FrameLogWriter::open(const std::filesystem::path& path)

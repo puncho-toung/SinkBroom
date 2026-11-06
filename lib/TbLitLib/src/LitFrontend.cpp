@@ -834,7 +834,8 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
       lists.mocOccluderRunsViewCulled = cull->runsViewCulled;
       lists.mocSurfaceTests = cull->tests;
       lists.surfacesMocCulled = cull->culled;
-      lists.mocMs += cull->ms;
+      lists.mocFillMs += cull->fillMs;
+      lists.mocTestMs += cull->testMs;
       if (cull->culled > 0)
       {
         auto kept = std::size_t{0};
@@ -993,7 +994,7 @@ FrontendLists buildFrontendLists(const FrontendInputs& inputs)
                 record->derived.projection.inverseBaseLightProject,
                 record->light.parms.pointLight || record->light.parms.parallel,
                 *scissor,
-                lists.mocMs))
+                lists.mocTestMs))
           {
             ++lists.lightsMocCulled;
             lists.mocCulledLights.push_back(record->id);

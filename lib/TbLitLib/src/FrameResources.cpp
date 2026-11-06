@@ -40,6 +40,7 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <atomic>
 #include <utility>
 
 namespace tb::lit
@@ -664,8 +665,23 @@ std::optional<std::string> FrameResources::makeTaaTargets(Targets& targets) cons
   return std::nullopt;
 }
 
+namespace
+{
+// F3.9 (2026-11-05): a test refuses the _currentRender texture (an allocation failure)
+auto refusedCurrentRender = std::atomic<bool>{false};
+} // namespace
+
+void FrameResources::refuseCurrentRenderForTesting(const bool refuse)
+{
+  refusedCurrentRender = refuse;
+}
+
 nvrhi::TextureHandle FrameResources::makeCurrentRender(const vk::Extent2D extent) const
 {
+  if (refusedCurrentRender)
+  {
+    return nullptr;
+  }
   // LP6.5b (C71, C14's descriptor): R_HDR_RGBA16FImage_ResNative at one sample, a render
   // target (postProcFBO's colour, Framebuffer_NVRHI.cpp:150-152) at the frame's extent;
   // NVRHI tracks it RenderTarget -> CopyDest (the copy) -> ShaderResource (the stages)

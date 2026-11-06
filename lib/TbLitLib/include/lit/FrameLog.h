@@ -91,7 +91,10 @@ struct FrameLogRow
   std::optional<double> gpuInteractionsMs;
   std::optional<double> gpuTonemapMs;
   std::optional<double> gpuBlitMs;
-  // draw calls (prepass, interactions, tonemap, blit) and the lit passes' own counts
+  // draw calls - F1.16 (2026-11-05): the eight terms prepass + pass 3 (the G-buffer) +
+  // ambient + interactions + stages + fog + blend + tonemap (the tonemap passes' draws,
+  // RenderThread's status.draws), shadow draws excluded (shadow_draws) - and the lit
+  // passes' own counts
   // (LitFrameStats): their draws, the draws skipped (D77, D76) and the pipelines pending
   std::optional<std::uint64_t> draws;
   std::optional<std::uint64_t> prepassDraws;
@@ -297,7 +300,10 @@ struct FrameLogRow
   // last columns
   std::optional<std::uint64_t> lightsMocCulled;
   std::optional<std::uint64_t> surfacesMocCulled;
-  std::optional<double> mocMs;
+  // F2.11 (2026-11-05): moc_ms split: the fill's time (moc_fill_ms, the engine's
+  // pc.mocMicroSec) and the light and surface tests' (moc_test_ms)
+  std::optional<double> mocFillMs;
+  std::optional<double> mocTestMs;
 };
 
 // the CSV header line, ending in a newline
