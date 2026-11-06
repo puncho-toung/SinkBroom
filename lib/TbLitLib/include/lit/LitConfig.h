@@ -83,6 +83,14 @@ constexpr auto MipFloorExtent = 256;
 constexpr auto EvictionIdleTime = std::chrono::milliseconds{2000};
 constexpr auto EmptyHeapKeepTime = std::chrono::milliseconds{1000};
 constexpr auto UnfloorsPerFrame = std::size_t{4};
+// V-F.1 (2026-11-06): a floor is lifted only once both figures (the session's live, and
+// VK_EXT_memory_budget's usage where the device reports it) have been under their lines
+// for UnfloorDwellTime and UnfloorDwellFrames drawn frames since the last floor; a slot
+// floored again within RefloorStickyTime of its lift keeps its floor until the next Start
+// or the next material or budget change
+constexpr auto UnfloorDwellTime = std::chrono::milliseconds{1000};
+constexpr auto UnfloorDwellFrames = std::uint64_t{4};
+constexpr auto RefloorStickyTime = std::chrono::milliseconds{10000};
 
 // LP6.4b (C68 (d), D174, A60): a compaction a settled frame marked runs in the next frame
 // drawn for another reason, or, when none comes within this, as an uploads-only idle

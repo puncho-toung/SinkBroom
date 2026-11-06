@@ -451,6 +451,13 @@ struct LdrImage
   std::vector<std::uint8_t> rgba;
 };
 
+// The device-local heaps' VRAM, from VK_EXT_memory_budget.
+struct VramUsage
+{
+  std::uint64_t usedBytes = 0;
+  std::uint64_t budgetBytes = 0;
+};
+
 /**
  * LP6.4b (C68 (b), D172), tests: what a frame's budget pass did: the frame, the slots it
  * evicted with their last-bound frames, those it floored and the Evicted ones it asked
@@ -474,13 +481,17 @@ struct BudgetPassReport
   std::uint64_t budgetBytes = 0;
   bool over = false;
   bool left = false;
-};
-
-// The device-local heaps' VRAM, from VK_EXT_memory_budget.
-struct VramUsage
-{
-  std::uint64_t usedBytes = 0;
-  std::uint64_t budgetBytes = 0;
+  // V-F.1 (2026-11-06): the device's figure the pass used and whether it read it in this
+  // pass; the floors waiting for the dwell (both figures under their lines, not yet for
+  // UnfloorDwellTime and UnfloorDwellFrames); the slots floored again within
+  // RefloorStickyTime of their lift (sticky from here); the slots at their floor and the
+  // lifts in flight when the pass began
+  std::optional<VramUsage> device;
+  bool deviceRead = false;
+  bool dwelling = false;
+  std::vector<std::uint32_t> sticky;
+  std::size_t atFloor = 0;
+  std::size_t lifting = 0;
 };
 
 // C30: what the session's device tells the engine's rules (P2.10, P2.13)
@@ -922,6 +933,13 @@ public:
   // LP6.4b, any thread: hook runs on the render thread after every frame's budget pass
   // (BudgetPassReport) until an empty function replaces it; no frame is triggered
   void setBudgetPassHookForTesting(std::function<void(const BudgetPassReport&)> hook);
+  /**
+   * V-F.1 (2026-11-06), any thread: VK_EXT_memory_budget's figure as the budget pass
+   * reads it, from provider (called on the render thread with the session's live bytes,
+   * where the pass would call the driver) until an empty function restores the device's
+   */
+  void setDeviceVramForTesting(
+    std::function<std::optional<VramUsage>(std::uint64_t liveBytes)> provider);
   // LP6.4b (C68 (d)), any thread: while held, no settled frame marks an arena
   // compaction; tests only
   void holdCompactionForTesting(bool hold);

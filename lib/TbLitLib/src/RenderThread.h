@@ -54,6 +54,8 @@
 #include <string_view>
 #include <thread>
 #include <tuple>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace tb::lit
@@ -522,7 +524,8 @@ private:
   // the materialsRevision of the table the frame's lit passes built their lists with
   std::uint64_t m_frameListsRevision = 0;
   // C11 (U2.6): VK_EXT_memory_budget's usage and budget are read at the session's first
-  // frame, after a settled frame and while they say over; whether the session said once
+  // frame, after a settled frame and while they say over (V-F.1: and every frame while a
+  // slot is at its floor or a lift is in flight); whether the session said once
   // that it passed a budget eviction could not bring it under. LP6.4b (C68 (b), Q48): the
   // session's budget (SessionOptions::vramBudgetBytes, a test's), the extension's last
   // reading and whether it said over, the live figure at which the pass found nothing
@@ -546,6 +549,27 @@ private:
   std::size_t m_frameStartsCount = 0;
   // LP6.4b (C68 (b)) test hook: called after every frame's budget pass (m_mutex)
   std::function<void(const BudgetPassReport&)> m_budgetPassHook;
+  // V-F.1 (2026-11-06): a test's stand-in for VK_EXT_memory_budget's figure (m_mutex);
+  // the floors lifted whose full textures are not written yet, with the bytes each costs
+  // again (counted into both figures until they land); since when (frame, time) both
+  // figures are under their lines with floors waiting (the dwell); when each slot was
+  // last lifted, the slots floored again within RefloorStickyTime of it (kept until the
+  // next Start, material change or budget change), whether that was said, and the
+  // budget, materials revision and image changes the sticky marks were taken under
+  std::function<std::optional<VramUsage>(std::uint64_t)> m_deviceVramProvider;
+  struct PendingLift
+  {
+    ImageSlotId id = NoImageSlot;
+    std::uint64_t bytes = 0;
+  };
+  std::vector<PendingLift> m_lifting;
+  std::optional<std::pair<std::uint64_t, FrameClock::time_point>> m_underSince;
+  std::unordered_map<ImageSlotId, FrameClock::time_point> m_liftedAt;
+  std::unordered_set<ImageSlotId> m_stickyFloors;
+  bool m_stickyWarned = false;
+  std::uint64_t m_stickyBudget = 0;
+  std::uint64_t m_stickyMaterials = 0;
+  std::uint64_t m_stickyImageChanges = 0;
   // LP6.4b (C68 (d), D174, A60): the compaction a settled frame marked, when, and the
   // uploads-only idle submissions so far
   std::optional<GeometryArenas::Compaction> m_compactionWanted;
@@ -822,6 +846,10 @@ public:
   // LP6.4b, any thread: hook runs on the render thread after every frame's budget pass
   // until an empty function replaces it (no frame is triggered)
   void setBudgetPassHook(std::function<void(const BudgetPassReport&)> hook);
+  // V-F.1 (2026-11-06), any thread: the budget pass reads VK_EXT_memory_budget's figure
+  // from provider (with the live bytes) until an empty function restores the device's
+  void setDeviceVramProvider(
+    std::function<std::optional<VramUsage>(std::uint64_t)> provider);
   // LP6.4b, any thread: while held, no settled frame marks a compaction (tests)
   void holdCompaction(bool hold);
   // F2.5 (2026-11-05, DQ-8), any thread: while held, every frame's convergence is behind

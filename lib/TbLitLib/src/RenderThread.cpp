@@ -35,6 +35,7 @@
 #include "kd/result.h"
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include <nvrhi/vulkan.h>
 
 #include <algorithm>
@@ -1290,6 +1291,13 @@ void RenderThread::setBudgetPassHook(std::function<void(const BudgetPassReport&)
   m_budgetPassHook = std::move(hook);
 }
 
+void RenderThread::setDeviceVramProvider(
+  std::function<std::optional<VramUsage>(std::uint64_t)> provider)
+{
+  const auto lock = std::scoped_lock{m_mutex};
+  m_deviceVramProvider = std::move(provider);
+}
+
 std::vector<int> RenderThread::startComputePrograms() const
 {
   auto programs =
@@ -1523,9 +1531,11 @@ void RenderThread::budgetPass()
 {
   const auto frame = m_frameIndex;
   auto hook = std::function<void(const BudgetPassReport&)>{};
+  auto deviceProvider = std::function<std::optional<VramUsage>(std::uint64_t)>{};
   {
     const auto lock = std::scoped_lock{m_mutex};
     hook = m_budgetPassHook;
+    deviceProvider = m_deviceVramProvider;
   }
   auto report = BudgetPassReport{};
   report.frame = frame;
@@ -1597,21 +1607,52 @@ void RenderThread::budgetPass()
 
   // Q48: the session's budget against the live figure, and VK_EXT_memory_budget's
   // budget against its usage (read at the first frame, after a settled one, and while
-  // it says over: a driver call)
+  // it says over: a driver call; V-F.1, 2026-11-06: and every frame while a slot is at
+  // its floor or a lift is in flight, so that no floor is lifted on a stale figure)
   const auto account = accountGpuMemory(
     m_frameResources, m_arenas, m_images, m_passes, m_tonemap, m_textureHeaps);
   const auto live = account.live();
   const auto budget = vramBudget();
-  if (!m_budgetChecked || m_lastSettled || m_extensionOver)
+  // V-F.1: the lifts whose full textures are written (or that went another way) leave
+  // the flight
+  std::erase_if(m_lifting, [&](const PendingLift& lift) {
+    const auto* slot = m_images.slot(lift.id);
+    return !slot || slot->floored || slot->state != ImageSlots::State::Replacing;
+  });
+  auto inFlight = std::uint64_t{0};
+  for (const auto& lift : m_lifting)
+  {
+    inFlight += lift.bytes;
+  }
+  report.atFloor = m_images.floored();
+  report.lifting = m_lifting.size();
+  if (
+    !m_budgetChecked || m_lastSettled || m_extensionOver || report.atFloor > 0
+    || !m_lifting.empty())
   {
     m_budgetChecked = true;
-    m_extensionVram = m_device.vram();
+    m_extensionVram = deviceProvider ? deviceProvider(live) : m_device.vram();
+    report.deviceRead = true;
   }
   m_extensionOver =
     m_extensionVram && m_extensionVram->usedBytes > m_extensionVram->budgetBytes;
   report.liveBytes = live;
   report.budgetBytes = budget;
+  report.device = m_extensionVram;
   report.over = live > budget || m_extensionOver;
+  // V-F.1: a new budget or a material change (a re-parse, a fed image) lets the sticky
+  // floors go (a new Start makes a new thread)
+  if (
+    budget != m_stickyBudget || m_frameMaterialsRevision != m_stickyMaterials
+    || m_frameImageChanges != m_stickyImageChanges)
+  {
+    m_stickyBudget = budget;
+    m_stickyMaterials = m_frameMaterialsRevision;
+    m_stickyImageChanges = m_frameImageChanges;
+    m_stickyFloors.clear();
+    m_stickyWarned = false;
+    m_liftedAt.clear();
+  }
   // F2.1 (Q49, the director's provisional answer per DQ-1): eviction lowers the textures
   // (the heaps' used bytes and the dedicated textures) toward their allowance, the budget
   // less the fixed part (the targets and buffers, the arenas used, what waits for its
@@ -1625,47 +1666,79 @@ void RenderThread::budgetPass()
     // F2.2 (2026-11-05): under the budget less an eighth, the mip floors are lifted, the
     // largest first, at most UnfloorsPerFrame a frame, each only while the live figure
     // with its full texture (the floor's kept until that one is written) stays under the
-    // line: the session draws the full mips again once the pressure has ended
-    if (live < budget - budget / 8 && m_images.floored() > 0)
+    // line: the session draws the full mips again once the pressure has ended. V-F.1
+    // (2026-11-06): both figures under their lines - the session's live under its budget
+    // less an eighth, and where the device reports its budget, its usage under that less
+    // an eighth (the floor's hysteresis toward a sixteenth) -, each with the lifts in
+    // flight, for UnfloorDwellTime and UnfloorDwellFrames drawn frames since the last
+    // floor; a sticky floor is never lifted
+    const auto sessionLine = budget - budget / 8;
+    const auto deviceLine =
+      m_extensionVram ? m_extensionVram->budgetBytes - m_extensionVram->budgetBytes / 8
+                      : std::uint64_t{0};
+    const auto under = [&](const std::uint64_t added) {
+      return live + inFlight + added < sessionLine
+             && (!m_extensionVram || m_extensionVram->usedBytes + inFlight + added < deviceLine);
+    };
+    struct Lift
     {
-      struct Lift
-      {
-        std::uint64_t full = 0;
-        ImageSlotId id = NoImageSlot;
-      };
-      auto lifts = std::vector<Lift>{};
+      std::uint64_t full = 0;
+      ImageSlotId id = NoImageSlot;
+    };
+    auto lifts = std::vector<Lift>{};
+    if (m_images.floored() > 0)
+    {
       for (ImageSlotId id = 0; id < ImageSlotId(m_images.size()); ++id)
       {
         const auto& slot = *m_images.slot(id);
-        if (slot.floored && complete(slot))
+        if (slot.floored && complete(slot) && !m_stickyFloors.contains(id))
         {
           lifts.push_back(Lift{std::max(slot.flooredFrom, slot.textureBytes), id});
         }
       }
-      std::ranges::sort(lifts, [](const Lift& a, const Lift& b) {
-        return a.full != b.full ? a.full > b.full : a.id < b.id;
-      });
-      auto projected = live;
-      for (const auto& lift : lifts)
+    }
+    if (lifts.empty() || !under(0))
+    {
+      m_underSince.reset();
+      return;
+    }
+    if (!m_underSince)
+    {
+      m_underSince = std::pair{frame, now};
+    }
+    if (
+      frame < m_underSince->first + UnfloorDwellFrames
+      || now - m_underSince->second < UnfloorDwellTime)
+    {
+      report.dwelling = true;
+      return;
+    }
+    std::ranges::sort(lifts, [](const Lift& a, const Lift& b) {
+      return a.full != b.full ? a.full > b.full : a.id < b.id;
+    });
+    auto added = std::uint64_t{0};
+    for (const auto& lift : lifts)
+    {
+      if (report.unfloored.size() == UnfloorsPerFrame)
       {
-        if (report.unfloored.size() == UnfloorsPerFrame)
-        {
-          m_budgetLeft = true;
-          break;
-        }
-        if (projected + lift.full >= budget - budget / 8)
-        {
-          continue;
-        }
-        if (m_images.unfloor(lift.id, frame))
-        {
-          projected += lift.full;
-          report.unfloored.push_back(lift.id);
-        }
+        m_budgetLeft = true;
+        break;
+      }
+      if (!under(added + lift.full))
+      {
+        continue;
+      }
+      if (m_images.unfloor(lift.id, frame))
+      {
+        added += lift.full;
+        report.unfloored.push_back(lift.id);
+        m_lifting.push_back(PendingLift{lift.id, lift.full});
+        m_liftedAt[lift.id] = now;
       }
     }
     return;
   }
+  m_underSince.reset();
   // nothing was left to let go at this live figure: no further pass until it changes
   if (m_budgetExhaustedLive == live)
   {
@@ -1825,7 +1898,39 @@ void RenderThread::budgetPass()
         freed += candidate.saving;
         ++done;
         report.floored.push_back(candidate.id);
+        // V-F.1 (2026-11-06): floored again within RefloorStickyTime of its lift: the
+        // figure that floors it holds the floor (no further lift until the next Start or
+        // the next material or budget change), so the two never take turns for good
+        if (const auto lifted = m_liftedAt.find(candidate.id);
+            lifted != m_liftedAt.end() && now - lifted->second <= RefloorStickyTime)
+        {
+          m_stickyFloors.insert(candidate.id);
+          report.sticky.push_back(candidate.id);
+        }
       }
+    }
+    if (!report.sticky.empty() && !std::exchange(m_stickyWarned, true))
+    {
+      auto names = std::vector<std::string>{};
+      for (const auto id : report.sticky)
+      {
+        names.push_back(m_images.slot(id)->key.name);
+      }
+      m_events.post(
+        SessionEvent::Warning,
+        m_extensionOver
+          ? fmt::format(
+              "The lit preview keeps {} at its mip floor: the device's budget holds the "
+              "floor (VK_EXT_memory_budget: {} MB used of {} MB)",
+              fmt::join(names, ", "),
+              m_extensionVram->usedBytes / (1024 * 1024),
+              m_extensionVram->budgetBytes / (1024 * 1024))
+          : fmt::format(
+              "The lit preview keeps {} at its mip floor: the session's budget holds the "
+              "floor ({} MB live of {} MB)",
+              fmt::join(names, ", "),
+              live / (1024 * 1024),
+              budget / (1024 * 1024)));
     }
   }
 

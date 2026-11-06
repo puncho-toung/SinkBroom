@@ -788,6 +788,12 @@ void LitSession::setBudgetPassHookForTesting(
   m_renderThread->setBudgetPassHook(std::move(hook));
 }
 
+void LitSession::setDeviceVramForTesting(
+  std::function<std::optional<VramUsage>(std::uint64_t liveBytes)> provider)
+{
+  m_renderThread->setDeviceVramProvider(std::move(provider));
+}
+
 void LitSession::skipInteractionsForTesting(const bool skip)
 {
   m_renderThread->setSkipInteractions(skip);
