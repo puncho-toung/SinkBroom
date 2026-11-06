@@ -8035,6 +8035,232 @@ TEST_CASE("LitSession the early frame and the shadow hold (LP6.4a)", "[.][litgpu
   CHECK(messages.warnings == 0);
 }
 
+// V-F.6 (2026-11-06): F3.1's red / green. The scene whole and settled at a camera, then
+// the camera nudged a hair's breadth (a move: StillTimerDelay's window opens, no LOD
+// changes for it, as step 0b's nudge) and, inside the window, a second snapshot that adds
+// a casting light: two whole frames of the window whose scene versions differ, as the
+// first camera's window met them in the trip reviewer 3 saw under load. The rule before
+// F3.1 held the first's layout and LODs across them (the scene whole), placed the new
+// light first-fit over the held layout (shadowLayoutDrift) and wanted a settle, which the
+// still timer drew at the window's end; since F3.1 the second is a settling frame (the
+// engine's packing, every LOD exact), and nothing waits for the still timer
+TEST_CASE(
+  "LitSession a light added inside the first camera's window (F3.1, V-F.6)",
+  "[.][litgpu4]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto service = rootService(root);
+    auto events = Events{};
+    auto session = rootSession(instance, events, *service, root, true, false, true);
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+    REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+    REQUIRE(
+      waitFor([&] { return session->firstBatchForTesting().whole; }, 10000ms, false));
+    // quiet: no frame for 400 ms
+    {
+      auto last = session->framesPresented();
+      auto since = std::chrono::steady_clock::now();
+      REQUIRE(waitFor(
+        [&] {
+          const auto presented = session->framesPresented();
+          if (presented != last)
+          {
+            last = presented;
+            since = std::chrono::steady_clock::now();
+          }
+          return std::chrono::steady_clock::now() - since >= 400ms;
+        },
+        10000ms,
+        false));
+    }
+
+    // the second snapshot: one more light, casting, in the camera's view
+    const auto added = lp22aSnapshot(
+      lp22aMapText()
+        + "// entity 12\n{\n\"classname\" \"light\"\n\"name\" \"lp1b_vf6\"\n\"origin\" "
+          "\"40 -40 60\"\n\"light_radius\" \"120 120 120\"\n}\n",
+      root,
+      7,
+      2);
+    auto addedId = NoPreviewId;
+    for (const auto& entity : added->entities)
+    {
+      for (auto k = entity.keys.first; k < entity.keys.first + entity.keys.count; ++k)
+      {
+        const auto& keyValue = added->keyValues[k];
+        if (
+          added->string(keyValue.key) == "name"
+          && added->string(keyValue.value) == "lp1b_vf6")
+        {
+          addedId = entity.id;
+        }
+      }
+    }
+    REQUIRE(addedId != NoPreviewId);
+
+    // at each frame's start: the last frame's pass 6
+    struct FrameStart
+    {
+      std::uint64_t frame = 0;
+      double ms = 0.0;
+      bool moving = false;
+      bool settleWanted = false;
+      bool drift = false;
+      std::vector<std::tuple<PreviewId, int, int>> records;
+    };
+    const auto start = std::chrono::steady_clock::now();
+    auto starts = std::make_shared<std::vector<FrameStart>>();
+    auto startsMutex = std::make_shared<std::mutex>();
+    session->setEveryFrameHookForTesting(
+      [starts, startsMutex, start](RenderFrameAccess& access) {
+        const auto& stats = access.passes.lastStats();
+        auto entry = FrameStart{};
+        entry.frame = access.frameIndex;
+        entry.ms = std::chrono::duration<double, std::milli>(
+                     std::chrono::steady_clock::now() - start)
+                     .count();
+        entry.moving = stats.shadowsMoving;
+        entry.settleWanted = stats.shadowSettleWanted;
+        entry.drift = stats.shadowLayoutDrift;
+        for (const auto& record : access.passes.shadowLights())
+        {
+          entry.records.emplace_back(record.light, record.lod, record.exactLod);
+        }
+        const auto lock = std::scoped_lock{*startsMutex};
+        starts->push_back(std::move(entry));
+      });
+    // each frame drawn: its start, and its pass 6 (read at the start of the one after)
+    const auto framesDrawn = [&] {
+      const auto lock = std::scoped_lock{*startsMutex};
+      auto drawn = std::vector<FrameStart>{};
+      for (std::size_t i = 1; i < starts->size(); ++i)
+      {
+        auto frame = (*starts)[i];
+        frame.frame = (*starts)[i - 1].frame;
+        frame.ms = (*starts)[i - 1].ms;
+        drawn.push_back(std::move(frame));
+      }
+      return drawn;
+    };
+    const auto withLight = [&](const FrameStart& frame) {
+      return std::ranges::any_of(frame.records, [&](const auto& record) {
+        return std::get<0>(record) == addedId;
+      });
+    };
+
+    // the camera settled (its own move from the session's first view, the still timer's
+    // settle among them), then nudged: the nudge's first frame with shadow records, then
+    // the light added
+    const auto lit = litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0});
+    REQUIRE(settledChain(*session, lit));
+    std::this_thread::sleep_for(StillTimerDelay * 2);
+    REQUIRE(settledChain(*session, lit));
+    const auto firingsBefore = session->stillTimerFiringsForTesting();
+    {
+      const auto lock = std::scoped_lock{*startsMutex};
+      starts->clear();
+    }
+    session->setCamera(litCamera({60, 0, 80.01f}, {0, 0, -1}, {1, 0, 0}));
+    REQUIRE(waitFor(
+      [&] {
+        // a frame's pass 6 is read at the next one's start
+        session->requestFrame();
+        return std::ranges::any_of(
+          framesDrawn(), [](const FrameStart& frame) { return !frame.records.empty(); });
+      },
+      5000ms,
+      false));
+    const auto offeredMs =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+        .count();
+    REQUIRE(session->offerSnapshot(added));
+    REQUIRE(waitFor(
+      [&] {
+        session->tableChanged();
+        return std::ranges::any_of(framesDrawn(), withLight);
+      },
+      5000ms,
+      false));
+    // past the still timer's delay
+    std::this_thread::sleep_for(StillTimerDelay * 2);
+    session->setEveryFrameHookForTesting({});
+    const auto drawn = framesDrawn();
+    for (const auto& frame : drawn)
+    {
+      auto records = std::string{};
+      for (const auto& [light, lod, exact] : frame.records)
+      {
+        records += fmt::format(" {}:{}/{}", light, lod, exact);
+      }
+      std::cout << fmt::format(
+        "  frame {} at {:.1f} ms: pass 6 moving {} settle {} drift {}, records "
+        "lod/exact{}\n",
+        frame.frame,
+        frame.ms,
+        frame.moving,
+        frame.settleWanted,
+        frame.drift,
+        records);
+    }
+    const auto changed = std::ranges::find_if(drawn, withLight);
+    REQUIRE(changed != drawn.end());
+    const auto firstMs = drawn.front().ms;
+    std::cout << fmt::format(
+      "V-F.6: the nudge's first frame at {:.1f} ms, the light offered at {:.1f} ms, its "
+      "first frame at {:.1f} ms (the window {} ms); moving {}, settle wanted {}, drift "
+      "{}; the still timer fired {} times in all, {} before the nudge\n",
+      firstMs,
+      offeredMs,
+      changed->ms,
+      StillTimerDelay.count(),
+      changed->moving,
+      changed->settleWanted,
+      changed->drift,
+      session->stillTimerFiringsForTesting(),
+      firingsBefore);
+    // the case proves the rule only when the light's frame started inside the first
+    // camera's window (as F2.8's): fail instead of passing then
+    CHECK(changed->ms - firstMs < double(StillTimerDelay.count()));
+    CHECK_FALSE(changed->moving);
+    CHECK_FALSE(changed->settleWanted);
+    CHECK_FALSE(changed->drift);
+    for (const auto& [light, lod, exact] : changed->records)
+    {
+      CAPTURE(light);
+      CHECK(lod == exact);
+    }
+    CHECK(session->stillTimerFiringsForTesting() == firingsBefore);
+    // (the count checked above, the first view's settle in it)
+    teardown(*session, std::nullopt);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  CHECK(resetDispatcher());
+  messages.print("V-F.6, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+}
+
 } // namespace
 
 // LP4.2b (C38, P4.24): the parity test's per-row switch over a synthetic rows.json: an
@@ -19823,6 +20049,9 @@ TEST_CASE(
   CHECK(pending->stats.shadowsPending);
   CHECK_FALSE(pending->converged);
   const auto solid = grateTileOf(*pending, pending->records[0]);
+  // V-F.14 (2026-11-06): the held tile is solid: depth over its footprint, no hole
+  CHECK(solid.bars > 0u);
+  CHECK(solid.holes == 0u);
 
   // released: the texture_color draws again, the tile settled with bars and holes
   clearLog();
@@ -24678,7 +24907,9 @@ TEST_CASE("LitSession the progressive TAA on a GPU (LP6.6)", "[.][litgpu4]")
       // its materials, registers and light triangles answered: the moving frames then
       // differ from the settled one by the camera alone (a scene change or a casting
       // light answered inside the window would restart the hold, and no settle would be
-      // wanted)
+      // wanted). V-F.7 (2026-11-06): declared - this section is the turn into a view seen
+      // before, the held moving frames and the still timer's settle; the turn into an
+      // unseen view, C73 (b)'s first shape, is the next section
       REQUIRE(settledShadowFrame(*session, behind, 0, false));
       REQUIRE(settledShadowFrame(*session, ahead, 2, false));
       std::this_thread::sleep_for(300ms);
@@ -24764,6 +24995,126 @@ TEST_CASE("LitSession the progressive TAA on a GPU (LP6.6)", "[.][litgpu4]")
             - settleAt,
       fmt::join(history.front().lods, " "),
       history.front().scissors.size(),
+      firings);
+  }
+
+  SECTION("C73: (b) a turn into an unseen view: settled by the frames its answers make")
+  {
+    // V-F.7 (2026-11-06): C73 (b)'s first shape, the turn into a view not seen before,
+    // its expectations restated to F3.1's rule (K13 narrowed): where the view's tables
+    // (its materials and registers) or its casting lights' light triangles answer inside
+    // the camera's moving window, a frame drawn with such an answer is a settling one
+    // (the engine's packing, every LOD exact) instead of a held one, so the turn is
+    // settled by those frames and the still timer does not fire; where nothing answers
+    // inside the window (lp3_vacated's caster sets are view-free, both lights' made at
+    // the first view), the moving frames hold and the still timer's frame settles, once,
+    // as C73 (b)'s first shape had it. Either way the frames before the settling one draw
+    // plain and hold, and the history (16) follows the last settling one
+    const auto root = assembleLp3Root(gamePath);
+    REQUIRE_FALSE(root.empty());
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    auto frames = std::vector<TaaFrame>{};
+    auto firings = std::uint64_t{0};
+    auto turnedAt = FrameClock::time_point{};
+    const auto ahead = litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1});
+    const auto behind = litCamera({200, 0, 128}, {-1, 0, 0}, {0, 0, 1});
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session =
+        taaSession(instance, events, *service, root, true, false, {}, true, true);
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(
+        lp3Snapshot(lp3MapText("lp3_vacated.map"), root, "lp3_vacated.map", 1)));
+      REQUIRE(settledShadowFrame(*session, ahead, 2, false));
+      std::this_thread::sleep_for(300ms);
+      const auto before = session->stillTimerFiringsForTesting();
+      auto tally = std::make_shared<TaaTally>();
+      tallyTaa(*session, tally);
+      REQUIRE(inFrame(*session, [](RenderFrameAccess&) {}));
+      const auto mark = session->framesPresented();
+      turnedAt = FrameClock::now();
+      session->setCamera(behind);
+      // the history after the turn's last settling frame, past the window
+      REQUIRE(taaSettles(*session, mark, 17));
+      std::this_thread::sleep_for(StillTimerDelay * 2);
+      REQUIRE(inFrame(*session, [](RenderFrameAccess&) {}));
+      session->setEveryFrameHookForTesting({});
+      firings = session->stillTimerFiringsForTesting() - before;
+      frames = tally->copy();
+      teardown(*session, std::nullopt);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      CHECK(events.count(SessionEvent::Warning) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+    messages.print("LP6.6 C73 (b) the unseen turn, validation");
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+
+    auto turned = std::vector<TaaFrame>{};
+    for (const auto& frame : frames)
+    {
+      if (frame.camera == behind && frame.start >= turnedAt)
+      {
+        turned.push_back(frame);
+      }
+    }
+    REQUIRE(turned.size() >= 18u);
+    // the turn's first frame holds and draws plain
+    CHECK(turned.front().shadowsMoving);
+    CHECK(turned.front().index == 0u);
+    // settling frames inside the window (an answer drawn), the engine's packing
+    auto settlingInWindow = std::size_t{0};
+    auto lastSettling = std::optional<std::size_t>{};
+    for (std::size_t i = 0; i < turned.size(); ++i)
+    {
+      if (!turned[i].shadowsMoving && turned[i].history == 0u && !turned[i].taaRan)
+      {
+        lastSettling = i;
+        settlingInWindow += turned[i].start - turnedAt < StillTimerDelay ? 1 : 0;
+      }
+    }
+    REQUIRE(lastSettling);
+    const auto& settle = turned[*lastSettling];
+    // F3.1: settled inside the window by an answer and no still timer, or held through
+    // it and settled once by the still timer
+    CHECK(firings == (settlingInWindow > 0u ? 0u : 1u));
+    CHECK(settle.index == 0u);
+    CHECK(settle.exact);
+    CHECK(settle.tilesDrawn + settle.tilesRelocated > 0u);
+    for (std::size_t i = 0; i < *lastSettling; ++i)
+    {
+      CHECK(turned[i].index == 0u);
+    }
+    const auto history = historyAfter(turned, *lastSettling);
+    checkHistory(history, false);
+    CHECK(history.front().lods == settle.lods);
+    CHECK(history.front().scissors == settle.scissors);
+    std::cout << fmt::format(
+      "LP6.6 C73 (b) the unseen turn (V-F.7): {} frames turned, {} settling inside the "
+      "window, the last settling one {} ms after the turn ({} tiles drawn, {} "
+      "relocated); its history's 16 frames with LODs ({}); the still timer fired {} "
+      "time(s)\n",
+      turned.size(),
+      settlingInWindow,
+      std::chrono::duration_cast<std::chrono::milliseconds>(settle.start - turnedAt)
+        .count(),
+      settle.tilesDrawn,
+      settle.tilesRelocated,
+      fmt::join(history.front().lods, " "),
       firings);
   }
 
@@ -25787,7 +26138,16 @@ TEST_CASE("LitSession masked occlusion culling on a GPU (LP6.7)", "[.][litgpu4]"
         5000ms,
         false));
       watchFrames(*session);
-      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+      // V-F.12 (2026-11-06): and a spot in the east room aimed away from the doorway,
+      // behind the wall's solid part: its rect through TestRect, hidden
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(
+        lp22aMapText()
+          + "// entity 12\n{\n\"classname\" \"light\"\n\"name\" \"lp1b_spot_hidden\"\n"
+            "\"origin\" \"184 64 64\"\n\"light_target\" \"16 0 0\"\n\"light_up\" "
+            "\"0 0 8\"\n\"light_right\" \"0 -8 0\"\n}\n",
+        root,
+        7,
+        1)));
       const auto on = settledShadowFrame(*session, view, 0, false);
       REQUIRE(on);
       const auto onLists = mocListsOf(*session);
@@ -25803,6 +26163,12 @@ TEST_CASE("LitSession masked occlusion culling on a GPU (LP6.7)", "[.][litgpu4]"
         std::ranges::find(onLists.tested, "lp1b_spot_through") != onLists.tested.end());
       CHECK(
         std::ranges::find(onLists.culled, "lp1b_spot_through") == onLists.culled.end());
+      // V-F.12 (2026-11-06): the hidden spot tested through TestRect and culled (a
+      // TestRect that always answered visible keeps it)
+      CHECK(
+        std::ranges::find(onLists.tested, "lp1b_spot_hidden") != onLists.tested.end());
+      CHECK(
+        std::ranges::find(onLists.culled, "lp1b_spot_hidden") != onLists.culled.end());
       session->setEveryFrameHookForTesting({});
       checkWatch(onLists, "no tree");
       switchMoc(*session, false);
