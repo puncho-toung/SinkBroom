@@ -96,11 +96,11 @@ void idDeclManagerLocal::InitTool()
 void idDeclManagerLocal::Shutdown()
 {
   const auto freeDeclSelf = [](idDeclLocal* decl) {
-    if (decl->self != NULL)
+    if (decl->self != nullptr)
     {
       decl->self->FreeData();
       delete decl->self;
-      decl->self = NULL;
+      decl->self = nullptr;
     }
   };
 
@@ -139,7 +139,7 @@ void idDeclManagerLocal::Shutdown()
       if (decl->textSource)
       {
         Mem_Free(decl->textSource);
-        decl->textSource = NULL;
+        decl->textSource = nullptr;
       }
       delete decl;
     }
@@ -169,7 +169,7 @@ void idDeclManagerLocal::ListType(const idCmdArgs&, declType_t) {}
 idDecl* idDeclManagerLocal::CreateNewDecl(declType_t, const char* name, const char*)
 {
   common->Warning("idDeclManager::CreateNewDecl: not available in SinkBroom (%s)", name);
-  return NULL;
+  return nullptr;
 }
 
 bool idDeclManagerLocal::RenameDecl(declType_t, const char* oldName, const char*)

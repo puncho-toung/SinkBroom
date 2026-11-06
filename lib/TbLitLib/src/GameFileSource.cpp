@@ -29,6 +29,7 @@
 
 #include "lit/GameFileSource.h"
 
+#include "LitHelpers.h"
 #include "fs/File.h"
 #include "fs/PathInfo.h"
 #include "fs/Reader.h"
@@ -60,11 +61,6 @@ namespace
 constexpr auto BinaryConfig = "binary.conf";
 
 using Clock = std::chrono::steady_clock;
-
-double secondsSince(const Clock::time_point start)
-{
-  return std::chrono::duration<double>(Clock::now() - start).count();
-}
 
 /**
  * GetFileList's test of a container entry (FileSystem.cpp:2322-2391, also 2407-2476): the

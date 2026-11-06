@@ -28,6 +28,7 @@
 
 #include "lit/EntityState.h"
 
+#include "LitHelpers.h"
 #include "lit/NumberText.h"
 
 #include <algorithm>
@@ -109,18 +110,6 @@ int cInt(const std::string_view text)
   auto value = 0L;
   std::from_chars(begin, end, value);
   return int(value);
-}
-
-bool equalsNoCase(const std::string_view lhs, const std::string_view rhs)
-{
-  return lhs.size() == rhs.size()
-         && std::equal(
-           lhs.begin(), lhs.end(), rhs.begin(), [](const char a, const char b) {
-             const auto lower = [](const char c) {
-               return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
-             };
-             return lower(a) == lower(b);
-           });
 }
 
 std::uint64_t hashBytes(std::uint64_t h, const void* data, const std::size_t size)

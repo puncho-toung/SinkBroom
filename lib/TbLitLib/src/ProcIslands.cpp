@@ -29,6 +29,7 @@
 
 #include "lit/ProcIslands.h"
 
+#include "LitHelpers.h"
 #include "lit/ProcFile.h"
 
 #include <algorithm>
@@ -338,18 +339,6 @@ bool nearAny(
 {
   return std::ranges::any_of(
     polygons, [&](const auto& polygon) { return nearConvex(p, polygon, tolerance); });
-}
-
-bool equalsNoCase(const std::string_view lhs, const std::string_view rhs)
-{
-  return lhs.size() == rhs.size()
-         && std::equal(
-           lhs.begin(), lhs.end(), rhs.begin(), [](const char a, const char b) {
-             const auto lower = [](const char c) {
-               return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
-             };
-             return lower(a) == lower(b);
-           });
 }
 
 // the unit of the last place of a half float of magnitude x (F32toF16 truncates, and

@@ -29,6 +29,7 @@
 
 #include "lit/ProcFile.h"
 
+#include "LitHelpers.h"
 #include "lit/EngineGeometry.h"
 #include "lit/EngineLexer.h"
 #include "lit/NumberText.h"
@@ -55,16 +56,6 @@ constexpr auto ProcFileId = std::string_view{"mapProcFile004"};
 constexpr auto ProcFileId003 = std::string_view{"mapProcFile003"};
 constexpr auto FloatsBasic = 8;
 constexpr auto FloatsColor = 12;
-
-bool equalsNoCase(const std::string_view lhs, const std::string_view rhs)
-{
-  return lhs.size() == rhs.size()
-         && std::equal(
-           lhs.begin(), lhs.end(), rhs.begin(), [](const char a, const char b) {
-             return std::tolower(static_cast<unsigned char>(a))
-                    == std::tolower(static_cast<unsigned char>(b));
-           });
-}
 
 // RenderWorld.h ProcFileVersion: 4, 3, or 0
 int procFileVersion(const std::string_view token)

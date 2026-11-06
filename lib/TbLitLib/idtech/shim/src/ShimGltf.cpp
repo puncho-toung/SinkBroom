@@ -172,7 +172,7 @@ inline void idList<gltfPropertyItem*, TAG_IDLIB_LIST>::DeleteContents(const bool
     {
       delete list[i];
     }
-    list[i] = NULL;
+    list[i] = nullptr;
   }
   if (clear)
   {

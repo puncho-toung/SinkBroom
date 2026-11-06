@@ -30,6 +30,7 @@
 // LP7.3 (C54, D132, D138, K42, K43; P7.18): the scene's dress decals, SceneGeometry's
 // members of that part
 
+#include "LitHelpers.h"
 #include "lit/DecalProjectors.h"
 #include "lit/EntityState.h"
 #include "lit/MaterialService.h"
@@ -49,18 +50,6 @@ namespace tb::lit
 {
 namespace
 {
-
-bool equalsNoCase(const std::string_view lhs, const std::string_view rhs)
-{
-  return lhs.size() == rhs.size()
-         && std::equal(
-           lhs.begin(), lhs.end(), rhs.begin(), [](const char a, const char b) {
-             const auto lower = [](const char c) {
-               return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
-             };
-             return lower(a) == lower(b);
-           });
-}
 
 std::string lowerCase(std::string_view text)
 {

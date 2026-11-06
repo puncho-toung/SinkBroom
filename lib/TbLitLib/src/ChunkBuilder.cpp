@@ -31,6 +31,7 @@
 
 #include "lit/ChunkBuilder.h"
 
+#include "LitHelpers.h"
 #include "lit/AreaTree.h"
 #include "lit/CpuPool.h"
 #include "lit/EngineTables.h"
@@ -53,18 +54,6 @@ namespace
 constexpr auto ContentsOrigin = 1 << 22;
 constexpr auto CoveragePerforated = 2;
 constexpr auto CoverageTranslucent = 3;
-
-bool equalsNoCase(const std::string_view lhs, const std::string_view rhs)
-{
-  return lhs.size() == rhs.size()
-         && std::equal(
-           lhs.begin(), lhs.end(), rhs.begin(), [](const char a, const char b) {
-             const auto lower = [](const char c) {
-               return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
-             };
-             return lower(a) == lower(b);
-           });
-}
 
 bool startsWithNoCase(const std::string_view text, const std::string_view prefix)
 {

@@ -28,6 +28,7 @@
 
 #include "lit/LightParse.h"
 
+#include "LitHelpers.h"
 #include "lit/EngineLight.h"
 #include "lit/EntityState.h"
 
@@ -44,19 +45,6 @@ namespace
 // the most light_style%d keys num_styles may ask for; the engine has no bound (a guard,
 // mirror.json M-LIGHT-GUARD-01)
 constexpr auto MaxLightStyles = 1024;
-
-bool equalsNoCase(const std::string_view lhs, const std::string_view rhs)
-{
-  // idStr::Icmp == 0: ASCII letters compared without case
-  return lhs.size() == rhs.size()
-         && std::equal(
-           lhs.begin(), lhs.end(), rhs.begin(), [](const char a, const char b) {
-             const auto lower = [](const char c) {
-               return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
-             };
-             return lower(a) == lower(b);
-           });
-}
 
 // idMath::ClampInt( min, max, value )
 int clampInt(const int min, const int max, const int value)

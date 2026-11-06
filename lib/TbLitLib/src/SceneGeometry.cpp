@@ -19,6 +19,7 @@
 
 #include "lit/SceneGeometry.h"
 
+#include "LitHelpers.h"
 #include "LitView.h"
 #include "ViewFlow.h"
 #include "lit/AreaData.h"
@@ -50,18 +51,6 @@ namespace
 // LP2.4: setSceneMapPathOverrideForTesting's path; constant-initialised and trivially
 // destructible (C9), the string the caller's
 constinit auto s_mapPathOverride = std::atomic<const char*>{nullptr};
-
-bool equalsNoCase(const std::string_view lhs, const std::string_view rhs)
-{
-  return lhs.size() == rhs.size()
-         && std::equal(
-           lhs.begin(), lhs.end(), rhs.begin(), [](const char a, const char b) {
-             const auto lower = [](const char c) {
-               return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
-             };
-             return lower(a) == lower(b);
-           });
-}
 
 bool isPrimitive(const SceneNode& node)
 {

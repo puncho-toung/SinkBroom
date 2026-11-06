@@ -31,6 +31,7 @@
 // LP7.2 (C52, C53, D124, D127, D128, D129, D139, D140): the scene's model entities,
 // SceneGeometry's members of that part
 
+#include "LitHelpers.h"
 #include "lit/AreaData.h"
 #include "lit/EngineModels.h"
 #include "lit/EntityState.h"
@@ -85,18 +86,6 @@ constexpr auto AnimatedSpawnclasses = std::array<std::string_view, 21>{
   "idAI_Vagary",
   "idTestModel",
 };
-
-bool equalsNoCase(const std::string_view lhs, const std::string_view rhs)
-{
-  return lhs.size() == rhs.size()
-         && std::equal(
-           lhs.begin(), lhs.end(), rhs.begin(), [](const char a, const char b) {
-             const auto lower = [](const char c) {
-               return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c;
-             };
-             return lower(a) == lower(b);
-           });
-}
 
 bool startsWithNoCase(const std::string_view text, const std::string_view prefix)
 {
