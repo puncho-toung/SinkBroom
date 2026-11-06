@@ -5890,7 +5890,7 @@
           "symbol": "listGameContainers"
         }
       ],
-      "note": "the containers of <game path>/base in registration order: Sys_ListFiles( base, \".resources\" ) sorted with idSort_PathStr, then Sys_ListFiles( base/maps, \".resources\" ) sorted, each with \"maps/\" in front; then Sys_ListFiles( base, \".pk4\" ) sorted. A .pk4 holding binary.conf is refused without a message, as Init refuses it. A container whose Init fails is skipped with the engine's warning. On Windows the first listing recurses and lists base/maps' containers too; the engine then registers them twice, and SinkBroom keeps each once at its later place, which finds the same file for every name (M-FS-DIFF-04). With fs_resourceLoadPriority 0, a read searches each kind from the last registered: base/maps' .resources (z to a), then base's (z to a); .pk4 files z to a. LP6.3 (A52, C67 (a)): the engine reads every container's table again at each start (AddGameDirectory, FileSystem.cpp:3174); the preview keeps the tables under their key (the base folder made absolute, the listing in this order, each container's name, size and stamp; lit/GameContainerIndex.h) across Stop and in a file under the user-data folder, reuses them while the key stands and scans when it moved, the search unchanged"
+      "note": "the containers of <game path>/base in registration order: Sys_ListFiles( base, \".resources\" ) sorted with idSort_PathStr, then Sys_ListFiles( base/maps, \".resources\" ) sorted, each with \"maps/\" in front; then Sys_ListFiles( base, \".pk4\" ) sorted. A .pk4 holding binary.conf is refused without a message, as Init refuses it. A container whose Init fails is skipped with the engine's warning. On Windows the first listing recurses and lists base/maps' containers too; the engine then registers them twice, and SinkBroom keeps each once at its later place, which finds the same file for every name (M-FS-DIFF-04). With fs_resourceLoadPriority 0, a read searches each kind from the last registered: base/maps' .resources (z to a), then base's (z to a); .pk4 files z to a. LP6.3 (A52, C67 (a)): the engine reads every container's table again at each start (AddGameDirectory, FileSystem.cpp:3174); the preview keeps the tables under their key (the base folder made absolute, the listing in this order, each container's name, size and stamp, and (F3.12, 2026-11-05) its table's digest, the listing reading each .resources table and each .pk4 central directory once per Start, so that a replacement of the same size that keeps its time is scanned again; lit/GameContainerIndex.h, index file version 3) across Stop and in a file under the user-data folder, reuses them while the key stands and scans when it moved, the search unchanged"
     },
     {
       "id": "M-FS-03",
@@ -8829,7 +8829,7 @@
           "symbol": "MapBake, the C10 search: the .proc's geometry, the .bproc's finished surfaces"
         }
       ],
-      "note": "LP7.0 (C4 extended, C54, D132, P7.18, SC649, SC636): the colour is the file's. ParseModel clears each vertex (Clear: color and color2 zero), sets xyz, st and the normal, then the colour: PROC_VERTEX_FORMAT_COLOR's four floats through PackColorRound, which rounds where PackColor truncates (\"dmap wrote byte / 255 with six decimals, which can parse a hair below the byte\": 0.498039 packs 127, PackColor would give 126) and clamps through Ftob (each component Ftob( x * 255 + 0.5 ), packed ( dx << 0 ) | ( dy << 8 ) | ( dz << 16 ) | ( dw << 24 ), stored by SetColor in native order, so color[0] is red on little-endian machines); the basic format PackColor( colorWhite ), opaque white; color2 stays zero. PackColorRound is transcribed in the geometry facade (enginePackColorRound) with the copied idMath::Ftob, Lib.cpp not being copied; SetColor is the copied DrawVert.h's. The product's bake read (MapBake readGeometry) asks readProcFile for the geometry, so the published tree holds every surface's vertex floats and indexes; the parse is the same (ParseModel tokenises every vertex and index either way), the cost is memory: procTreeBytes counts the arrays (4 B per float, 32 B per finished draw vertex, 4 B per index, 12 B per portal point, 24 B per node), about 38 B per vertex: lp1b_geometry.proc 8,368 B (984 B without the geometry, 188 vertices), its .bproc tree 9,128 B (208 finished vertices); the sandbox's parity .procs 23,648 (areas), 34,120 (ambient), 52,504 (parity), 72,344 (stages) B. MaterialServiceStats::procBytes sums the bakes' trees, each once; the frame log's stop row carries the adopted bake's as proc_bytes (empty in frame rows). Nothing draws from the geometry in LP7.0: LP7.3 (the dress decals) and LP7.4 (the adopted islands) read it. LP7.4 draws the adopted islands from it (loadProcIsland, loadProcSurface's per-vertex code; M-GEO-DIFF-04), and the bake's read builds the tree's islands with it on the parse thread (MapBake::islands, not counted in proc_bytes)"
+      "note": "LP7.0 (C4 extended, C54, D132, P7.18, SC649, SC636): the colour is the file's. ParseModel clears each vertex (Clear: color and color2 zero), sets xyz, st and the normal, then the colour: PROC_VERTEX_FORMAT_COLOR's four floats through PackColorRound, which rounds where PackColor truncates (\"dmap wrote byte / 255 with six decimals, which can parse a hair below the byte\": 0.498039 packs 127, PackColor would give 126) and clamps through Ftob (each component Ftob( x * 255 + 0.5 ), packed ( dx << 0 ) | ( dy << 8 ) | ( dz << 16 ) | ( dw << 24 ), stored by SetColor in native order, so color[0] is red on little-endian machines); the basic format PackColor( colorWhite ), opaque white; color2 stays zero. PackColorRound is transcribed in the geometry facade (enginePackColorRound) with the copied idMath::Ftob: the partial Lib.cpp (since LP7.1b, M-MODEL-PART-05 and -11) holds RevBytesSwap, RevBytesNoSwap and PackColor, not PackColorRound (:175-182); SetColor is the copied DrawVert.h's. The product's bake read (MapBake readGeometry) asks readProcFile for the geometry, so the published tree holds every surface's vertex floats and indexes; the parse is the same (ParseModel tokenises every vertex and index either way), the cost is memory: procTreeBytes counts the arrays (4 B per float, 32 B per finished draw vertex, 4 B per index, 12 B per portal point, 24 B per node), about 38 B per vertex: lp1b_geometry.proc 8,368 B (984 B without the geometry, 188 vertices), its .bproc tree 9,128 B (208 finished vertices); the sandbox's parity .procs 23,648 (areas), 34,120 (ambient), 52,504 (parity), 72,344 (stages) B. MaterialServiceStats::procBytes sums the bakes' trees, each once; the frame log's stop row carries the adopted bake's as proc_bytes (empty in frame rows). Nothing draws from the geometry in LP7.0: LP7.3 (the dress decals) and LP7.4 (the adopted islands) read it. LP7.4 draws the adopted islands from it (loadProcIsland, loadProcSurface's per-vertex code; M-GEO-DIFF-04), and the bake's read builds the tree's islands with it on the parse thread (MapBake::islands, not counted in proc_bytes)"
     },
     {
       "id": "M-PROC-02",
@@ -15366,10 +15366,10 @@
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/src/LitFrontend.cpp",
-          "symbol": "engineSortViewLights, buildFrontendLists"
+          "symbol": "engineViewLightsOrder, buildFrontendLists"
         }
       ],
-      "note": "LP2.2a step 2 (SC206): a light with no surface in any list is dropped; the rest are sorted by scissor area with qsort ascending and the list rebuilt by prepending, so the largest light comes first (ties: M-FRONT-DIFF-01). r_useShadowSurfaceScissor 1 shrinks a shadowing light's scissor to the union of its interaction surfaces' rects, which are the light's own (lightDrawSurf->scissorRect = vLight->scissorRect), so it changes nothing. LP4.1: with the pairing through shared areas (M-FRONT-02) a light the flow kept but whose areas reach no candidate it may light (a light of an area not connected to the view's, kept because it casts shadows, C33 a) has no surface and is dropped here, as the engine's has no interaction; FrontendLists::lightsInView counts the view lights before this drop"
+      "note": "LP2.2a step 2 (SC206); restated by LP3.0 (D148, P3.2): every view light is sorted, a light with no surface in any list among them (the engine's first loop only counts, :720-748, and its sort takes all of numViewLights, :805-823), by scissor area with the C runtime's qsort ascending and the list rebuilt by prepending, so the largest light comes first (engineViewLightsOrder; ties: M-FRONT-DIFF-01, K48); a light without a surface keeps its place in that order and is skipped when the sorted list is made (buildFrontendLists, sortInput without a list entry), as the engine's backend draws nothing for it. r_useShadowSurfaceScissor 1 shrinks a shadowing light's scissor to the union of its interaction surfaces' rects, which are the light's own (lightDrawSurf->scissorRect = vLight->scissorRect), so it changes nothing. LP4.1: with the pairing through shared areas (M-FRONT-02) a light the flow kept but whose areas reach no candidate it may light (a light of an area not connected to the view's, kept because it casts shadows, C33 a) has no surface and is skipped here, as the engine's has no interaction; FrontendLists::lightsInView counts the view lights before this drop"
     },
     {
       "id": "M-FRONT-04",
@@ -17037,7 +17037,7 @@
           "symbol": "engineClearedBounds, engineZeroBounds, engineBoundsIsCleared, engineAddBounds, engineUnitCube, engineBoundsCenter, engineOffsetScaleForBounds, engineDeformSurfaceBounds"
         }
       ],
-      "note": "LP4.0 step 1 (C31, P4.10, P4.30): per area N the world entity AddWorldModelEntities makes: the _areaN model's FinishSurfaces bounds (a model without surfaces Zero(), a point at the origin, not cleared; otherwise Clear(), then AddBounds of each surface's R_BoundTriSurf bounds, the MinMax of every parsed position through the shim's scalar MinMax (M-GEO-FN-01, exact as the engine's SSE MinMax); a surface whose material's Deform() is not DFRM_NONE first grown to mid +- ( ( bounds[0] - mid ).Length() + 20 ), transcribed on the copied idVec3 so Length is idMath::Sqrt's x * InvSqrt( x )); a .bproc model keeps the bounds LoadBinaryModel reads, which the engine wrote already grown (the fixture's .proc and .bproc agree bit for bit: tst_AreaData.cpp). Then R_DeriveEntityData with the identity axis at the origin: inverseBaseModelProject = OffsetScaleForBounds( CreateFromOriginAxis( 0, identity ), modelBounds ) and area->globalBounds = ProjectedBounds( it, bounds_unitCube, false ) (an ulp from the model bounds at most, through _mm_rcp32_ps; none on the fixture). Built on the parse thread inside readMapBake once the tree is chosen: each surface's material is asked of the copied registry through MaterialDecls::lookup, the parse thread's lookup, which makes an implicit material for a name without a decl as FindMaterial( name ) with makeDefault true does (no deform); a lookup that reached an engine error counts as no deform. The scene adopts MapBake::areas with the tree (SceneGeometry::areaData). A material edit that adds or drops a deform without a new dmap keeps the bake (its files' probes are unchanged), and its AreaData with it, until the bake is read again"
+      "note": "LP4.0 step 1 (C31, P4.10, P4.30): per area N the world entity AddWorldModelEntities makes: the _areaN model's FinishSurfaces bounds (a model without surfaces Zero(), a point at the origin, not cleared; otherwise Clear(), then AddBounds of each surface's R_BoundTriSurf bounds, the MinMax of every parsed position through the shim's scalar MinMax (M-GEO-FN-01, exact as the engine's SSE MinMax); a surface whose material's Deform() is not DFRM_NONE first grown to mid +- ( ( bounds[0] - mid ).Length() + 20 ), transcribed on the copied idVec3 so Length is idMath::Sqrt's x * InvSqrt( x )); a .bproc model keeps the bounds LoadBinaryModel reads, which the engine wrote already grown (the fixture's .proc and .bproc agree bit for bit: tst_AreaData.cpp). Then R_DeriveEntityData with the identity axis at the origin: inverseBaseModelProject = OffsetScaleForBounds( CreateFromOriginAxis( 0, identity ), modelBounds ) and area->globalBounds = ProjectedBounds( it, bounds_unitCube, false ) (an ulp from the model bounds at most, through _mm_rcp32_ps; none on the fixture). Built on the parse thread inside readMapBake once the tree is chosen: each surface's material is asked of the copied registry through MaterialDecls::lookup, the parse thread's lookup, which makes an implicit material for a name without a decl as FindMaterial( name ) with makeDefault true does (no deform); a lookup that reached an engine error counts as no deform. The scene adopts MapBake::areas with the tree (SceneGeometry::areaData). A material edit that adds or drops a deform without a new dmap keeps the bake (its files' probes are unchanged), and its AreaData with it, until the bake is read again. F3.7 (the final review cycle, 2026-11-05, DQ-6): the preview reads the .proc's deforms as of its read (K16: the editor prefers the .proc), where the engine keeps its .bproc's, which its first load wrote at the deform state of that time (RenderWorld_load.cpp:792-803, :832); after a deform edit without a re-dmap the areas' bounds can differ, and with them the automatic probe point (ProbeRecord), until the next dmap"
     },
     {
       "id": "M-AREA-02",
@@ -19043,7 +19043,7 @@
           "symbol": "ViewProbes"
         }
       ],
-      "note": "LP4.2a step 5 (C34, D85, P4.28): the probe path, the same parms for every draw of the view: WOBBLESKY_X ( bounds mins, cleared ? 0 : 1 ), WOBBLESKY_Y ( maxs, 0 ), WOBBLESKY_Z ( GetCenter, 1 ), TEXGEN_0_S/T/Q the three probe positions, LOCALLIGHTORIGIN the radiance blends, SH_IRRADIANCE_0..8 the blended SH (nine contiguous float4s); the program ambient_lighting_IBL_PBR (6) for a specular image of usage TD_SPECULAR_PBR_RMAO or _RMAOD, else ambient_lighting_IBL (4) (no skinned surfaces in the preview); the units 0-2 the interaction's bump, specular and diffuse images, 3 _brdfLut, 4 _white (M-AMB-DIFF-01), 7 _default (M-INTR-DIFF-02), 8-10 the radiance cubes, 12 the nearest's depth cube, 13-14 the next two's, the default cube (M-INTR-09) wherever a probe image is not Ready. The pipeline key { Draw, program, ambientStateBits, depth bias 0, slope 0, hdrFBO's formats }; DX.5's start list (litStartPipelineKeys) gains programs 4 and 6 times ONE / ZERO and ONE / ONE (11 keys). The grid branch before it (:1196-1305) is M-AMB-DIFF-03's"
+      "note": "LP4.2a step 5 (C34, D85, P4.28): the probe path, the same parms for every draw of the view: WOBBLESKY_X ( bounds mins, cleared ? 0 : 1 ), WOBBLESKY_Y ( maxs, 0 ), WOBBLESKY_Z ( GetCenter, 1 ), TEXGEN_0_S/T/Q the three probe positions, LOCALLIGHTORIGIN the radiance blends, SH_IRRADIANCE_0..8 the blended SH (nine contiguous float4s); the program ambient_lighting_IBL_PBR (6) for a specular image of usage TD_SPECULAR_PBR_RMAO or _RMAOD, else ambient_lighting_IBL (4) (no skinned surfaces in the preview); the units 0-2 the interaction's bump, specular and diffuse images, 3 _brdfLut, 4 _white (M-AMB-DIFF-01), 7 _default (M-INTR-DIFF-02), 8-10 the radiance cubes, 12 the nearest's depth cube, 13-14 the next two's, the default cube (M-INTR-09) wherever a probe image is not Ready. The pipeline key { Draw, program, ambientStateBits, depth bias 0, slope 0, hdrFBO's formats }; DX.5's start list (litStartPipelineKeys) gains programs 4 and 6 times ONE / ZERO and ONE / ONE (11 keys). The grid branch before it (:1196-1305) is M-GRID-02's (the pass's grid path, LP4.3; M-AMB-DIFF-03 retired)"
     },
     {
       "id": "M-AMB-05",
@@ -20002,7 +20002,11 @@
         },
         {
           "file": "lib/TbLitLib/src/RenderThread.cpp",
-          "symbol": "the frame rows' adopted_islands, adopted_tris, unmatched_islands, curved_islands"
+          "symbol": "the frame rows' adoptedIslands, adoptedTris, unmatchedIslands, curvedIslands (FrameLogRow)"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameLog.cpp",
+          "symbol": "frameLogHeader: adopted_islands, adopted_tris, unmatched_islands, curved_islands"
         },
         {
           "file": "lib/TbLitLib/test/src/tst_ProcIslands.cpp",
@@ -21091,7 +21095,7 @@
           "symbol": "LitSession math and ambientLight lights on a GPU (LP5.1): the math point light, the math sun, the held stage image"
         }
       ],
-      "note": "LP5.1 step 1 (C45, D112, SC507, SC508): a math light is a shader branch of the same programs (19, 20, 23, 24 by the surface's material, as a texture light's), layout, state, scissor, register evaluation and snap: per light stage _white at units 3 and 4 instead of the falloff and the stage image, USER0.x = 1 + r_showMathLights (EngineFrame.showMathLights, 0), the other USER members the parsed math data (a texture light's mlMode 0 as before). Mirrored engine facts, the blob's: MLEvaluate's curve, mask and pattern clamp to 0..1 with math_energy_clamp 1 (MLEnergyClamp: saturate) and to ML_HDR_CEIL without it, then the shader's sRGBToLinearRGB clamps to 0..1 and linearises (IPS:179, against MLI's own comment that the result is linear and must not be), so the analytic light never exceeds 1 and is gamma-linearised in the target: the preview inherits it by binding the blob, nothing of it is SinkBroom's. A math sun is unattenuated (falloff and mask 1). The [.][litgpu2] case models invsquare_clamped (Karis window, k 2) through the clamp and Linear1 within 1 % of HDR and +-1 LDR at two pixels, and the sun's three pixels equal"
+      "note": "LP5.1 step 1 (C45, D112, SC507, SC508): a math light is a shader branch of the same programs (19, 20, 23, 24 by the surface's material, as a texture light's), layout, state, scissor, register evaluation and snap: per light stage _white at units 3 and 4 instead of the falloff and the stage image, USER0.x = 1 + r_showMathLights (EngineFrame.showMathLights, 0), the other USER members the parsed math data (a texture light's mlMode 0 as before). Mirrored engine facts, the blob's: MLEvaluate's curve, mask and pattern clamp to 0..1 with math_energy_clamp 1 (MLEnergyClamp: saturate) and to ML_HDR_CEIL without it, then the shader's sRGBToLinearRGB clamps to 0..1 and linearises (IPS:179, against MLI's own comment that the result is linear and must not be), so the analytic light never exceeds 1 and is gamma-linearised in the target - in the plain interaction shader: the shadow-atlas programs of a placed casting light skip the decode (interactionSM.ps.hlsl:571-572, E-LIT-10, M-SHADOW-DEFECT-03; F3.21, 2026-11-05): the preview inherits both by binding the blobs, nothing of it is SinkBroom's. A math sun is unattenuated (falloff and mask 1). The [.][litgpu2] case models invsquare_clamped (Karis window, k 2) through the clamp and Linear1 within 1 % of HDR and +-1 LDR at two pixels, and the sun's three pixels equal"
     },
     {
       "id": "M-PASS-10",
@@ -21754,7 +21758,7 @@
           "symbol": "LitPasses::stageImage"
         }
       ],
-      "note": "LP5.2a step 2 (C46, D124, P6.17): a stage image is bound by its slot's state: Default (the service has no image: the engine's image not loaded or defaulted) binds _default, BindVariableStageImage's rule and the one place where the preview's _default is the engine's (zeros at com_developer 0, M-INTR-01: blend blend and add draw nothing visible, blend filter blackens); Pending (not answered) and Loading without a written level skip the draw and leave the frame unconverged (M-PASS-DIFF-05); Loading with written levels and Resident bind the slot; Replacing (LPF.1) binds its complete texture. A newStage block's fragment images take the same rule at units 0-2"
+      "note": "LP5.2a step 2 (C46, D124, P6.17): a stage image is bound by its slot's state: Default (the service has no image: the engine's image not loaded or defaulted) binds _default, BindVariableStageImage's rule and the one place where the preview's _default is the engine's (zeros at com_developer 0, M-INTR-01: blend blend and add draw nothing visible, blend filter blackens); Pending (not answered) and Loading without a written level skip the draw and leave the frame unconverged (M-PASS-DIFF-05); Loading with written levels and Resident bind the slot; Replacing (LPF.1) binds its complete texture; Evicted (LP6.4b, D172) is asked again at the frame's end (ImageSlots::want) and skips the draw as Pending does, the frame unconverged until it is back. A newStage block's fragment images take the same rule at units 0-2"
     },
     {
       "id": "M-STAGE-06",
@@ -24022,11 +24026,19 @@
         {
           "file": "lib/TbLitLib/src/ModelValidators.cpp",
           "symbol": "objFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/src/ModelValidators.cpp",
+          "symbol": "aseFileProblem, lwoFileProblem"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/ShimGltf.cpp",
+          "symbol": "engineFinishGltfModel (no surfaces: MakeDefaultModel)"
         }
       ],
       "call": "Error",
       "reachable": false,
-      "afterReturn": "MakeDefaultModel has replaced the surfaces with the cube's one, and the loop reads surfaces[ i ] up to the old count (UNSAFE). Unreachable: every surface ConvertOBJToModelSurfaces adds gets a triangle list (an object exists only with corners, Model_obj.cpp:134-158, 216-228)"
+      "afterReturn": "MakeDefaultModel has replaced the surfaces with the cube's one, and the loop reads surfaces[ i ] up to the old count (UNSAFE). Unreachable: every surface ConvertOBJToModelSurfaces adds gets a triangle list (an object exists only with corners, Model_obj.cpp:134-158, 216-228). F2.15 (2026-11-05): and for every other format that reaches FinishSurfaces: ASE, every object adds its surface or merges into one (Model.cpp:1776-1845) and every object's triangle list, made even without faces, is given to that surface (:1851-2050, :2507-2519); LWO, a layer without vertex data is refused before (M-MODEL-FATAL-34's guard, lwoFileProblem); glTF, a model without surfaces is the default model before FinishSurfaces (ShimGltf.cpp:975-982, Model_gltf.cpp:690-699) and every surface ProcessNode_r adds has its converted geometry"
     },
     {
       "id": "M-MODEL-FATAL-04",
@@ -24221,7 +24233,7 @@
       ],
       "call": "Error",
       "reachable": false,
-      "afterReturn": "the cleanup reads the indexes (UNSAFE for the out-of-range index). Unreachable: the conversion's indexes are below its numVerts and come in threes, the cube's are fixed, and engineCleanupModelTriangles checks a hand surface first (as engineCleanupTriangles); the validator's 32767 corners keep every index in 16 bits (M-MODEL-GUARD-01)"
+      "afterReturn": "the cleanup reads the indexes (UNSAFE for the out-of-range index). Unreachable: the conversion's indexes are below its numVerts and come in threes, the cube's are fixed, and engineCleanupModelTriangles checks a hand surface first (as engineCleanupTriangles); F3.17 (2026-11-05): a conversion's index past 16 bits wraps to a value below its numVerts, so in range, and a surface of more than 65,536 vertices is refused after the finish (M-MODEL-GUARD-04)"
     },
     {
       "id": "M-MODEL-GUARD-01",
@@ -24661,7 +24673,7 @@
           "symbol": "objFileProblem"
         }
       ],
-      "note": "LP7.1a (D136): the validator accepts a subset of what the copies read: an f line of four or more corners (sscanf matches the first nine numbers, so the engine draws the first triangle and drops the rest), a C or C++ comment the lexer skips, a v line whose numbers run on to the next line, a number the lexer reads otherwise (an octal 07, a hex 0x10, '+1') are refused and drawn as the default cube with the reason, where the engine loads them; an empty file is the cube on both sides (OBJ_Load's NULL)"
+      "note": "LP7.1a (D136): the validator accepts a subset of what the copies read: an f line of four or more corners (sscanf matches the first nine numbers, so the engine draws the first triangle and drops the rest), a C or C++ comment the lexer skips, a v line whose numbers run on to the next line, a number the lexer reads otherwise (an octal 07, a hex 0x10, '+1') are refused and drawn as the default cube with the reason, where the engine loads them; an empty file is the cube on both sides (OBJ_Load's NULL) K60 (00-PLAN.md section 7, 2026-11-05, F1.7) records the picture difference: a model file the validators refuse draws the default cube with a notice where the engine draws the model."
     },
     {
       "id": "M-MIKK-BUILD-01",
@@ -24674,6 +24686,29 @@
         }
       ],
       "note": "LP7.1a (D135): mikktspace.c compiles as C (the project declares C and CXX, CMakeLists.txt:41) inside TbLitIdLib with that target's options: on MSVC /w (suppress_dependency_warnings), /bigobj in Debug and /Z7 in Release, the compiler's default /fp:precise and CMake's default C flags; on GCC and Clang -w, -fno-strict-aliasing, -ffp-contract=off and, outside Debug, -fno-math-errno -fno-trapping-math (M-ID-BUILD-01's set). No define is needed (it includes the C headers only). The goldens' N03 (MikkTSpace on the engine's MSVC build) equals the preview's byte for byte"
+    },
+    {
+      "id": "M-MIKK-STATIC-01",
+      "kind": "static",
+      "engine": [
+        {
+          "file": "neo/libs/mikktspace/mikktspace.c",
+          "lines": [
+            429,
+            429
+          ],
+          "anchor": "static const int g_iCells",
+          "sha256": "0fd67b17bea1d1d4ef809246aee1a80107351e17f2b3c9c297cfb6e21fff286f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/engine/libs/mikktspace/mikktspace.c",
+          "symbol": "g_iCells (the copied file, M-MIKK-COPY-01)"
+        }
+      ],
+      "staticKind": "idempotent table",
+      "reason": "F1.6 (the final review cycle, 2026-11-05): a static const int of 2048, the vertex-welding hash grid's cell count, constant-initialised by its literal and read only (no dynamic initialiser: check_static_init.py)"
     },
     {
       "id": "M-MOC-COPY-01",
@@ -24992,7 +25027,7 @@
           "file": "lib/TbLitLib/idtech/shim/src/EngineMaskedOcclusion.cpp"
         }
       ],
-      "note": "LP6.7 (C75, D183, P8.16, P8.22): TbLitMoc is a static target built like TbLitIdLib (no CompilerConfig, no precompiled std headers, suppress_dependency_warnings, apply_sanitizer_options, C++17 as the engine's CMAKE_CXX_STANDARD, /Z7 in Release) with the engine CMake's per-file flags: MaskedOcclusionCulling.cpp with no arch flag on MSVC (x64's SSE2 baseline; the file #errors under /arch:AVX and AVX2) and -msse4.1 off MSVC; MaskedOcclusionCullingAVX2.cpp and MaskedOcclusionCullingAVX512.cpp with /arch:AVX2 (-mavx2 -mfma -msse4.1 off MSVC), USE_AVX512 left 0 as the engine's option OFF; CullingThreadpool.{h,cpp}, the CMakeLists.txt and the README.md are not compiled (the engine compiles CullingThreadpool.cpp among MOC_SSE_FILES but uses it only with MOC_MULTITHREADED 1). The library is compiled where the engine's USE_INTRINSICS_SSE is on (x86 and x86-64, not an arm64 Apple build: TbLitIdLib's rule); elsewhere the facade alone is built and EngineMaskedOcclusion::create returns null (no cull). The facade (shim/src/EngineMaskedOcclusion.cpp, no arch flag, TB_LIT_MOC defined) wraps Create, Destroy, SetResolution, SetNearClipPlane, ClearBuffer, RenderTriangles, TestTriangles, TestRect and ComputePixelDepthBuffer, transcribes the two cubes (RenderSystem_init.cpp:2125-2236) and gives EngineMocFloatScope: _mm_setcsr( _mm_getcsr() | 0x8040 ) (FTZ | DAZ) and the register given back, where the engine sets the bits once on its main thread (:2473-2474) - the preview's render thread keeps its own MXCSR outside the calls (P8.22). The library allocates its buffer with _aligned_malloc (CompilerSpecific.inl's moc_aligned_alloc), outside the GPU account. Linux and macOS on x86-64: the GCC and Clang flags are the engine's, untested here. On this machine Create() picks AVX2 (tst_MaskedOcclusion)."
+      "note": "LP6.7 (C75, D183, P8.16, P8.22): TbLitMoc is a static target built like TbLitIdLib (no CompilerConfig, no precompiled std headers, suppress_dependency_warnings, apply_sanitizer_options, C++17 as the engine's CMAKE_CXX_STANDARD, /Z7 in Release) with the engine CMake's per-file flags: MaskedOcclusionCulling.cpp with no arch flag on MSVC (x64's SSE2 baseline; the file #errors under /arch:AVX and AVX2) and -msse4.1 off MSVC; MaskedOcclusionCullingAVX2.cpp and MaskedOcclusionCullingAVX512.cpp with /arch:AVX2 (-mavx2 -mfma -msse4.1 off MSVC), USE_AVX512 left 0 as the engine's option OFF; CullingThreadpool.{h,cpp}, the CMakeLists.txt and the README.md are not compiled (the engine compiles CullingThreadpool.cpp among MOC_SSE_FILES but uses it only with MOC_MULTITHREADED 1). The library is compiled where the engine's USE_INTRINSICS_SSE is on (x86 and x86-64, not an arm64 Apple build: TbLitIdLib's rule); elsewhere the facade alone is built and EngineMaskedOcclusion::create returns null (no cull). The facade (shim/src/EngineMaskedOcclusion.cpp, no arch flag, TB_LIT_MOC defined) wraps Create, Destroy, SetResolution, SetNearClipPlane, ClearBuffer, RenderTriangles, TestTriangles, TestRect and ComputePixelDepthBuffer, transcribes the two cubes (RenderSystem_init.cpp:2125-2236) and gives EngineMocFloatScope: _mm_setcsr( _mm_getcsr() | 0x8040 ) (FTZ | DAZ) and the register given back, where the engine sets the bits once on its main thread (:2473-2474) - the preview's render thread keeps its own MXCSR outside the calls (P8.22). The library allocates its buffer with _aligned_malloc (CompilerSpecific.inl's moc_aligned_alloc), outside the GPU account. Linux and macOS on x86-64: the GCC and Clang flags are the engine's, by reading; untested here (F1.5, 2026-11-05: TbLitMoc takes TbLitIdLib's if(NOT MSVC) block too, the engine's -fno-strict-aliasing and -ffp-contract=off, -fno-math-errno and -fno-trapping-math outside Debug, and _DEBUG in Debug, neo/CMakeLists.txt:199, :217-226). On this machine Create() picks AVX2 (tst_MaskedOcclusion)."
     },
     {
       "id": "M-MOC-STATIC-01",
@@ -25188,6 +25223,42 @@
           ],
           "anchor": "Destroy",
           "sha256": "70cd483aa0c5031d911c679015359043c7df21792a8340b61fb106f73fc8c941"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_masked_occlusion_culling.cpp",
+          "lines": [
+            50,
+            102
+          ],
+          "anchor": "R_SortViewEntities: dynamics, _area models, the rest",
+          "sha256": "0f5ec05dfa51944a0edb7086da2e419b41cad46e167d60e4bb4a76ddf3af40c7"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_masked_occlusion_culling.cpp",
+          "lines": [
+            199,
+            214
+          ],
+          "anchor": "R_RenderSingleModel: occlusionSurface, the model has an IsOccluder surface",
+          "sha256": "6c73955c06d5fa72fd513c7a7cd238948e76e0b66b6cff07e991349cbdc9fd0f"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_masked_occlusion_culling.cpp",
+          "lines": [
+            241,
+            245
+          ],
+          "anchor": "R_RenderSingleModel: of such a model only the occluder surfaces",
+          "sha256": "1a337471cf0db14549313866c86da8c51404e201fb1dac47dd53f040b8485242"
+        },
+        {
+          "file": "neo/idlib/sys/sys_types.h",
+          "lines": [
+            83,
+            86
+          ],
+          "anchor": "Max( T x, T y ): ( x > y ) ? x : y",
+          "sha256": "b36321387c4aaeab00d348dc884966dbedde16b1a65431bb24294e1253f2156a"
         }
       ],
       "sinkbroom": [
@@ -25208,7 +25279,7 @@
           "symbol": "the overrides' maskedOcclusion, the frame log's three columns, SessionStatus"
         }
       ],
-      "note": "LP6.7 (C75, D183, Q44, Q45, A59; P8.15, P8.22; K51 restated, K15 closed, K58): the engine fills one masked occlusion buffer per view after the portal flow (FMAIN:934) with the visible view entities' static world area models (dmap's _areaN surfaces, every opaque drawn or occluder surface directly visible, in R_SortViewEntities' order) and IsOccluder models, then tests each light whose volume does not contain the view in R_AddSingleLight, before its shadow LOD (a hidden light leaves viewLights), and every surface of every view entity in R_AddSingleModel (the world's included, the !IsStaticWorldModel exclusion commented out; a hidden surface draws nothing and casts by FAL's rules). The preview does the same once per lists build, on the render thread, serially (the engine's MOC_MULTITHREADED 0 on both), inside the build (cpu_record_ms): the buffer at ⌊w / 2⌋ rounded up to x 8 by ⌊h / 2⌋ rounded up to x 4, the near plane r_znear (cramZNear never), cleared; its occluders are the editor's world chunks (worldspawn's, the adopted islands' and the dress surfaces') the flow left directly visible, or every world chunk in the frustum without a tree (D94: the no-.proc cull, SinkBroom's own, K58), of an opaque drawn material (IsDrawn and MC_OPAQUE) or SURF_OCCLUSION; never an entity's chunk or a model instance (an IsOccluder brush entity is one in the engine and none here). They are other triangles than the .proc's (K28), K14's outside set and faces dmap removes, per 1024-unit cell and material rather than per area and material, so the buffer and its decisions are the preview's own: a borderline light can be culled on one side only, and the other lights' atlas packing then differs (K4's clause stands, K51 restated). The recorded order (P8.15): the occluders' 256-unit sub-cell runs (Chunk::ranges) front to back by the squared distance from the view origin to their bounds, ties in ChunkKey order then run order; the library's QUICK_MASK merge keeps a working layer's farthest depth, so an order with far geometry first leaks (libs/moc/README.md, \"render order\"), which the preview's per-cell chunks without a tree would otherwise do. The occluders' 32-bit index copies (RenderTriangles takes unsigned int; the chunks hold uint16) are made at a chunk's first fill and kept in MaskedOcclusion beside it, by its address, kept across chunk versions while its indexes are unchanged and dropped when a fill of a new version no longer meets it (the engine's tri->mocIndexes, made by R_CreateMaskedOcclusionCullingTris); the vertices are the chunk's own idDrawVerts, VertexLayout( 32, 4, 8 ) for the engine's mocVerts' ( 16, 4, 8 ). The tests take the lists' unjittered MVPs (the TAA jitter is applied at parm time only, LP6.6), the light's box with the 3 x 3 part scaled by 0.99 as the engine has it (M-MOC-DEFECT-01), a spot's TestRect of its scissor with wmin / ( 1 - zmin ) in the engine's float and double steps. FTZ | DAZ is set around the calls and the MXCSR given back (EngineMocFloatScope), where the engine sets it once on its main thread at init: the preview's mirrored scissor and LOD arithmetic keeps running without it (P8.22). moc_ms spans the buffer's clear, the fill and every test (and the buffer's creation at the first build), where pc.mocMicroSec spans the fill alone (TMOC:546, 617-619). The switch: SessionOptions::maskedOcclusionForTesting and the overrides' fourth field maskedOcclusion, on by default as r_useMaskedOcclusionCulling 1, in ListsKey (a change builds the lists again); parity pins the engine's 0 (M-PARITY-04, Q45: no second engine run) and the [parity] cases run with it off, so parity never shows the cull; the GPU cases of LP6.7 do."
+      "note": "LP6.7 (C75, D183, Q44, Q45, A59; P8.15, P8.22; K51 restated, K15 closed, K58): the engine fills one masked occlusion buffer per view after the portal flow (FMAIN:934) with the visible view entities' static world area models (dmap's _areaN surfaces, every opaque drawn or occluder surface directly visible) and, of every other entity and non-skinned model, its IsOccluder surfaces (of a model that has one, only those: TMOC:199-214, :241-245, :356-365), in R_SortViewEntities' order (TMOC:50-102: the dynamic models, then the _area models, then the rest, the two first groups as viewEntitys holds them, the flow's order of adding them reversed, so the camera's own area comes last; F3.13, 2026-11-05), then tests each light whose volume does not contain the view in R_AddSingleLight, before its shadow LOD (a hidden light leaves viewLights), and every surface of every view entity in R_AddSingleModel (the world's included, the !IsStaticWorldModel exclusion commented out; a hidden surface draws nothing and casts by FAL's rules). The preview does the same once per lists build, on the render thread, serially (the engine's MOC_MULTITHREADED 0 on both), inside the build (cpu_record_ms): the buffer at ⌊w / 2⌋ rounded up to x 8 by ⌊h / 2⌋ rounded up to x 4, the near plane r_znear (cramZNear never), cleared; its occluders are the editor's world chunks (worldspawn's, the adopted islands' and the dress surfaces') the flow left directly visible, or every world chunk in the frustum without a tree (D94: the no-.proc cull, SinkBroom's own, K58), of an opaque drawn material (IsDrawn and MC_OPAQUE) or SURF_OCCLUSION; never an entity's chunk or a model instance (an IsOccluder surface of a brush entity or a static model is an occluder in the engine and none here), and front to back where the engine fills its area models in that reversed flow order: a light or surface the two buffers decide differently - culled on one side only - is expected at E-LIT-16's shells, in K4's packing and wherever the occluder sets differ (K51 restated by the director; the [parity-moc] case lists such rows by name). They are other triangles than the .proc's (K28), K14's outside set and faces dmap removes, per 1024-unit cell and material rather than per area and material, so the buffer and its decisions are the preview's own: a borderline light can be culled on one side only, and the other lights' atlas packing then differs (K4's clause stands, K51 restated). The recorded order (P8.15): the occluders' 256-unit sub-cell runs (Chunk::ranges) front to back by the squared distance from the view origin to their bounds, ties in ChunkKey order then run order; the library's QUICK_MASK merge keeps a working layer's farthest depth, so an order with far geometry first leaks (libs/moc/README.md, \"render order\"), which the preview's per-cell chunks without a tree would otherwise do. The occluders' 32-bit index copies (RenderTriangles takes unsigned int; the chunks hold uint16) are made at a chunk's first fill and kept in MaskedOcclusion beside it, by its address, kept across chunk versions while its indexes are unchanged and dropped when a fill of a new version no longer meets it (the engine's tri->mocIndexes, made by R_CreateMaskedOcclusionCullingTris); the vertices are the chunk's own idDrawVerts, VertexLayout( 32, 4, 8 ) for the engine's mocVerts' ( 16, 4, 8 ). The tests take the lists' unjittered MVPs (the TAA jitter is applied at parm time only, LP6.6), the light's box with the 3 x 3 part scaled by 0.99 as the engine has it (M-MOC-DEFECT-01), a spot's TestRect of its scissor with wmin / ( 1 - zmin ) in the engine's float and double steps, then the engine's Max( wmin2, 0.0f ) (FAL:378, sys_types.h:83-86: +0 for a -0 or a NaN where std::max kept them; engineMocRectWmin, F3.11, 2026-11-05). FTZ | DAZ is set around the calls and the MXCSR given back (EngineMocFloatScope), where the engine sets it once on its main thread at init: the preview's mirrored scissor and LOD arithmetic keeps running without it (P8.22). F2.11 (2026-11-05): LP6.7's moc_ms is split in two: moc_fill_ms spans the buffer's clear (and its creation at the first build), the occluders' order and the fill, where pc.mocMicroSec spans the fill alone (TMOC:546, 617-619), so the preview's figure is the larger by the clear and the order; moc_test_ms spans the surface tests and the light tests together; D183's 2 ms reads against their sum until the plan says otherwise. The switch: SessionOptions::maskedOcclusionForTesting and the overrides' fourth field maskedOcclusion, on by default as r_useMaskedOcclusionCulling 1, in ListsKey (a change builds the lists again); parity pins the engine's 0 (M-PARITY-04, Q45: no second engine run) and the [parity] cases run with it off, so parity never shows the cull against the engine; the GPU cases of LP6.7 do, and since F3.3 (2026-11-05) the [parity-moc] case compares every parity row's read-back with the culling on byte for byte with the [parity] case's cull-off one."
     },
     {
       "id": "M-MOC-DEFECT-01",
@@ -25262,6 +25333,24 @@
           ],
           "anchor": "ClearBuffer: zMin[0] -1, beyond infinity",
           "sha256": "c9b9574a2e6eb95443a8f0418ed3c949305ab1a13f7584f87d9db844cc98fbd7"
+        },
+        {
+          "file": "neo/libs/moc/MaskedOcclusionCullingAVX2.cpp",
+          "lines": [
+            45,
+            46
+          ],
+          "anchor": "SIMD_LANES 8, TILE_HEIGHT_SHIFT 3 (32 x 8 tiles)",
+          "sha256": "d8800c69a2a5996d5802bbfafb712135a1e03be3344fd26c0f0a4e31247fecb1"
+        },
+        {
+          "file": "neo/libs/moc/MaskedOcclusionCulling.cpp",
+          "lines": [
+            149,
+            150
+          ],
+          "anchor": "SIMD_LANES 4, TILE_HEIGHT_SHIFT 2 (32 x 4 tiles, SSE2 / SSE4.1)",
+          "sha256": "a0555f5d5cc532e46447df2dc878d3c1cac3240af6ab6c9c5d87c579890ef3ec"
         }
       ],
       "sinkbroom": [
@@ -25270,7 +25359,7 @@
           "symbol": "MaskedOcclusion::cullSurfaces (the resolution, as the engine's)"
         }
       ],
-      "note": "Found in LP6.7, kept (C75: the engine's resolution rule mirrored): the library's tiles are 32 x 8 pixels (subtiles 8 x 4) and the engine's buffer is rounded to a width of 8 and a height of 4 only, so a buffer whose width is not a multiple of 32 or whose height is not one of 8 holds partial tiles whose pixels beyond the view are never covered: their subtiles' reference layer stays ClearBuffer's -1, and a test box whose clipped triangles reach the guard band's pixel there tests VISIBLE whatever is in front of it. At 1080p the engine's and the preview's buffer is 960 x 540 (540 = 67.5 tiles): a light or surface box crossing the bottom edge of the view is never culled; the TbLitLib cases' 160 x 120 gives 80 x 60, partial on the right and the bottom. Shown by a CPU experiment in LP6.7 (a full-screen occluder, boxes crossing each edge): 80 x 60 right and bottom VISIBLE, 96 x 64 and 640 x 360 all OCCLUDED, 960 x 540 bottom VISIBLE. The library's conservative 8 x 4 subtiles also keep a silhouette's far depth across their width (a doorway's), which the fixture's no-.proc case (LP6.7 (d)) avoids by its view."
+      "note": "Found in LP6.7, kept (C75: the engine's resolution rule mirrored): the library's tiles are 32 x 8 pixels on AVX2 (TILE_HEIGHT_SHIFT 3, MaskedOcclusionCullingAVX2.cpp:45-46) and 32 x 4 on SSE (TILE_HEIGHT_SHIFT 2, MaskedOcclusionCulling.cpp:149-150; subtiles 8 x 4), and the engine's buffer is rounded to a width of 8 and a height of 4 only, so a buffer whose width is not a multiple of 32 or whose height is not one of the tile's holds partial tiles (which edge never culls depends on the CPU, as in the engine: F1.6, 2026-11-05) whose pixels beyond the view are never covered: their subtiles' reference layer stays ClearBuffer's -1, and a test box whose clipped triangles reach the guard band's pixel there tests VISIBLE whatever is in front of it. At 1080p the engine's and the preview's buffer is 960 x 540 (540 = 67.5 tiles): a light or surface box crossing the bottom edge of the view is never culled; the TbLitLib cases' 160 x 120 gives 80 x 60, partial on the right and the bottom. Shown by a CPU experiment in LP6.7 (a full-screen occluder, boxes crossing each edge): 80 x 60 right and bottom VISIBLE, 96 x 64 and 640 x 360 all OCCLUDED, 960 x 540 bottom VISIBLE. The library's conservative 8 x 4 subtiles also keep a silhouette's far depth across their width (a doorway's), which the fixture's no-.proc case (LP6.7 (d)) avoids by its view."
     },
     {
       "id": "M-TEST-MODEL-01",
@@ -26270,7 +26359,7 @@
           "symbol": "ModelLoading: the ASE validator"
         }
       ],
-      "note": "LP7.1b (D136, P7.2): every ASE passes the preview's own walk of the copied reader before the copies see it (the same tokenizer, 0x80-0xFF delimiting as the engine's signed char does; the same blocks and keys; nothing written); a failing one is the default cube with the reason. It refuses: a NUL, a line over 1,000 characters (the token buffer); an unclosed block or a '}' before its block (M-MODEL-FATAL-09, -10), a brace outside a block; a *MESH_NUM* count twice, after its list or outside 0..2^20; a list twice (a leak), with another token (M-MODEL-FATAL-12, -13, -14, -15, -17, -19, -29), not exactly its count of entries (M-MODEL-FATAL-11, -16, -18; the face, tface and cface lists have no check at all); *MESH_NUMTVFACES other than *MESH_NUMFACES, *MESH_NUMCVFACES then (M-MODEL-FATAL-24, -25); the tface, cface and normals lists before the face list (M-MODEL-FATAL-26, -27, -28: the normals' Warning, then NULL faces), the cface list before the cvert list or with an index out of range (:465); face normals out of order or range (M-MODEL-FATAL-20, -21), a vertex normal before one, out of range or no corner of its face (M-MODEL-FATAL-22, -23; :604 reads faces[-1]), a corner without one, a normal of zero length after the mesh's *NODE_TM; a second *MESH in an object (:813 leaks); a declared count without its list, a vertex or coordinate index out of range (M-MODEL-FATAL-30, -31), coordinates in use without a tface list, colours without a cface list (uninitialised in the engine), a *MATERIAL_REF naming no material, more than 32,767 corners, 1,024 objects or 1,024 materials; a number outside a finite decimal grammar (at most 1e30) or an index not a plain integer; a *BITMAP or *MATERIAL_NAME of 256 characters or more (OSPathToRelativePath's slashes). A file without a *GEOMOBJECT passes (M-MODEL-DIFF-07)"
+      "note": "LP7.1b (D136, P7.2): every ASE passes the preview's own walk of the copied reader before the copies see it (the same tokenizer, 0x80-0xFF delimiting as the engine's signed char does; the same blocks and keys; nothing written); a failing one is the default cube with the reason. It refuses: a NUL, a line over 1,000 characters (the token buffer); an unclosed block or a '}' before its block (M-MODEL-FATAL-09, -10), a brace outside a block; a *MESH_NUM* count twice, after its list or outside 0..2^20; a list twice (a leak), with another token (M-MODEL-FATAL-12, -13, -14, -15, -17, -19, -29), not exactly its count of entries (M-MODEL-FATAL-11, -16, -18; the face, tface and cface lists have no check at all); *MESH_NUMTVFACES other than *MESH_NUMFACES, *MESH_NUMCVFACES then (M-MODEL-FATAL-24, -25); the tface, cface and normals lists before the face list (M-MODEL-FATAL-26, -27, -28: the normals' Warning, then NULL faces), the cface list before the cvert list or with an index out of range (:465); face normals out of order or range (M-MODEL-FATAL-20, -21), a vertex normal before one, out of range or no corner of its face (M-MODEL-FATAL-22, -23; :604 reads faces[-1]), a corner without one, a normal of zero length after the mesh's *NODE_TM; a second *MESH in an object (:813 leaks); a declared count without its list, a vertex or coordinate index out of range (M-MODEL-FATAL-30, -31), coordinates in use without a tface list, colours without a cface list (uninitialised in the engine), a *MATERIAL_REF naming no material, more than 4,194,304 corners (the preview's memory guard; F3.17, 2026-11-05: the engine's bound, a surface's 65,536 welded vertices in Model.cpp:2033's 16-bit indexes, is M-MODEL-GUARD-04's test after the finish; LP7.1b's 32,767 corners per file are gone), 1,024 objects or 1,024 materials; a number outside a finite decimal grammar (at most 1e30) or an index not a plain integer; a *BITMAP or *MATERIAL_NAME of 256 characters or more (OSPathToRelativePath's slashes). A file without a *GEOMOBJECT passes (M-MODEL-DIFF-07)"
     },
     {
       "id": "M-MODEL-DIFF-07",
@@ -26301,7 +26390,7 @@
           "symbol": "aseFileProblem"
         }
       ],
-      "note": "LP7.1b (D136): the ASE validator accepts a subset of what the copies read: a stray brace at the top level, a list shorter than its count (the rest uninitialised in the engine), a count after its list, a second list, a *MESH_NORMALS or a colour list left incomplete, a number atof reads otherwise (nan, inf, 0x1p3, a trailing character) are refused and drawn as the default cube with the reason, where the engine loads them (or reads heap). A file without a *GEOMOBJECT, an empty one among them, is a Ready model without surfaces on both sides (LoadASE returns true, ConvertASEToModelSurfaces false: FinishSurfaces of no surface): the director's decision of 2026-10-26, against the brief's Default"
+      "note": "LP7.1b (D136): the ASE validator accepts a subset of what the copies read: a stray brace at the top level, a list shorter than its count (the rest uninitialised in the engine), a count after its list, a second list, a *MESH_NORMALS or a colour list left incomplete, a number atof reads otherwise (nan, inf, 0x1p3, a trailing character) are refused and drawn as the default cube with the reason, where the engine loads them (or reads heap). A file without a *GEOMOBJECT, an empty one among them, is a Ready model without surfaces on both sides (LoadASE returns true, ConvertASEToModelSurfaces false: FinishSurfaces of no surface): the director's decision of 2026-10-26, against the brief's Default K60 (00-PLAN.md section 7, 2026-11-05, F1.7) records the picture difference: a model file the validators refuse draws the default cube with a notice where the engine draws the model."
     },
     {
       "id": "M-MODEL-GUARD-03",
@@ -26538,7 +26627,7 @@
           "symbol": "ModelLoading: the LWO validator"
         }
       ],
-      "note": "LP7.1b (D136, P7.2): every LWO passes the preview's own IFF walk before the copies see it; a failing one is the default cube with the reason. The reader's own failure returns (the header, LAYR :1872, POLS :3203 and :3232, PTAG :3624 and :3641, BBOX :1946, the VMAP, TAGS, ENVL, CLIP and SURF readers and their blocks, lwGetPointPolygons, lwResolvePolySurfaces, lwGetPointVMaps, lwGetPolyVMaps) each free the partial object with lwFreeObject and give NULL, the engine's default cube: safe, and the walk refuses most of their causes too. It refuses what is not: a FORM type other than LWO2 (LWOB: M-MODEL-DIFF-08); a chunk past the FORM; an odd chunk a reader parses; PNTS not of 12-byte points or not finite; POLS without a polygon (:3153), not exactly filled by its records, a vertex index past the layer's points (:3295, :3330, :3353, Model.cpp:2381); VMAP/VMAD without records (:4957) or not exactly filled, a TXUV under two values or not finite, an RGBA under four or outside 0..1 (Model.cpp:2252, :2402-2433), an index past the layer's points or polygons at the end; PTAG not exactly filled, a polygon past the layer's (:3647), a SURF tag at or past the tag count (:3411); TAGS not terminated in the chunk (:3565, :1689), empty (:3397, :3422) or of 256 characters; polygons without a TAGS chunk (:3468); a SURF without a non-empty name (:3397) under 256 characters or not filled by its sub-chunks, COLR outside 0..1 (Model.cpp:2392-2395); a texture block not filled by its header and body sub-chunks or with an empty ordinal (:4538), an allocating sub-chunk twice (VMAP, FUNC, PNAM, INAM, FKEY, IKEY, TMAP's OREF: the first leaks); a shader block whose header loop meets a zero-size sub-chunk (:4447 never ends) or no ENAB, or with an empty ordinal (:4544); surfaces without points in the first layer (Model.cpp:2212-2216, then M-MODEL-FATAL-03); more than 32,767 polygons or triangle corners in the first layer (:2477), 256 SURF chunks, tags or layers (:2155's _alloca). Non-triangles pass: the conversion skips them with its Warning"
+      "note": "LP7.1b (D136, P7.2): every LWO passes the preview's own IFF walk before the copies see it; a failing one is the default cube with the reason. The reader's own failure returns (the header, LAYR :1872, POLS :3203 and :3232, PTAG :3624 and :3641, BBOX :1946, the VMAP, TAGS, ENVL, CLIP and SURF readers and their blocks, lwGetPointPolygons, lwResolvePolySurfaces, lwGetPointVMaps, lwGetPolyVMaps) each free the partial object with lwFreeObject and give NULL, the engine's default cube: safe, and the walk refuses most of their causes too. It refuses what is not: a FORM type other than LWO2 (LWOB: M-MODEL-DIFF-08); a chunk past the FORM; an odd chunk a reader parses; PNTS not of 12-byte points or not finite; POLS without a polygon (:3153), not exactly filled by its records, a vertex index past the layer's points (:3295, :3330, :3353, Model.cpp:2381); VMAP/VMAD without records (:4957) or not exactly filled, a TXUV under two values or not finite, an RGBA under four or outside 0..1 (Model.cpp:2252, :2402-2433), an index past the layer's points or polygons at the end; PTAG not exactly filled, a polygon past the layer's (:3647), a SURF tag at or past the tag count (:3411); TAGS not terminated in the chunk (:3565, :1689), empty (:3397, :3422) or of 256 characters; polygons without a TAGS chunk (:3468); a SURF without a non-empty name (:3397) under 256 characters or not filled by its sub-chunks, COLR outside 0..1 (Model.cpp:2392-2395); a texture block not filled by its header and body sub-chunks or with an empty ordinal (:4538), an allocating sub-chunk twice (VMAP, FUNC, PNAM, INAM, FKEY, IKEY, TMAP's OREF: the first leaks); a shader block whose header loop meets a zero-size sub-chunk (:4447 never ends) or no ENAB, or with an empty ordinal (:4544); surfaces without points in the first layer (Model.cpp:2212-2216, then M-MODEL-FATAL-03); more than 4,194,304 triangle corners in the first layer (the preview's memory guard; F3.17, 2026-11-05: the engine's bound, a surface's 65,536 welded vertices in Model.cpp:2477's 16-bit indexes, is M-MODEL-GUARD-04's test after the finish; LP7.1b's 32,767 polygons and corners are gone), 256 SURF chunks, tags or layers (:2155's _alloca). Non-triangles pass: the conversion skips them with its Warning"
     },
     {
       "id": "M-MODEL-DIFF-08",
@@ -26573,7 +26662,7 @@
           "symbol": "readLwoSource"
         }
       ],
-      "note": "LP7.1b (the director's decision b, 2026-10-26): an LWOB (LightWave 5) file is a validator refusal, drawn as the default cube with the notice \"<name> cannot be read: LightWave 5 objects (LWOB) are not read by the preview\", where the engine reads it through lwGetObject5 (whose surface reader dereferences a NULL texture after its asserts, :2464-2614, and writes s[-1], :2130); lwGetObject5's hazards are never walked. The LWO2 validator also accepts a subset of what the copies read (M-MODEL-GUARD-03): a refused LWO2 the engine reads is drawn as the cube with the reason"
+      "note": "LP7.1b (the director's decision b, 2026-10-26): an LWOB (LightWave 5) file is a validator refusal, drawn as the default cube with the notice \"<name> cannot be read: LightWave 5 objects (LWOB) are not read by the preview\", where the engine reads it through lwGetObject5 (whose surface reader dereferences a NULL texture after its asserts, :2464-2614, and writes s[-1], :2130); lwGetObject5's hazards are never walked. The LWO2 validator also accepts a subset of what the copies read (M-MODEL-GUARD-03): a refused LWO2 the engine reads is drawn as the cube with the reason K60 (00-PLAN.md section 7, 2026-11-05, F1.7) records the picture difference: a model file the validators refuse draws the default cube with a notice where the engine draws the model."
     },
     {
       "id": "M-MODEL-FATAL-09",
@@ -27839,11 +27928,11 @@
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/include/lit/ModelInstance.h",
-          "symbol": "SharedGeometryKey, SharedSurface, makeSharedSurface, ModelInstance"
+          "symbol": "SharedGeometryKey, SharedSurface, makeSharedSurface, ModelInstance (ModelInstance::key, ModelInstance::placement)"
         },
         {
           "file": "lib/TbLitLib/src/ModelInstance.cpp",
-          "symbol": "makeSharedSurface, ModelInstance::key, placement"
+          "symbol": "makeSharedSurface, SharedSurface::surface, vertexCount, indexCount"
         },
         {
           "file": "lib/TbLitLib/src/GeometryArenas.cpp",
@@ -28142,7 +28231,7 @@
           "symbol": "the sweep's post-finish check"
         }
       ],
-      "note": "LP7.2 step 1 (D136, the retail sweep's finding): the engine's bound on an OBJ is not a corner count: each welded vertex's number goes into a 16-bit triIndex_t, so a finished surface of more than 65,536 vertices (after R_MergeTriangles and R_DuplicateMirroredVertexes) has wrapped indexes. The preview finishes a source model and then refuses one whose surface passes the bound (modelSurfaceProblem): the Default record, drawn as the default cube with the reason; LP7.1a's 32,767 corners per file, which refused material-orb.obj, is gone for OBJ (MaxObjSourceCorners and MaxObjObjects are the preview's memory guards, M-MODEL-GUARD-01); the ASE and LWO validators keep MaxObjCorners"
+      "note": "LP7.2 step 1 (D136, the retail sweep's finding): the engine's bound on an OBJ is not a corner count: each welded vertex's number goes into a 16-bit triIndex_t, so a finished surface of more than 65,536 vertices (after R_MergeTriangles and R_DuplicateMirroredVertexes) has wrapped indexes. The preview finishes a source model and then refuses one whose surface passes the bound (modelSurfaceProblem): the Default record, drawn as the default cube with the reason; LP7.1a's 32,767 corners per file, which refused material-orb.obj, is gone for OBJ (MaxObjSourceCorners and MaxObjObjects are the preview's memory guards, M-MODEL-GUARD-01); F3.17 (2026-11-05): the ASE and LWO validators follow it (their corners bounded by MaxObjSourceCorners alone; MaxObjCorners is gone), and a glTF primitive takes 65,536 vertices, the count a 16-bit triIndex_t numbers"
     },
     {
       "id": "M-TEST-MODEL-05",
@@ -28484,6 +28573,19 @@
       "note": "LP7.3 (C24, A25, C20): the render thread runs the copied CreateParms, DepthFade and ClampDepthFade and the facade's transcriptions on the copied idVec3, idMat3 and idFixedWinding (SceneGeometry's dress pass, SceneDress.cpp, through parseDecalProjector; tests on their thread). C24's five conditions: (1) no common or idLib::common call is reachable; (2) no FatalError site; (3) no SIMDProcessor (GetBounds is a loop of AddPoint); (4) no allocation: the far cap is an idFixedWinding of four points on the calling thread's stack; (5) no static but the facade's constant stand-in byte. CreateParms asserts its material non-null and only stores it (DecalProjection.cpp:51-54): the facade passes the address of a constant byte, never read as an idMaterial (the table carries no id pointer, D32); the preview keeps the projector's material by name. Pure: each reads its arguments and writes its result. A target at the origin: InvSqrt( 0 ) is INFINITUM (1e30), so Normalize returns 1e30 x 0 = 0 and dmap's fallback warning is reachable (mirrored)"
     },
     {
+      "id": "M-DRESS-STATIC-01",
+      "kind": "static",
+      "engine": [],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineDecal.cpp",
+          "symbol": "s_materialStandIn, materialStandIn"
+        }
+      ],
+      "staticKind": "idempotent table",
+      "reason": "F1.6 (2026-11-05): the shim's own constexpr byte, constant-initialised 0, whose address is the material CreateParms carries (DecalProjection.cpp:51-54 asserts it non-null, stores it and never reads it; M-DRESS-PURE-01): never written, never dereferenced as an idMaterial"
+    },
+    {
       "id": "M-DRESS-01",
       "kind": "function",
       "engine": [
@@ -28670,11 +28772,11 @@
         },
         {
           "file": "lib/TbLitLib/src/RenderThread.cpp",
-          "symbol": "the frame row's dress_surfaces, dress_unmatched, inlined_surfaces; RenderFrameAccess::dress"
+          "symbol": "the frame row's dressSurfaces, dressUnmatched, inlinedSurfaces (FrameLogRow); RenderFrameAccess::dress"
         },
         {
           "file": "lib/TbLitLib/src/FrameLog.cpp",
-          "symbol": "inlined_surfaces, the twelfth of LP7's columns"
+          "symbol": "frameLogHeader: dress_surfaces, dress_unmatched, inlined_surfaces (the last of LP7's columns)"
         },
         {
           "file": "lib/TbLitLib/test/src/tst_Geometry.cpp",
@@ -28747,11 +28849,11 @@
         {
           "file": "neo/tools/compilers/dmap/usurface.cpp",
           "lines": [
-            779,
-            782
+            767,
+            834
           ],
-          "anchor": "dmap: a func_static or misc_model is inlined with inline 1 (or inlineAllStatics)",
-          "sha256": "6f9b20976487c2756f850e8bdbe28aabaa59de4cb19189bd2c7798b23670b806"
+          "anchor": "dmap: the inline rule: inline 1 or inlineAllStatics, a model key, and under inlineAllStatics a glb, gltf, lwo, ase, ma or obj model without a gui, gui2 or gui3 key",
+          "sha256": "682a6315a413a47d520f048886d7d89d0ac0ff452d45577a49b3c448880ac556"
         },
         {
           "file": "neo/tools/compilers/dmap/output.cpp",
@@ -28777,7 +28879,7 @@
           "symbol": "SceneGeometry, the dress decals from the .proc (LP7.3, C54): K42, an inline 1 model's dmap copy"
         }
       ],
-      "note": "LP7.3 (K42, LP7.2's finding): dmap draws an inline 1 func_static's or misc_model's model (or every one with worldspawn's inlineAllStatics; dmap reads inline from the raw map keys) into the world: its copy sits in _areaN as surfaces of the model's own material (skinless) that match no editor face, and the game hides the entity; the preview draws the model from its file at the entity's place (K42) and never the copy. Before the dress test, a surface whose material is an inlined model entity's own material (ModelInstance's source material) and whose every vertex lies within that instance's world bounds grown by MatchVert's weld 0.01 is the inlined copy: never a fragment, counted as the frame log's inlined_surfaces (its islands stay counted in unmatched_islands, as LP7.4 counts every island no face matches). The T-junction snap may move a copy's vertex up to 3/64 per axis where the model's corners are off the 1/32 grid: such a copy would fall outside the grown bounds and could then be identified as a fragment only if it also lay within a projector's bounds with its material (a K42 note). The models map's N10 copy is counted (1)"
+      "note": "LP7.3 (K42, LP7.2's finding): dmap draws an inline 1 func_static's or misc_model's model (or every one with worldspawn's inlineAllStatics; dmap reads inline from the raw map keys) into the world: its copy sits in _areaN as surfaces of the model's own material (skinless) that match no editor face, and the game hides the entity; the preview draws the model from its file at the entity's place (K42) and never the copy. Before the dress test, a surface whose material is an inlined model entity's own material (ModelInstance's source material) and whose every vertex lies within that instance's world bounds grown by MatchVert's weld 0.01 is the inlined copy: never a fragment, counted as the frame log's inlined_surfaces (its islands stay counted in unmatched_islands, as LP7.4 counts every island no face matches). The T-junction snap may move a copy's vertex up to 3/64 per axis where the model's corners are off the 1/32 grid: such a copy would fall outside the grown bounds and could then be identified as a fragment only if it also lay within a projector's bounds with its material (a K42 note). The models map's N10 copy is counted (1). F3.8 (the final review cycle, 2026-11-05): isInlined applies dmap's whole rule (usurface.cpp:767-834): a func_static or misc_model with a model key, with inline 1 or under inlineAllStatics, and under inlineAllStatics only a model whose extension (idStr::ExtractFileExtension: after the last dot, no separator after it) is glb, gltf, lwo, ase, ma or obj and whose entity has no gui, gui2 or gui3 key, whether or not it also has inline 1; a gui-bearing static's same-material dress surface is then a fragment, identified and drawn (tst_Geometry.cpp, the dress decals case). dmapGlobals.inlineStatics (dmap's own inlineStatics option) is not known to the editor"
     },
     {
       "id": "M-DRESS-DEFECT-01",
@@ -28856,7 +28958,7 @@
       "note": "LP7.3 (C54), CPU only, in the normal run: the parms of hand projectors (perspective defaults, parallel with its edges' planes and the bounds grown by the depth, rotation over angles over angle without modelscale, a target) against CreateParms' arithmetic transcribed in double (within 1e-5 on the planes, 1e-3 on the bounds), every default, the fade clamp and its warning, the target's fallbacks (missing, at the origin) and the refusals with the engine's wording, a moved target, the fade colour (alpha 191 two units into the band, 0 at the far cap), the 0.2 containment; the fixture scene (lp1b_geometry's map and golden .proc, a hand-written format-1 surface in _area0 with rgba ( 1, 1, 1, 0.5 ) and ( 1, 1, 1, 1 )): one world chunk of area 0 with alphas 128, 128, 255, 255 and loadProcSurface's positions, st and colours, a changed material and bounds 0.3 short unmatched and named once, 0.1 short matched, a hand-placed DECAL_MACRO face (the floor on a decal material in the map and the .proc) adopted and never a fragment, two projectors (the first by id, one tie), a moved target unmatched and identified again, a .bproc yielding none, an inline 1 model's hand-written copy counted inlined, neither adopted nor identified"
     },
     {
-      "id": "M-TEST-PARITY-09",
+      "id": "M-TEST-PARITY-11",
       "kind": "function",
       "testOnly": true,
       "engine": [
@@ -28901,7 +29003,7 @@
           "symbol": "LitSession parity rows (LP2.3): dress_surfaces, dress_unmatched (ParityLists' dress totals, the row .json's dress_surfaces, dress_unmatched, dress_identified, inlined_surfaces)"
         }
       ],
-      "note": "LP7.3 (C54, C56; P7.18, P7.23), test only: the models map's rooms J01-J05 from k 12 (the fifth map's rooms from k 17 are free), each with its noshadows light and func_decal projectors on textures/lp7/decal (DECAL_MACRO, blend blend, vertexColor, a black image: the lights-off controls black): J01 perspective fade 8 at yaw 210 from 4 in front of the east wall (the bake: one surface of 9 vertices, format 1, alphas 0 and 1 across the band) beside a hand-placed DECAL_MACRO face of the material inside its bounds (format 0, 4 vertices: adopted, not identified); J02 parallel aimed by a target_null inside the wall (11 vertices, alphas 0, 208/255, 1); J03 the lit twin (6 vertices; M-DRESS-04's derived picture: its footprint black); J04 fade 0 (6 vertices, format 0) beside a projector on lp7/wall (not discrete: the engine's warning, nothing baked, dress_unmatched 1); J05 a floor decal across a doorway's areaportal (two surfaces, 4 and 12 vertices, one per area). Each decal surface is its area's first surface (dmap prepends new groups). Every row exact with its control black; \"expect\": the dress surfaces the row's frame draws (J01-J04 1, J05 2) and J04's dress_unmatched 1, which the [.][parity] test asserts and writes into each row's .json beside the scene's identified surfaces and inlined copies. LP7.3's engine run of 2026-10-26 (11:26-11:46): 180 rows, every repeat 0, the proof listing 21,261 entries"
+      "note": "LP7.3 (C54, C56; P7.18, P7.23), test only: the models map's rooms J01-J05 from k 12 (the fifth map's rooms from k 17 are free), each with its noshadows light and func_decal projectors on textures/lp7/decal (DECAL_MACRO, blend blend, vertexColor, a black image: the lights-off controls black): J01 perspective fade 8 at yaw 210 from 4 in front of the east wall (the bake: one surface of 9 vertices, format 1, alphas 0 and 1 across the band) beside a hand-placed DECAL_MACRO face of the material inside its bounds (format 0, 4 vertices: adopted, not identified); J02 parallel aimed by a target_null inside the wall (11 vertices, alphas 0, 208/255, 1); J03 the lit twin (6 vertices; M-DRESS-04's derived picture: its footprint black); J04 fade 0 (6 vertices, format 0) beside a projector on lp7/wall (not discrete: the engine's warning, nothing baked, dress_unmatched 1); J05 a floor decal across a doorway's areaportal (two surfaces, 4 and 12 vertices, one per area). Each decal surface is its area's first surface (dmap prepends new groups). Every row exact with its control black; \"expect\": the dress surfaces the row's frame draws (J01-J04 1, J05 2) and J04's dress_unmatched 1, which the [.][parity] test asserts and writes into each row's .json beside the scene's identified surfaces and inlined copies. LP7.3's engine run of 2026-10-26 (11:26-11:46): 180 rows, every repeat 0, the proof listing 21,261 entries F1.4 (the final review cycle, 2026-11-05): renumbered from M-TEST-PARITY-09, which LP7.3 had reused although the LP7.2 fix round retired it (the default cube, c70b8654c); that id stays retired only"
     },
     {
       "id": "M-MODEL-COPY-08",
@@ -28957,7 +29059,7 @@
             1,
             2376
           ],
-          "anchor": "the whole parser before gltfManager::ExtractIdentifier",
+          "anchor": "the parser, loadGLB, Load, the accessor views, gltfData's statics and LoadGLTF; gltfManager::ExtractIdentifier (2377-2427, which needs idParser) transcribed in shim/src/ShimGltf.cpp",
           "sha256": "748ddeda9486ed5e46d0220b62b281ae07d586f04698fa4d9ee6d89120a6e1e0"
         }
       ],
@@ -28982,7 +29084,7 @@
             1,
             81
           ],
-          "anchor": "licence, include guard, gltfProperties.h, idMapPrimitive",
+          "anchor": "licence, include guard, the map versions and curve constants, idMapPrimitive",
           "sha256": "1cbde34c4181d895db52c781d3388308697f98caa0d5cea33b018709785f9695"
         },
         {
@@ -28991,7 +29093,7 @@
             291,
             430
           ],
-          "anchor": "MapPolygon and MapPolygonMesh",
+          "anchor": "MapPolygon, MapPolygonMesh",
           "sha256": "3545c75f4dd4e7f51c69cbc66af63c26c90bd3b85884db19ade1c8cb0cb6cb46"
         },
         {
@@ -29068,7 +29170,7 @@
             1,
             366
           ],
-          "anchor": "licence, blenderToDoomTransform, MapPolygonMesh::ConvertFromMeshGltf",
+          "anchor": "licence, includes, blenderToDoomTransform, MapPolygonMesh::ConvertFromMeshGltf",
           "sha256": "545bca2eb9d2313b90c8b60aa94a4bcb4de39b5449a445e162732a33b16cc3aa"
         }
       ],
@@ -29093,7 +29195,7 @@
             1,
             31
           ],
-          "anchor": "licence, precompiled.h",
+          "anchor": "licence, precompiled.h (Model_gltf.h, Model_local.h, RenderCommon.h and the d3xp headers left out: shim/src/ShimGltf.cpp declares idRenderModelGLTF)",
           "sha256": "f808a51fe3990cec0e4c2acb3c2e702c494ceccb3501edf1543711e3215cb35a"
         },
         {
@@ -29102,7 +29204,7 @@
             44,
             57
           ],
-          "anchor": "the cvars, the GLMB constants, blenderToDoomTransform, lastMeshFromFile",
+          "anchor": "the cvars and the statics (GLMB_MAGIC, blenderToDoomTransform, lastMeshFromFile)",
           "sha256": "cfdffa891c24dcc7fb2ee9dbe7480c198dceababc0d1c591720764ddc58f5587"
         },
         {
@@ -29145,7 +29247,7 @@
             154,
             166
           ],
-          "anchor": "PackColor( const idVec4& )",
+          "anchor": "PackColor",
           "sha256": "6dc2d232aae3c2f2301ccca2adb13db68fad896b820a9eb477c91484e92d377f"
         }
       ],
@@ -29679,11 +29781,11 @@
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/idtech/shim/private/shim/ShimFramework.h",
-          "symbol": "idFile, idFileSystem, idCommon"
+          "symbol": "idFile, idFileSystem, idCommon (idCommon::SetRefreshOnPrint, empty, inline)"
         },
         {
           "file": "lib/TbLitLib/idtech/shim/src/ShimFramework.cpp",
-          "symbol": "idFile::ReadUnsignedInt, idFileSystemLocal::GetFileLength, idCommon::SetRefreshOnPrint"
+          "symbol": "idFile::ReadUnsignedInt, idFileSystemLocal::GetFileLength"
         }
       ],
       "note": "LP7.5: the members the copied glTF parser calls on the shim's stand-ins: ReadUnsignedInt (non-virtual on the shim's idFile, through its virtual Read), GetFileLength (virtual, the model read's) and SetRefreshOnPrint (empty)"
@@ -29845,7 +29947,7 @@
           "symbol": "external buffers, data: URIs and image files are refused with the notice"
         }
       ],
-      "note": "LP7.5 (the director's decision 3): every buffer or image with a uri, a data: URI among them, is refused with the notice \"<name> cannot be read: glTF with external buffers is not read by the preview\" and drawn as the default cube, where the engine reads a uri through the file system from the game's root (not beside the .gltf) and dereferences NULL when it cannot open it (OpenFileRead of a data: URI or a missing file, :430). So a Blender \"glTF Separate\" export (.gltf + .bin + textures) is refused, a \"glTF Binary\" (.glb, its one buffer the BIN chunk) is read; a .gltf without a uri buffer has no BIN chunk and is refused too"
+      "note": "LP7.5 (the director's decision 3): every buffer or image with a uri, a data: URI among them, is refused with the notice \"<name> cannot be read: glTF with external buffers is not read by the preview\" and drawn as the default cube, where the engine reads a uri through the file system from the game's root (not beside the .gltf) and dereferences NULL when it cannot open it (OpenFileRead of a data: URI or a missing file, :430). So a Blender \"glTF Separate\" export (.gltf + .bin + textures) is refused, a \"glTF Binary\" (.glb, its one buffer the BIN chunk) is read; a .gltf without a uri buffer has no BIN chunk and is refused too K60 (00-PLAN.md section 7, 2026-11-05, F1.7) records the picture difference: a glTF whose buffer or image is an external uri draws the default cube with the notice where the engine draws the model."
     },
     {
       "id": "M-MODEL-DIFF-13",
@@ -29898,7 +30000,7 @@
           "symbol": "readGltfSource"
         }
       ],
-      "note": "LP7.5 (D136, P7.2): the glTF validator accepts a subset of what the copies read: JSON with an escape or a control character in a string, a number with an upper-case exponent or a leading zero, a duplicate key, a byte order mark or a NUL; a primitive whose mode is not triangles (4) or whose POSITION, NORMAL, TANGENT, TEXCOORD_0 or WEIGHTS_0 is not float (5126), COLOR_0 not float, unsigned short or unsigned byte, JOINTS_0 not unsigned short or byte; a node tree over 128 deep or with a cycle; no scene; more than 32 chunks are refused with the reason and drawn as the default cube, where the engine reads some of them (a strip as a triangle list, normalised integers as floats' bits, an escape kept in the name) and dereferences or loops on others. A refused file a user's export may hold is a finding of the retail sweep (M-TEST-MODEL-04)"
+      "note": "LP7.5 (D136, P7.2): the glTF validator accepts a subset of what the copies read: JSON with an escape or a control character in a string, a number with an upper-case exponent or a leading zero, a duplicate key, a byte order mark or a NUL; a primitive whose mode is not triangles (4) or whose POSITION, NORMAL, TANGENT, TEXCOORD_0 or WEIGHTS_0 is not float (5126), COLOR_0 not float, unsigned short or unsigned byte, JOINTS_0 not unsigned short or byte; a node tree over 128 deep or with a cycle; no scene; more than 32 chunks are refused with the reason and drawn as the default cube, where the engine reads some of them (a strip as a triangle list, normalised integers as floats' bits, an escape kept in the name) and dereferences or loops on others. A refused file a user's export may hold is a finding of the retail sweep (M-TEST-MODEL-04) K60 (00-PLAN.md section 7, 2026-11-05, F1.7) records the picture difference: a model file the validators refuse draws the default cube with a notice where the engine draws the model."
     },
     {
       "id": "M-MODEL-DIFF-14",
@@ -30113,7 +30215,7 @@
           "symbol": "ModelLoading: the glTF validator (LP7.5, D136, P7.2)"
         }
       ],
-      "note": "LP7.5 (D136, P7.2, the director's decision S6): every .glb and .gltf passes the preview's structural validator before the copies see it; a failing one is the default cube with \"<name> cannot be read: <reason>\". The container: a .glb of at least 20 bytes, the magic glTF (case-insensitive, as the engine's Icmp), version 2, the header's length equal to the file's (no underflow of length - 12), the JSON chunk first, at most one BIN chunk after it, every chunk inside the file, at most 32 chunks; the JSON read by its own reader in the lexer's terms (M-MODEL-DIFF-13), one root object, nesting under 64, only the keys ParseProp knows (:1846); every index resolved and present (a node's mesh, skin and children, a scene's nodes, a primitive's indices, material and attributes, an accessor's view, a view's buffer, a skin's joints and skeleton, an animation's targets), the default scene present (an absent scene refused), the children tree under 128 deep and without a cycle, a skin without a skeleton named like a node (:2170-2175, else FindModelRoot reads nodes[ -1 ]); each primitive mode 4, a POSITION, every attribute's count the first's, the index count a multiple of 3, its values below the vertex count, at most 65,535 vertices (the 16-bit triIndex_t), each accessor window (offset, stride, count, element size) inside its view and the view inside the BIN chunk, the component types the conversion reads (M-MODEL-DIFF-13); a mapped semantic in another case refused (the engine's Icmp would take it, the validator's own check would not), TEXCOORD_1 and the other unmapped ones ignored as the engine ignores them; the vector items' arities (:692-776), a material name under 256 characters; the external buffers (M-MODEL-DIFF-12); the counts under MaxGltf*. GltfFileFacts reports the nodes, meshes, primitives, vertices, materials, animations and skins it read"
+      "note": "LP7.5 (D136, P7.2, the director's decision S6): every .glb and .gltf passes the preview's structural validator before the copies see it; a failing one is the default cube with \"<name> cannot be read: <reason>\". The container: a .glb of at least 20 bytes, the magic glTF (case-insensitive, as the engine's Icmp), version 2, the header's length equal to the file's (no underflow of length - 12), the JSON chunk first, at most one BIN chunk after it, every chunk inside the file, at most 32 chunks; the JSON read by its own reader in the lexer's terms (M-MODEL-DIFF-13), one root object, nesting under 64, only the keys ParseProp knows (:1846); every index resolved and present (a node's mesh, skin and children, a scene's nodes, a primitive's indices, material and attributes, an accessor's view, a view's buffer, a skin's joints and skeleton, an animation's targets), the default scene present (an absent scene refused), the children tree under 128 deep and without a cycle, a skin without a skeleton named like a node (:2170-2175, else FindModelRoot reads nodes[ -1 ]); each primitive mode 4, a POSITION, every attribute's count the first's, the index count a multiple of 3, its values below the vertex count, at most 65,536 vertices (the 16-bit triIndex_t numbers 0-65,535; F3.17, 2026-11-05: the engine's bound, LP7.5's 65,535 was one short), each accessor window (offset, stride, count, element size) inside its view and the view inside the BIN chunk, the component types the conversion reads (M-MODEL-DIFF-13); a mapped semantic in another case refused (the engine's Icmp would take it, the validator's own check would not), TEXCOORD_1 and the other unmapped ones ignored as the engine ignores them; the vector items' arities (:692-776), a material name under 256 characters; the external buffers (M-MODEL-DIFF-12); the counts under MaxGltf*. GltfFileFacts reports the nodes, meshes, primitives, vertices, materials, animations and skins it read"
     },
     {
       "id": "M-MODEL-GUARD-06",
@@ -30353,7 +30455,7 @@
       ],
       "call": "FatalError",
       "reachable": false,
-      "afterReturn": "then reads numbers[0..3] of a shorter list (UNSAFE, past the list). Unreachable: every vec4 of exactly 4 numbers"
+      "afterReturn": "then reads numbers[0..3] of a shorter list (UNSAFE, past the list). Unreachable: every vec4 of exactly 4 numbers. F2.15 (the final review cycle, 2026-11-05): reachable before through a container that is not an object, whose items the parser reads as the object's fields (a \"pbrMetallicRoughness\":[\"baseColorFactor\",[1]] reads val[1..3] of a one-element list, inside its first 16-element allocation; the error scope then dropped the model): gltfFileProblem now refuses pbrMetallicRoughness or a material's extensions that is not an object before any count is read (materials(), textureInfos(): \"... is not an object (gltfParser.cpp:700's count)\"), so the model is the default cube with the notice (K60)"
     },
     {
       "id": "M-MODEL-FATAL-43",
@@ -30385,7 +30487,7 @@
       ],
       "call": "FatalError",
       "reachable": false,
-      "afterReturn": "then reads past the list (UNSAFE). Unreachable: exactly 3"
+      "afterReturn": "then reads past the list (UNSAFE). Unreachable: exactly 3. F2.15 (the final review cycle, 2026-11-05): reachable before through a container that is not an object, whose items the parser reads as the object's fields (a \"pbrMetallicRoughness\":[\"baseColorFactor\",[1]] reads val[1..3] of a one-element list, inside its first 16-element allocation; the error scope then dropped the model): gltfFileProblem now refuses a material's extensions that is not an object before any count is read (materials(), textureInfos(): \"... is not an object (gltfParser.cpp:716's count)\"), so the model is the default cube with the notice (K60)"
     },
     {
       "id": "M-MODEL-FATAL-44",
@@ -30417,7 +30519,7 @@
       ],
       "call": "FatalError",
       "reachable": false,
-      "afterReturn": "then reads past the list (UNSAFE). Unreachable: exactly 2"
+      "afterReturn": "then reads past the list (UNSAFE). Unreachable: exactly 2. F2.15 (the final review cycle, 2026-11-05): reachable before through a container that is not an object, whose items the parser reads as the object's fields (a \"pbrMetallicRoughness\":[\"baseColorFactor\",[1]] reads val[1..3] of a one-element list, inside its first 16-element allocation; the error scope then dropped the model): gltfFileProblem now refuses a texture info's extensions that is not an object before any count is read (materials(), textureInfos(): \"... is not an object (gltfParser.cpp:732's count)\"), so the model is the default cube with the notice (K60)"
     },
     {
       "id": "M-MODEL-FATAL-45",
@@ -31278,7 +31380,7 @@
           "symbol": "n13.glb, n13.bglb, n14.glb, n14.bglb"
         },
         {
-          "file": "lib/TbLitLib/test/fixture/lit/stamps.json",
+          "file": "lib/TbLitLib/test/fixture/lit/models/stamps.json",
           "symbol": "models/test/n13.glb, n14.glb (2017)"
         }
       ],
@@ -31682,7 +31784,7 @@
           "symbol": "EngineLight: the shadow LOD of SC703's table (LP3.0, C58, D144)"
         }
       ],
-      "note": "LP3.0 step 3 (C58, D144, P3.18, SC702-SC703): transcribed in the shim on the copied idBounds (GetCenter, GetRadius) and idMath (Sqrt over InvSqrt, Ftoi, Frac), compiled with TbLitIdLib's flags, so the radius and the fade are the engine's bits (the fade at LOD 4 is read by interactionSM.ps:519). The box is the one engineLightScissor already computes, ProjectedFullyClippedBounds( worldMvp * inverseBaseLightProject, zeroOneCube ) in window space, returned beside the rect (engineLightScissorAndBox, LightScissor::projected) before the flow-rect intersection. MAX_SHADOWMAP_RESOLUTIONS is EngineShadowMapResolutions' size (5; Framebuffer.h:34, :48 {1024, 512, 256, 256, 128}, equal to ShimRenderer's ShadowMapResolutions of M-ID-FN-03). buildFrontendLists fills ViewLight::shadowLod and shadowFadeOut for a light that casts (lightCastsShadows, r_skipShadows 0), -1 and 0 otherwise, as R_AddSingleLight inside r_useLightScissors' block; nothing reads them before LP3.1. SC703's 4-place boundaries are rounded: the copied code's exact ones are (1 - k/6) / 1.4 = 0.119048, 0.238095, 0.357143, 0.476190, 0.595238, so r = 0.4762 is LOD 1 (the table's row 0.3571 < r <= 0.4762 for LOD 2 ends at 0.476190); the test holds r = 0, 0.119, 0.1191, 0.2, 0.2381, 0.3571, 0.4762, 0.5952, 0.7071 and 1 for point and parallel lights to a script's float32 arithmetic (radius bits, LOD, the fade bits 0x3f7fe328 at 0.1191 and 0x3ea3d700 at 0.2). The engine runs this only past MOC (FAL:291-386), which the preview does not mirror (M-FRONT-DIFF-02, K51)"
+      "note": "LP3.0 step 3 (C58, D144, P3.18, SC702-SC703): transcribed in the shim on the copied idBounds (GetCenter, GetRadius) and idMath (Sqrt over InvSqrt, Ftoi, Frac), compiled with TbLitIdLib's flags, so the radius and the fade are the engine's bits (the fade at LOD 4 is read by interactionSM.ps:519). The box is the one engineLightScissor already computes, ProjectedFullyClippedBounds( worldMvp * inverseBaseLightProject, zeroOneCube ) in window space, returned beside the rect (engineLightScissorAndBox, LightScissor::projected) before the flow-rect intersection. MAX_SHADOWMAP_RESOLUTIONS is EngineShadowMapResolutions' size (5; Framebuffer.h:34, :48 {1024, 512, 256, 256, 128}, equal to ShimRenderer's ShadowMapResolutions of M-ID-FN-03). buildFrontendLists fills ViewLight::shadowLod and shadowFadeOut for a light that casts (lightCastsShadows, r_skipShadows 0), -1 and 0 otherwise, as R_AddSingleLight inside r_useLightScissors' block; nothing reads them before LP3.1. SC703's 4-place boundaries are rounded: the copied code's exact ones are (1 - k/6) / 1.4 = 0.119048, 0.238095, 0.357143, 0.476190, 0.595238, so r = 0.4762 is LOD 1 (the table's row 0.3571 < r <= 0.4762 for LOD 2 ends at 0.476190); the test holds r = 0, 0.119, 0.1191, 0.2, 0.2381, 0.3571, 0.4762, 0.5952, 0.7071 and 1 for point and parallel lights to a script's float32 arithmetic (radius bits, LOD, the fade bits 0x3f7fe328 at 0.1191 and 0x3ea3d700 at 0.2). The engine runs this only past MOC (FAL:291-386), which the preview mirrors since LP6.7: a light the masked occlusion buffer hides leaves the lists before its LOD (M-MOC-DIFF-01, K51)"
     },
     {
       "id": "M-SHADOW-02",
@@ -32207,7 +32309,76 @@
           "symbol": "the casters of a casting light, on screen or off (LP3.0, C57); a spectrum light's forced noShadows (LP3.0, C57, P3.16)"
         }
       ],
-      "note": "LP3.0 step 6 (C57, P3.14, P3.16, P3.17): the caster set and its light-triangle requests, made in the frontend as the lists are built, after the light sort, per light that will take tiles (it casts, shadowLod > -1, it has surfaces: ShadowAtlasPass' loop 1 skips the others), on screen or off: every chunk and model instance of a cast class (M-SHADOW-CAST-01) whose areas reach the light by lightReachesCaster (an area the light references, connected to the light's own area unless that is -1: FAL:494-501; D81's outside set for a light without references alone since LP3.2-FIX, M-SHADOW-DIFF-08; without a tree every chunk), whose entity is visible (its space made as R_AddLights makes a shadow-only viewEntity), whose bounds R_CullModelBoundsToLight keeps, whose material's spectrum is the light shader's, and whose light triangles for the light are not None (the cache of LightTriangles.h, the request queued when Pending), each kept with its space and light triangles in ViewLight::casters; nothing draws them before LP3.1. The engine's R_ShadowBounds view cull (FAL:605-618) is not mirrored (K49: casters are not view-culled) and MAX_CONTACTED_LIGHTS is not kept (M-FLOW-DIFF-03, extended to shadows). lightCastsShadows gains UpdateLightDef's spectrum rule (engineLightNoShadows), which also moves a spectrum light's noSelfShadow surfaces to the global list (FAM:999). P3.16's 'every parallel light has area -1' is not the engine's: R_CreateLightRefs falls back to PointInArea( parms.origin ) when the offset origin is outside (RenderWorld_defs.cpp:703-707, mirrored in LightData.cpp since LP4.0), so a parallel light inside the map has its origin's area and the connection test applies; only a light whose both origins are outside has area -1 and skips it. The counts (FrontendLists casterLights, casterPairs, casterPairsResident, casterPairsPending, casters, casterMs) reach LitFrameStats and the frame log's companion, <frame log>-casters.csv (casterLogPath), written while the frame log is open and the environment sets TB_LIT_CASTER_LOG (a measurement's opt-in: the suites' frame logs leave no companion): LP3.0's measurement channel ([.][measure] on admin), no frame-log column (LP3.1's D157 folds them in). The admin measurement (Release [.][measure], five runs with the per-build candidate table: three at step 6, two in the final run list): at the start view's settled frame 30 lights in view, 11 lights gather casters, 927 (light, chunk) pairs asked, all 927 answered, 698 casters, 1.5-2.2 ms of gathering when the lists are built; over the orbit at most 35 gathering lights, 2,177 pairs and 13,134 cache entries (the lit surfaces' pairs included, on the frames with 320-329 lights in view), gathering median 0.57-0.60 ms, p95 1.8-2.1 ms, max 2.2-4.7 ms. Budget (P3.24f): 4 ms and 250,000 pairs per presented frame, a miss any frame above either: no pair miss; the final second run had 3 of its 339 rebuilt frames above 4 ms (max 4.735 ms, all with 300+ lights in view), the other four runs none (a first version without the table had one frame at 5.7 ms). LightTriangleCacheSize stays 65,536: the rule is a power of two at least four times the largest per-build demand on admin (4 x 13,134 -> 65,536), never below LP2's bound. LP3.1 step 5 (D157): the companion CSV, CasterLogRow, casterLogPath and TB_LIT_CASTER_LOG are retired; the seven counts are the frame log's last columns (caster_lights, caster_pairs, caster_pairs_resident, caster_pairs_pending, casters, caster_ms, light_triangle_entries: 85-91 of 91), on every frame row. LP3.1 step 3 draws the casters into the tiles (M-SHADOW-06)"
+      "note": "LP3.0 step 6 (C57, P3.14, P3.16, P3.17): the caster set and its light-triangle requests, made in the frontend as the lists are built, after the light sort, per light that will take tiles (it casts, shadowLod > -1, it has surfaces: ShadowAtlasPass' loop 1 skips the others), on screen or off: every chunk and model instance of a cast class (M-SHADOW-CAST-01) whose areas reach the light by lightReachesCaster (an area the light references, connected to the light's own area unless that is -1: FAL:494-501; D81's outside set for a light without references alone since LP3.2-FIX, M-SHADOW-DIFF-08; without a tree every chunk), whose entity is visible (its space made as R_AddLights makes a shadow-only viewEntity), whose bounds R_CullModelBoundsToLight keeps, whose material's spectrum is the light shader's, and whose light triangles for the light are not None (the cache of LightTriangles.h, the request queued when Pending), each kept with its space and light triangles in ViewLight::casters; nothing draws them before LP3.1. The engine's R_ShadowBounds view cull (FAL:605-618) is applied since the final review cycle when each build takes a light's casters from its set (M-SHADOW-CAST-03, F3.4, 2026-11-05; the sets themselves stay view-free), and MAX_CONTACTED_LIGHTS is not kept (M-FLOW-DIFF-03, extended to shadows). lightCastsShadows gains UpdateLightDef's spectrum rule (engineLightNoShadows), which also moves a spectrum light's noSelfShadow surfaces to the global list (FAM:999). P3.16's 'every parallel light has area -1' is not the engine's: R_CreateLightRefs falls back to PointInArea( parms.origin ) when the offset origin is outside (RenderWorld_defs.cpp:703-707, mirrored in LightData.cpp since LP4.0), so a parallel light inside the map has its origin's area and the connection test applies; only a light whose both origins are outside has area -1 and skips it. The counts (FrontendLists casterLights, casterPairs, casterPairsResident, casterPairsPending, casters, casterMs) reach LitFrameStats and the frame log's companion, <frame log>-casters.csv (casterLogPath), written while the frame log is open and the environment sets TB_LIT_CASTER_LOG (a measurement's opt-in: the suites' frame logs leave no companion): LP3.0's measurement channel ([.][measure] on admin), no frame-log column (LP3.1's D157 folds them in). The admin measurement (Release [.][measure], five runs with the per-build candidate table: three at step 6, two in the final run list): at the start view's settled frame 30 lights in view, 11 lights gather casters, 927 (light, chunk) pairs asked, all 927 answered, 698 casters, 1.5-2.2 ms of gathering when the lists are built; over the orbit at most 35 gathering lights, 2,177 pairs and 13,134 cache entries (the lit surfaces' pairs included, on the frames with 320-329 lights in view), gathering median 0.57-0.60 ms, p95 1.8-2.1 ms, max 2.2-4.7 ms. Budget (P3.24f): 4 ms and 250,000 pairs per presented frame, a miss any frame above either: no pair miss; the final second run had 3 of its 339 rebuilt frames above 4 ms (max 4.735 ms, all with 300+ lights in view), the other four runs none (a first version without the table had one frame at 5.7 ms). LightTriangleCacheSize stays 65,536: the rule is a power of two at least four times the largest per-build demand on admin (4 x 13,134 -> 65,536), never below LP2's bound. LP3.1 step 5 (D157): the companion CSV, CasterLogRow, casterLogPath and TB_LIT_CASTER_LOG are retired; the seven counts are the frame log's last columns (caster_lights, caster_pairs, caster_pairs_resident, caster_pairs_pending, casters, caster_ms, light_triangle_entries: 85-91 of 91), on every frame row. LP3.1 step 3 draws the casters into the tiles (M-SHADOW-06)"
+    },
+    {
+      "id": "M-SHADOW-CAST-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            65,
+            72
+          ],
+          "anchor": "R_ShadowBounds",
+          "sha256": "d47745a6e0130d0604ae25424eed21b22460cb8ae0dfc02df8099a6a3705b62e"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            79,
+            92
+          ],
+          "anchor": "idRenderEntityLocal::IsDirectlyVisible",
+          "sha256": "23da91c39386f4f0825710019e01ad4632c6bc89c41c4575683c8fa458133f7d"
+        },
+        {
+          "file": "neo/renderer/tr_frontend_addlights.cpp",
+          "lines": [
+            576,
+            618
+          ],
+          "anchor": "R_AddSingleLight: a directly visible entity interacts; another casts only where R_ShadowBounds passes CullBoundsToMVP( worldSpace.mvp )",
+          "sha256": "c4ad0b9836aa3b868afe0dda98f5b8b291f9e7cf5295c017861942344219a1c9"
+        },
+        {
+          "file": "neo/renderer/RenderWorld_defs.cpp",
+          "lines": [
+            49,
+            60
+          ],
+          "anchor": "R_DeriveEntityData: globalReferenceBounds = ProjectedBounds( inverseBaseModelProject, bounds_unitCube )",
+          "sha256": "9dca18141e402f3f9e690ae379e5134ca1b41bf836d5115e0f95af261e0a1292"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.cpp",
+          "symbol": "engineShadowBounds; buildFrontendLists (directlyVisible before the masked occlusion cull, the caster loop's off-view rule, ViewLight::casterHash and casterCount, FrontendLists::castersOffView)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitFrontend.h",
+          "symbol": "engineShadowBounds, FrontendLists::castersOffView"
+        },
+        {
+          "file": "lib/TbLitLib/src/CasterSets.cpp",
+          "symbol": "casterUnitOf, CasterSets::unitBounds"
+        },
+        {
+          "file": "lib/TbLitLib/src/CasterSets.h",
+          "symbol": "CasterUnit, casterUnitOf, CasterSets::unitBounds"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitFrameStats::castersOffView"
+        },
+        {
+          "file": "lib/TbLitLib/test/src/tst_LitSession.cpp",
+          "symbol": "LitSession a light whose casters are all off the view (F3.4), [.][litgpu4]"
+        }
+      ],
+      "note": "F3.4 (the final review cycle, 2026-11-05; K49 exceeded at LP3: a light whose casters were all off-screen took tiles and interactionSM where the engine has globalShadows NULL): R_AddSingleLight's entity loop transcribed over the preview's units (CasterUnit): an entity's chunks and model instances, or the world's chunks of one area (the engine's _areaN models; without a tree the world chunks' key area). A unit with a surface in the build's visible list (after the flow and the frustum, before the masked occlusion cull: the engine's view entity with a scissor) is directly visible and its casters cast; every other unit's casters cast only when engineShadowBounds (R_ShadowBounds, the __fsels transcribed) of its global reference bounds (CasterSets::unitBounds: the union of its chunks' and instances' local bounds, every cast class, through ProjectedBounds( OffsetScaleForBounds( modelRenderMatrix, bounds ), unit cube ) as R_DeriveEntityData; the world's at identity), the light's globalLightBounds and globalLightOrigin pass engineCullBoundsToMvp( the view's unjittered worldMvp ) (the engine's worldSpace.mvp; parity runs without jitter). The casters left out move the record key's caster hash by their places in the set and its caster count, so a tile is drawn again when the view moves one in or out; a light left with no caster has no shadow surface: no tile, no shadow draw, the plain interaction program, and the other lights packed without it (D160's shape). The caster sets stay the view-free sets of M-SHADOW-CAST-02 (kept across camera moves); the rule is applied per build when each light's casters are taken from its set. r_skipSuppress and the suppressShadow ids have no editor counterpart. The remaining difference is the unit's granularity and its visibility test (M-SHADOW-DIFF-03)"
     },
     {
       "id": "M-SHADOW-COPY-05",
@@ -32583,7 +32754,7 @@
           "symbol": "LitSession shadows on a GPU (LP3.1), [.][litgpu2]"
         }
       ],
-      "note": "LP3.1 step 3 (C59, D149, D154, SC717-SC722, SC724, SC736): per placed side, after its clear, each caster of the light's ViewLight::casters (M-SHADOW-CAST-02) with indexes, of cast class Opaque, drawn with builtin/depth (never the skinned form: no skinned model, P3.24e) under GLS_POLYGON_OFFSET with r_shadowMapOccluderFacing 2's GLS_CULL_TWOSIDED and GL_PolygonOffset( r_shadowMapPolygonFactor 2, r_vkShadowMapPolygonOffset 1 ) (0 FRONTSIDED and 1 BACKSIDED with the negated pair, as written), depth LESS and written, the bias an int in the pipeline key as RBN:460 casts it; NVRHI's Vulkan raster state clips depth (no depthClampEnable) and enables the depth bias only for a non-zero constant. The MVP per caster space: parallel and point lightProjection x lightView x M, spot windowSpaceToClipSpace x that, M the space's model matrix transposed. A TranslucentCaster draws nothing (:3506-3509); a Perforated one is left out and counted (M-SHADOW-DIFF-06); the per-side cull is M-SHADOW-DIFF-07. Each draw is logged with its side (LitDrawRecord::Pass::Shadow; the clears ShadowClear). The depth pixel shader writes a colour the depth-only framebuffer has no attachment for (M-SHADOW-DEFECT-01)"
+      "note": "LP3.1 step 3 (C59, D149, D154, SC717-SC722, SC724, SC736): per placed side, after its clear, each caster of the light's ViewLight::casters (M-SHADOW-CAST-02) with indexes, of cast class Opaque, drawn with builtin/depth (never the skinned form: no skinned model, P3.24e) under GLS_POLYGON_OFFSET with r_shadowMapOccluderFacing 2's GLS_CULL_TWOSIDED and GL_PolygonOffset( r_shadowMapPolygonFactor 2, r_vkShadowMapPolygonOffset 1 ) (0 FRONTSIDED and 1 BACKSIDED with the negated pair, as written), depth LESS and written, the bias an int in the pipeline key as RBN:460 casts it; NVRHI's Vulkan raster state clips depth (no depthClampEnable) and enables the depth bias only for a non-zero constant. The MVP per caster space: parallel and point lightProjection x lightView x M, spot windowSpaceToClipSpace x that, M the space's model matrix transposed. A TranslucentCaster draws nothing (:3506-3509); a Perforated one was left out and counted at LP3.1; since LP3.4 step 2 it is drawn through its alpha-tested stages (M-SHADOW-COPY-08; M-SHADOW-DIFF-06 retired), perforatedCastersSkipped counting only the stages pass 6 cannot draw; the per-side cull is M-SHADOW-DIFF-07. Each draw is logged with its side (LitDrawRecord::Pass::Shadow; the clears ShadowClear). The depth pixel shader writes a colour the depth-only framebuffer has no attachment for (M-SHADOW-DEFECT-01)"
     },
     {
       "id": "M-SHADOW-07",
@@ -32647,7 +32818,7 @@
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/src/LitPasses.cpp",
-          "symbol": "LitPasses::interactionProgram, shadowRecordOf, setShadowParms, setInteractionSpace, renderInteractions, recordInteractions (D76 per layout), bindingSets (DrawInteractionSm)"
+          "symbol": "engineInteractionProgram, shadowRecordOf, setShadowParms, setInteractionSpace, renderInteractions, recordInteractions (D76 per layout), bindingSets (DrawInteractionSm)"
         },
         {
           "file": "lib/TbLitLib/idtech/shim/include/lit/EngineBuiltins.h",
@@ -32677,14 +32848,14 @@
       "sinkbroom": [
         {
           "file": "lib/TbLitLib/src/LitFrontend.cpp",
-          "symbol": "buildFrontendLists (ViewLight::casters)"
+          "symbol": "buildFrontendLists (ViewLight::casters: the off-view rule, M-SHADOW-CAST-03)"
         },
         {
           "file": "lib/TbLitLib/src/LitPasses.cpp",
           "symbol": "LitPasses::shadowMapPass"
         }
       ],
-      "note": "K49 (LP3.1, C57): the engine leaves out of a light's shadows an entity whose shadow bounds (R_ShadowBounds of its reference bounds from the light origin) the view's MVP culls; the preview keeps every caster that reaches the light (M-SHADOW-CAST-02), on screen or off, and draws it into every side whose frustum it meets. The cull is conservative, so a shadow in view is the same; only the PCF taps at the view's edges can read a texel an engine-culled caster did not write. The tiles draw more casters than the engine's (shadow_draws counts them)"
+      "note": "K49 restated (F3.4, the final review cycle, 2026-11-05): the engine leaves out of a light's shadows an entity that is not directly visible and whose shadow bounds (R_ShadowBounds of its reference bounds from the light origin) the view's MVP culls; the preview applies the same rule since F3.4 (M-SHADOW-CAST-03), over its own units: an entity, or the world's chunks of one area for the engine's area model, directly visible when a surface of it is in the build's visible list (the flow and the frustum of the editor's chunks, where the engine's view entity takes the portal-flow scissor of its reference bounds), the reference bounds the union of the unit's chunks and instances. A unit whose chunks all miss the frustum while its bounds meet it, or one the two flows treat differently, can be judged on one side only; the cull is conservative either way, so a shadow in view is the same and only the PCF taps at the view's edges can differ (K49's envelope). Until F3.4 the preview kept every caster on screen or off, so a light whose casters were all off-screen took tiles and the shadow-atlas program where the engine drew the plain interaction"
     },
     {
       "id": "M-SHADOW-DIFF-04",
@@ -33048,7 +33219,7 @@
           "symbol": "LitSession parity rows: parityShadowCount, the row .json's shadow counters and unplaced_lights"
         }
       ],
-      "note": "LP3.2 (C63, section 5; SC741-SC746; P3.8-P3.12, P3.20, P3.21, P3.28), test only: the shadows parity map, the sixth of MAPS, maps/test/litpreview_shadows.map with materials/lp3_parity.mtr and textures/lp3p/ (the LP2 map's wall, floor, crate and light images; LP3.1's synthetic lp3_shadows.mtr and textures/lp3/ are other files), shot after the models map with r_skipAmbient 1: thirteen sealed rooms 1024 apart, each with an entity, the first parity lights that cast (noshadows 0; every other map's stay noshadows 1, SC744), every occluder an entity 16 or more from a point light's origin, every camera at EYE inside its light's volume but H10's, every light, register and stage time-invariant (F4). H01 a point light and a func_static box (six tiles at 512: a point light never takes LOD 0), H02 a spot (one tile at 512, the camera off its origin), H03 a parallel light (light_center -200 30 160, its box ending 12 below the ceiling, SC744; the camera at x 160 looking east, the far wall 224 deep, every lit receiver nearer than cascade 0's split 270.8: four cascades at 1024, cascade 0 alone sampled), H04 and H08 perforated grates (M-PARITY-07), H05 a noSelfShadow far wall on the local list (SC709), H06 a noshadows box, H07 LP7.2's n01.obj, H09 a translucent panel across the box's shadow (D154: shadowed; a caster that draws nothing), H10 LOD 2 from outside a small volume (six tiles at 256, atlas_bytes_written 1,572,864; MOC off, M-PARITY-04), H11 the overflow (M-PARITY-06), H12 P03's shadowing variant on a sealed pair (the shared wall's room-A face lp3p/wall_noshadows, the panel's side face lit through A, B's walls black), H13 P04's out-of-view caster on a doorway pair (M-PARITY-08); controls CH01-CH13 black on the lights-off variant. The row table's expect adds pass 6's counters (lights_casting, lights_placed, lights_unplaced, tiles_drawn, shadow_draws, perforated_skipped, atlas_bytes_written: tiles x size^2 x 4, which pins the LOD) and the per-list shadow-atlas draws (M-SHADOW-STAT-01). The preview's dress rehearsal before the run (single-room scratch maps, the BSP root for H12/H13) changed H11's colour to 0.012. The one engine run of LP3 (2026-10-27 06:25-06:48: bake 130 s, run-a 466 s, run-b 467 s; the game folder's proof listing 21,261 before and after every process; engine_repeat_max 0 for all 210 shots); parity.cfg 53,397 bytes under the 56 KB bound (MAX_CMD_BUFFER 64 KB). Compare at LP3.2-FIX: 206 of 206 gated rows pass, 4 reported; H01-H03, H05-H07 and H09-H13 exact (max 0; H03 since C57 rev 2.3, M-SHADOW-DIFF-08), thresholds lit_min alone; H05 against H01 240 pixels at max 1 in both the engine's and the preview's shots (P3.10: two rooms, not bit-equal); the 184 older rows identical to the gate's compare at d0d8d8f11 LP3.4 (D155, D156): H04 and H08 are exact rows since LP3.4 step 3 (max 0 against LP3.2's shots, no second engine run; thresholds lit_min 360067 each), their expect perforated_skipped 0 and tiles_provisional 0 in the row table. rows.json holds the run's copy of the table-owned fields (label, kind, overlap, expect), which [.][parity] and compare read; LP3.4 step 3b's parity.py refresh-meta rewrites them from ROWS as run writes them, without an engine run, after checking each shot's identity (map, camera, control, control_mode, ambient_only; any difference needs parity.py run) and keeping written and every run-owned field, with a meta_refreshed record: its run of 2026-10-27 refreshed 10 fields of H04, H08, CH04 and CH08 (the expects, kind exact, the labels), after which [.][parity] passes and compare gates 208 of 208 rows"
+      "note": "LP3.2 (C63, section 5; SC741-SC746; P3.8-P3.12, P3.20, P3.21, P3.28), test only: the shadows parity map, the sixth of MAPS, maps/test/litpreview_shadows.map with materials/lp3_parity.mtr and textures/lp3p/ (the LP2 map's wall, floor, crate and light images; LP3.1's synthetic lp3_shadows.mtr and textures/lp3/ are other files), shot after the models map with r_skipAmbient 1: thirteen sealed rooms 1024 apart, each with an entity, the first parity lights that cast (noshadows 0; every other map's stay noshadows 1, SC744), every occluder an entity 16 or more from a point light's origin, every camera at EYE inside its light's volume but H10's, every light, register and stage time-invariant (F4). H01 a point light and a func_static box (six tiles at 512: a point light never takes LOD 0), H02 a spot (one tile at 512, the camera off its origin), H03 a parallel light (light_center -200 30 160, its box ending 12 below the ceiling, SC744; the camera at x 160 looking east, the far wall 224 deep, every lit receiver nearer than cascade 0's split 270.8: four cascades at 1024, cascade 0 alone sampled), H04 and H08 perforated grates (exact rows since LP3.4 step 3, the perforated path mirrored, M-SHADOW-COPY-08; M-PARITY-07 retired), H05 a noSelfShadow far wall on the local list (SC709), H06 a noshadows box, H07 LP7.2's n01.obj, H09 a translucent panel across the box's shadow (D154: shadowed; a caster that draws nothing), H10 LOD 2 from outside a small volume (six tiles at 256, atlas_bytes_written 1,572,864; MOC off, M-PARITY-04), H11 the overflow (M-PARITY-06), H12 P03's shadowing variant on a sealed pair (the shared wall's room-A face lp3p/wall_noshadows, the panel's side face lit through A, B's walls black), H13 P04's out-of-view caster on a doorway pair (M-PARITY-08); controls CH01-CH13 black on the lights-off variant. The row table's expect adds pass 6's counters (lights_casting, lights_placed, lights_unplaced, tiles_drawn, shadow_draws, perforated_skipped, atlas_bytes_written: tiles x size^2 x 4, which pins the LOD) and the per-list shadow-atlas draws (M-SHADOW-STAT-01). The preview's dress rehearsal before the run (single-room scratch maps, the BSP root for H12/H13) changed H11's colour to 0.012. The one engine run of LP3 (2026-10-27 06:25-06:48: bake 130 s, run-a 466 s, run-b 467 s; the game folder's proof listing 21,261 before and after every process; engine_repeat_max 0 for all 210 shots); parity.cfg 53,397 bytes under the 56 KB bound (MAX_CMD_BUFFER 64 KB). Compare at LP3.2-FIX: 206 of 206 gated rows pass, 4 reported; H01-H03, H05-H07 and H09-H13 exact (max 0; H03 since C57 rev 2.3, M-SHADOW-DIFF-08), thresholds lit_min alone; H05 against H01 240 pixels at max 1 in both the engine's and the preview's shots (P3.10: two rooms, not bit-equal); the 184 older rows identical to the gate's compare at d0d8d8f11 LP3.4 (D155, D156): H04 and H08 are exact rows since LP3.4 step 3 (max 0 against LP3.2's shots, no second engine run; thresholds lit_min 360067 each), their expect perforated_skipped 0 and tiles_provisional 0 in the row table. rows.json holds the run's copy of the table-owned fields (label, kind, overlap, expect), which [.][parity] and compare read; LP3.4 step 3b's parity.py refresh-meta rewrites them from ROWS as run writes them, without an engine run, after checking each shot's identity (map, camera, control, control_mode, ambient_only; any difference needs parity.py run) and keeping written and every run-owned field, with a meta_refreshed record: its run of 2026-10-27 refreshed 10 fields of H04, H08, CH04 and CH08 (the expects, kind exact, the labels), after which [.][parity] passes and compare gates 208 of 208 rows"
     },
     {
       "id": "M-PARITY-04",
@@ -33175,10 +33346,10 @@
         },
         {
           "file": "lib/TbLitLib/src/LitFrontend.cpp",
-          "symbol": "buildFrontendLists (ViewLight::casters, never view-culled: C57)"
+          "symbol": "buildFrontendLists (ViewLight::casters; the off-view rule since F3.4, M-SHADOW-CAST-03)"
         }
       ],
-      "note": "LP3.2 (P04, C57; K49), test only: H13, the doorway pair with its areaportal: a point light in room A whose volume holds the camera in room B, the box in A beside the doorway outside the view frustum (its nearest corner 20 beyond the frustum's side plane), its shadow on A's west wall and floor seen through the doorway. The engine draws the box as a shadow-only viewEntity (FAL:585-633), kept because R_ShadowBounds' box meets the view (:605-618); the preview's caster set has it because casters are never view-culled (C57, M-SHADOW-DIFF-03). Exact (max 0, areas_flowed 2): K49's edge, a caster the engine view-culls whose shadow the view's PCF taps read, does not arise in this row"
+      "note": "LP3.2 (P04, C57; K49), test only: H13, the doorway pair with its areaportal: a point light in room A whose volume holds the camera in room B, the box in A beside the doorway outside the view frustum (its nearest corner 20 beyond the frustum's side plane), its shadow on A's west wall and floor seen through the doorway. The engine draws the box as a shadow-only viewEntity (FAL:585-633), kept because R_ShadowBounds' box meets the view (:605-618); the preview's caster set has it (C57), and since F3.4 (2026-11-05) the preview keeps it by the engine's rule (its shadow bounds meet the view; M-SHADOW-CAST-03, M-SHADOW-DIFF-03). Exact (max 0, areas_flowed 2): K49's edge, a caster culled on one side only whose shadow the view's PCF taps read, does not arise in this row"
     },
     {
       "id": "M-SHADOW-STAT-01",
@@ -33213,10 +33384,10 @@
         },
         {
           "file": "lib/TbLitLib/test/src/tst_FrameLog.cpp",
-          "symbol": "the header and the row (94 fields)"
+          "symbol": "the header and the row (127 fields, F1.15: counted from frameLogHeader())"
         }
       ],
-      "note": "LP3.2 step 1 (D157 extended; SC709, P3.10): LitFrameStats counts per list the interaction draws whose program is a shadow-atlas one (interactionSM, builtins 39-49 of engineInteractionProgram, beside engineShadowAtlasProgram): smDrawsLocal, smDrawsGlobal, smDrawsTranslucent (countInteractionDraw, on the render thread as the draws are recorded); the plain draws are the rest of interaction_draws. The frame log gains sm_draws_local, sm_draws_global and sm_draws_translucent after set11_writes (91 to 94 columns; FrameLogFields 94; TbUiLib's column counts in tst_LitPreviewPanel.cpp and tst_LitMeasure.cpp), the [.][parity] row .json the shadow counters a row can pin with the atlas's unplaced lights by name, the expect chain the same keys (a number or a minimum). The CPU test: a placed light with a surface on each list counts 1 / 1 / 1, an unplaced light none (K26), interactionAmbient none. SC709 shown on H05: the far wall's noSelfShadow surface drawn on the local list with the shadow-atlas program (sm_draws_local 1, global 6), H09's translucent panel on the translucent list (1). On admin (Release, LP3.2-FIX's measurement) the settled start view draws 41 / 628 / 4 of its 828 interactions with the shadow-atlas programs, the orbit p95 43 / 691-692 / 4 LP3.4 (D155): perforated_draws, the perforated casters' shadow draws (LitFrameStats::perforatedShadowDraws), the 95th and last column (FrameLogFields 95; TbUiLib's counts 95). LP6.0 (C65, D165), test-visible only, no engine counterpart: after perforated_draws the CPU record's split, timed on FrameClock inside cpu_record_ms's span: lists_ms (LitPasses::rebuildLists whole; flow_ms and caster_ms inside it), prepass_cpu_ms, ambient_cpu_ms, interaction_cpu_ms, stage_cpu_ms (every stage call summed), fog_cpu_ms (LitFrameStats::listsMs, prepassRecordMs ... fogRecordMs; pass 6's stays shadow_cpu_ms), tonemap_cpu_ms (the tonemap passes with the debug views), upload_ms (recordUploads whole), submit_ms (close, queueSignalSemaphore, executeCommandList, setEventQuery) and record_other_ms (the span less lists_ms, the seven pass columns, upload_ms and submit_ms), 105 columns; then gpu_gbuffer_ms, gpu_ssao_ms and gpu_taa_ms, the GPU times of TimedPass Gbuffer, Ssao and Taa (TimedPassCount 12), reserved for LP6.5a and LP6.6 and empty until a pass begins them: 108 columns, the last (FrameLogFields 108; TbUiLib's counts 108) LP6.1 (C64), test-visible only, no engine counterpart (the draw records are the preview's own): after gpu_taa_ms, records_held (the draw records of passes 1, 5 and 7 the lit passes hold at the frame's end, LitFrameStats::recordsHeld) and record_resolves (their resolutions in the frame, LitFrameStats::recordResolves): 110 columns, the last (FrameLogFields 110; TbUiLib's counts 110) LP6.2 (C65's split, C66, D169), test-visible only, no engine counterpart (the kept caster sets and the per-tile perforated image term are the preview's own; the engine gathers its casters and draws its tiles every frame): after record_resolves, lists_ms's three parts beside flow_ms and caster_ms, surfaces_ms, lights_ms and links_ms (the frontend's surfaces and lights and rebuildLists after the frontend returns, LitFrameStats::surfacesMs, lightsMs, linksMs, each 0 when the lists were kept), then caster_sets_built (the caster sets the frame's lists build made, LitFrameStats::casterSetsBuilt) and tiles_image_redrawn (pass 6's tiles drawn again because one of their own perforated stage images moved, LitFrameStats::tilesImageRedrawn): 115 columns, the last (FrameLogFields 115; TbUiLib's counts 115)"
+      "note": "LP3.2 step 1 (D157 extended; SC709, P3.10): LitFrameStats counts per list the interaction draws whose program is a shadow-atlas one (interactionSM, builtins 39-49 of engineInteractionProgram, beside engineShadowAtlasProgram): smDrawsLocal, smDrawsGlobal, smDrawsTranslucent (countInteractionDraw, on the render thread as the draws are recorded); the plain draws are the rest of interaction_draws. The frame log gains sm_draws_local, sm_draws_global and sm_draws_translucent after set11_writes (91 to 94 columns; FrameLogFields 94; TbUiLib's column counts in tst_LitPreviewPanel.cpp and tst_LitMeasure.cpp), the [.][parity] row .json the shadow counters a row can pin with the atlas's unplaced lights by name, the expect chain the same keys (a number or a minimum). The CPU test: a placed light with a surface on each list counts 1 / 1 / 1, an unplaced light none (K26), interactionAmbient none. SC709 shown on H05: the far wall's noSelfShadow surface drawn on the local list with the shadow-atlas program (sm_draws_local 1, global 6), H09's translucent panel on the translucent list (1). On admin (Release, LP3.2-FIX's measurement) the settled start view draws 41 / 628 / 4 of its 828 interactions with the shadow-atlas programs, the orbit p95 43 / 691-692 / 4 LP3.4 (D155): perforated_draws, the perforated casters' shadow draws (LitFrameStats::perforatedShadowDraws), the 95th and last column (FrameLogFields 95; TbUiLib's counts 95). LP6.0 (C65, D165), test-visible only, no engine counterpart: after perforated_draws the CPU record's split, timed on FrameClock inside cpu_record_ms's span: lists_ms (LitPasses::rebuildLists whole; flow_ms and caster_ms inside it), prepass_cpu_ms, ambient_cpu_ms, interaction_cpu_ms, stage_cpu_ms (every stage call summed), fog_cpu_ms (LitFrameStats::listsMs, prepassRecordMs ... fogRecordMs; pass 6's stays shadow_cpu_ms), tonemap_cpu_ms (the tonemap passes with the debug views), upload_ms (recordUploads whole), submit_ms (close, queueSignalSemaphore, executeCommandList, setEventQuery) and record_other_ms (the span less lists_ms, the seven pass columns, upload_ms and submit_ms), 105 columns; then gpu_gbuffer_ms, gpu_ssao_ms and gpu_taa_ms, the GPU times of TimedPass Gbuffer, Ssao and Taa (TimedPassCount 12), reserved for LP6.5a and LP6.6 and empty until a pass begins them: 108 columns, the last (FrameLogFields 108; TbUiLib's counts 108) LP6.1 (C64), test-visible only, no engine counterpart (the draw records are the preview's own): after gpu_taa_ms, records_held (the draw records of passes 1, 5 and 7 the lit passes hold at the frame's end, LitFrameStats::recordsHeld) and record_resolves (their resolutions in the frame, LitFrameStats::recordResolves): 110 columns, the last (FrameLogFields 110; TbUiLib's counts 110) LP6.2 (C65's split, C66, D169), test-visible only, no engine counterpart (the kept caster sets and the per-tile perforated image term are the preview's own; the engine gathers its casters and draws its tiles every frame): after record_resolves, lists_ms's three parts beside flow_ms and caster_ms, surfaces_ms, lights_ms and links_ms (the frontend's surfaces and lights and rebuildLists after the frontend returns, LitFrameStats::surfacesMs, lightsMs, linksMs, each 0 when the lists were kept), then caster_sets_built (the caster sets the frame's lists build made, LitFrameStats::casterSetsBuilt) and tiles_image_redrawn (pass 6's tiles drawn again because one of their own perforated stage images moved, LitFrameStats::tilesImageRedrawn): 115 columns, the last (FrameLogFields 115; TbUiLib's counts 115) F1.15 (2026-11-05), the rest of the row, test-visible only: LP6.4a and LP6.4b (C68) texture_heaps, heap_bytes, textures_dedicated, textures_evicted, textures_floored, feeds_in_place and arena_moved_bytes (columns 116-122: the heaps made and their bytes, the textures outside them, the slots Evicted and at the mip floor, the fed images written in place, the compaction's moved bytes); LP6.6 (C73) taa_history (123: FrameConvergence::taaHistory after the frame); LP6.7 (C75) lights_moc_culled and surfaces_moc_culled (124, 125); F2.11 (2026-11-05) moc_fill_ms and moc_test_ms (126, 127: LP6.7's moc_ms split into the fill alone, the engine's pc.mocMicroSec, and the light and surface tests together): 127 columns, the last. The tests count the columns from frameLogHeader() (tst_FrameLog, tst_LitSession, TbUiLib's tst_LitPreviewPanel) and the measure looks its columns up by name (tst_LitMeasure's column::of), so no count is written twice"
     },
     {
       "id": "M-SHADOW-DIFF-08",
@@ -33571,6 +33742,41 @@
         }
       ],
       "note": "LP3.4 (D155, E-LIT-12, SC723): GL_State( stageGLState ) replaces the pass's state for a perforated stage's draw: the shadow polygon offset and the two-sided cull of the opaque casters are gone (FRONTSIDED, no offset unless MF_POLYGONOFFSET or privatePolygonOffset), so a grate draws one face only into the tile (case (m): the face away from the light, bars at its depth exactly) and with no slope bias; the !didDraw fallback draws builtin/depth under whatever GL_State and GL_PolygonOffset the call left, the previous perforated surface's stage state or the call's opening state, which depends on the order of the side's surfaces (K52). The preview keeps both as the engine has them"
+    },
+    {
+      "id": "M-SHADOW-DEFECT-03",
+      "kind": "known-defect",
+      "engine": [
+        {
+          "file": "neo/shaders/builtin/lighting/interactionSM.ps.hlsl",
+          "lines": [
+            571,
+            572
+          ],
+          "anchor": "main: lightColor = mlMathOn ? ( lightProjRGB * lightFalloffRGB ) : sRGBToLinearRGB( ... )",
+          "sha256": "eca606f4151d8667fb8e13406bb6c44009763a01bd8b0a75fd4e7317d3664837"
+        },
+        {
+          "file": "neo/shaders/builtin/lighting/interaction.ps.hlsl",
+          "lines": [
+            179,
+            179
+          ],
+          "anchor": "main: lightColor = sRGBToLinearRGB( lightProjRGB * lightFalloffRGB )",
+          "sha256": "6c106715ccca2d1ac94615bccf07b98c48183e29afc1d3a21c4f1ca726ed3104"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "LitPasses::renderInteractions (the engine's blobs: interactionSM for a placed casting light, interaction otherwise)"
+        },
+        {
+          "file": "lib/TbLitLib/src/LitStages.cpp",
+          "symbol": "engineMathLightParms"
+        }
+      ],
+      "note": "E-LIT-10, mirrored by the blob (Q41's default; recorded by the final review cycle, 2026-11-05, F3.21): the shadow-atlas interaction shader keeps a math light's MLEvaluate result as it is (mlMathOn: no sRGBToLinearRGB), where the plain interaction shader decodes it like a texture light's (IPS:179, M-PASS-09), so a casting math light whose record is placed in the atlas is lit without the decode and the same light unshadowed or unplaced with it. The preview binds the engine's blobs and inherits it, nothing of it is SinkBroom's. No parity row casts with a math light yet: the row waits with the owed rows of F1.3's chained exec (59-FINAL-FIXES.md section C)"
     },
     {
       "id": "M-SHADOW-DIFF-14",

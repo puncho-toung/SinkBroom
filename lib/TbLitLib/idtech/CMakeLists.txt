@@ -383,5 +383,20 @@ if(MSVC)
   target_compile_options(TbLitMoc PRIVATE $<$<CONFIG:Release>:/Z7>)
 endif()
 
+# F1.5 (2026-11-05): the engine builds libs/moc under its GCC and Clang code-generation
+# flags too (neo/CMakeLists.txt:199, :217-226; the library's own CMake overrides only
+# CMAKE_CXX_FLAGS), as TbLitIdLib's block above: no fused float arithmetic the engine does
+# not have (-ffp-contract=off against Clang's default and the AVX2 file's -mfma); by
+# reading, untested here (no GCC or Clang build of the lit preview)
+if(NOT MSVC)
+  target_compile_options(TbLitMoc PRIVATE
+    -fno-strict-aliasing
+    -ffp-contract=off
+    $<$<NOT:$<CONFIG:Debug>>:-fno-math-errno>
+    $<$<NOT:$<CONFIG:Debug>>:-fno-trapping-math>
+  )
+  target_compile_definitions(TbLitMoc PRIVATE $<$<CONFIG:Debug>:_DEBUG>)
+endif()
+
 suppress_dependency_warnings(TbLitMoc)
 apply_sanitizer_options(TbLitMoc)

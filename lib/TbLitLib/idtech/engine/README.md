@@ -68,8 +68,8 @@ six constexpr cvars) behind `lit/EngineShadowMatrices.h`, with `USE_NVRHI` defin
 alone; and `idlib/math/Vector.cpp`'s `idVec3::ToMat3`, which `SetupShadowMapMatrices` calls
 (their licence headers also name (C) 2014 Carl Kenner, (C) 2016-2017 Dustin Land and (C) 2022
 Stephen Pridham, whom the shim's engine notice repeats).
-Every one of these files is the Doom 3 BFG Edition GPL-3 code
-with id Software's additional terms (`LICENSE.md`), (C) 2022-2023 Harrie van Ginneken and
+Every one of these files (the `idlib/` and `renderer/` copies; `libs/` below has its own
+terms) is the Doom 3 BFG Edition GPL-3 code with id Software's additional terms (`LICENSE.md`), (C) 2022-2023 Harrie van Ginneken and
 (C) 2022-2025 Robert Beckebans among its authors; the parser embeds no third-party JSON
 code (the engine's `neo/libs/rapidjson` is not used by it, and is not copied).
 
@@ -88,6 +88,19 @@ exception, R5.6), and, LP7.1a (D135), `mikktspace/mikktspace.c` and `mikktspace.
 so that a model's MikkTSpace tangents are the engine's. Their terms are in
 `LICENSE_EXCEPTIONS.md`, the engine's file, copied whole next to `LICENSE.md` (MikkTSpace's
 zlib-style licence is its "Mikkelsen Tangent Space library" entry, `neo/libs/mikktspace/*`).
+
+LP6.7 (C75) adds `libs/moc/`, Intel's Masked Software Occlusion Culling as the engine vendors
+it: the eleven files of `neo/libs/moc`, whole, under the Apache License 2.0 (`libs/moc/license.txt`,
+and its "Intel Masked Software Occlusion Culling" entry in `LICENSE_EXCEPTIONS.md`), not the
+GPL-3 code. Six are built, into the `TbLitMoc` target with the engine CMake's per-file flags:
+`MaskedOcclusionCulling.cpp`, `MaskedOcclusionCullingAVX2.cpp`, `MaskedOcclusionCullingAVX512.cpp`
+(compiled with `USE_AVX512` 0, as the engine's option OFF), `MaskedOcclusionCulling.h`,
+`MaskedOcclusionCullingCommon.inl` and `CompilerSpecific.inl`. Five are copied and never built:
+`CullingThreadpool.h` and `CullingThreadpool.cpp` (the engine uses them only with
+`MOC_MULTITHREADED` 1; it and the preview run 0), `CMakeLists.txt`, `README.md` and
+`license.txt`. The preview reaches the library only through the shim's facade
+(`../shim/include/lit/EngineMaskedOcclusion.h`; mirror.json `M-MOC-COPY-01` to `-11`,
+`M-MOC-BUILD-01`).
 
 **Never edit these files.** A change the copied code needs goes into the shim
 (`../shim/`). The shim headers `precompiled.h` and `RenderCommon.h` stand in for the
