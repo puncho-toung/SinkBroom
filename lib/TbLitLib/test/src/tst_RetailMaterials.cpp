@@ -56,6 +56,7 @@
 #include <fmt/ranges.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -630,12 +631,16 @@ TEST_CASE("Retail materials: the sweep", "[.][retail]")
   }
   std::cout << report.str() << std::flush;
 
-  CHECK(stats.materials == 7733);
+  // DX-F.1 (2026-11-05): 7,733 -> 7,738 after the user's game data of 2026-11-02 02:45
+  // (materials/dmm_weapon_staff.mtr's five materials, with def/weapon_staff.def,
+  // def/dmm_staff_models.def and the player defs edited for the staff weapon)
+  CHECK(stats.materials == 7738);
   CHECK(stats.tables == 309);
   // C21: every size resolved, Ready or Default with its reason; S3.9: the counts of the
-  // retail game, and the Default reasons only of the three kinds seen
+  // retail game, and the Default reasons only of the three kinds seen (DX-F.1: 4,485 ->
+  // 4,490, the staff's five materials sized Ready)
   CHECK(readySizes + int(defaultSizes) == int(entries.size()));
-  CHECK(readySizes == 4485);
+  CHECK(readySizes == 4490);
   CHECK(defaultSizes == 3248u);
   CHECK(defaultReasons.count("(none)") == 0u);
   for (const auto& [kind, materials] : defaultReasons)
@@ -658,9 +663,25 @@ TEST_CASE("Retail materials: the sweep", "[.][retail]")
   const auto goldens = readGoldens();
   const auto list = engineDeclList(goldens);
 
-  // the engine's listDecls of the same data: the same decl files and bytes
-  CHECK(stats.declFiles == list.files);
-  CHECK(int(stats.declFileBytes >> 10) == list.kilobytes);
+  // the engine's listDecls of the same data: the same decl files and bytes. DX-F.2
+  // (2026-11-05): less the capture's own two, which SinkBroom rightly never reads: the
+  // goldens' engine runs with fs_game tb_capture (capture_goldens.py), whose folder holds
+  // since 2026-10-22 the fixture capture's materials/lp1bc.mtr and materials/lp1c.mtr
+  // (capture_fixtures.py's copies of fixture/lit/materials/), files of the sandbox and
+  // not of the game folder; RegisterDeclFolder lists every search path, the mod's first
+  // (DeclManager.cpp:1163-1220), so the engine's count holds them and their 19 lp1b /
+  // lp1c materials (among the implicit names below), where the sweep reads the game's
+  // base alone. Before that copy the two counts agreed (925 files, 8,175 KB)
+  const auto fixtureMaterials = getFixtureRoot() / "test" / "lit" / "materials";
+  const auto captureDeclFiles = std::array<std::filesystem::path, 2>{
+    fixtureMaterials / "lp1bc.mtr", fixtureMaterials / "lp1c.mtr"};
+  auto captureDeclBytes = std::uint64_t{0};
+  for (const auto& file : captureDeclFiles)
+  {
+    captureDeclBytes += std::filesystem::file_size(file);
+  }
+  CHECK(stats.declFiles + int(captureDeclFiles.size()) == list.files);
+  CHECK(int((stats.declFileBytes + captureDeclBytes) >> 10) == list.kilobytes);
 
   // A3.4: the decls of every type. The engine has more only where its start-up made
   // implicit decls, which no decl file defines: the golden test asserts their names
@@ -672,9 +693,12 @@ TEST_CASE("Retail materials: the sweep", "[.][retail]")
     REQUIRE(list.counts.count(count.type) == 1);
     CHECK(list.counts.at(count.type) == count.count + implicit);
   }
-  // 7788 = 7733 + 55 materials, 3091 = 3090 + 1 sound shader
-  CHECK(list.counts.at("material") == 7788);
-  CHECK(engineNames(goldens, "material")->only.size() == 55u);
+  // 7812 = 7738 + 74 materials, 3091 = 3090 + 1 sound shader. DX-F.1 (2026-11-05): 7,788
+  // -> 7,812 and 55 -> 74 at the goldens' capture of 2026-11-05 18:47: the user's five
+  // staff materials (both sides), and the 19 lp1b / lp1c fixture materials of the
+  // capture's own decl files (DX-F.2 above), which SinkBroom does not read
+  CHECK(list.counts.at("material") == 7812);
+  CHECK(engineNames(goldens, "material")->only.size() == 74u);
   CHECK(list.counts.at("sound") == 3091);
   CHECK(engineNames(goldens, "sound")->only.size() == 1u);
 
@@ -879,7 +903,9 @@ TEST_CASE("Retail materials: the engine's print output", "[.][retail]")
     // W.7: the "Couldn't load" lines, each compared above, and the Binarize lines, only
     // counted until LP1c (isBinarizeLine, A3.10)
     CHECK(imageLines == 27);
-    CHECK(binarizeLines == 3);
+    // DX-F.1 (2026-11-05): 3 -> 0: the materialorb's metal04 images are binarised in the
+    // game folder since 2026-11-02, so the capture of 2026-11-05 prints no Binarize line
+    CHECK(binarizeLines == 0);
   }
 
   SECTION("the editor images agree with the engine's export")
@@ -1517,7 +1543,9 @@ TEST_CASE("Retail materials: bakes and image caches (LP1c.1)", "[.][retail]")
     fmt::format("{}", fmt::join(binarized, ", ")),
     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started)
       .count());
-  REQUIRE(binarized.size() == 3u);
+  // DX-F.1 (2026-11-05): 3 -> 0, the metal04 images binarised in the game folder since
+  // 2026-11-02 (the goldens' Binarize lines are gone with them)
+  REQUIRE(binarized.empty());
   for (const auto& name : binarized)
   {
     CAPTURE(name);
@@ -1591,15 +1619,21 @@ TEST_CASE("Retail materials: bakes and image caches (LP1c.1)", "[.][retail]")
   std::cout << fmt::format(
     "Retail Binarize images made from their sources: {}\n",
     fmt::format("{}", fmt::join(fromSource, "; ")));
-  CHECK(fromSource.size() == 3u);
+  // DX-F.1 (2026-11-05): 3 -> 0: the materialorb's three metal04 images, which had no
+  // cache, are binarised in the game folder since 2026-11-02
+  CHECK(fromSource.empty());
   CHECK(failed == 0);
   CHECK(found > 0);
   CHECK(ready > 0);
   CHECK(gridImages + int(noAtlas.size()) == bake.tree->numAreas);
-  // S3.9: the retail game's counts, every cache read Ready (S3.5's record checks pass)
-  CHECK(keys.size() == 14241u);
-  CHECK(found + viaBfhack == 8198);
-  CHECK(read == 411);
+  // S3.9: the retail game's counts, every cache read Ready (S3.5's record checks pass).
+  // DX-F.1 (2026-11-05): after the user's game data of 2026-11-02 02:45 (the staff
+  // weapon: materials/dmm_weapon_staff.mtr's images, models/dmm/weapons/staff_view's ten
+  // TGAs with their caches) 14,241 -> 14,251 keys, 8,198 -> 8,208 caches found, and the
+  // sample of every 25th found cache 411 -> 410 (the order moved)
+  CHECK(keys.size() == 14251u);
+  CHECK(found + viaBfhack == 8208);
+  CHECK(read == 410);
   CHECK(ready == read);
   CHECK(rgb565 == 85);
   CHECK(staleReasons.empty());

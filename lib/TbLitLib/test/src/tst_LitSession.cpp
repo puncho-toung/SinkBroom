@@ -83,6 +83,7 @@
 #include <functional>
 #include <future>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <memory>
@@ -5547,7 +5548,7 @@ std::optional<HdrImage> hdrNow(LitSession& session)
 // records resolved with it, at the frames its version moves, and the picture follows (the
 // slot's stand-in, then its texture again: the picture before the drop, bit for bit); no
 // record outlives a set the cache erased. Hidden as LP2.2a's case; it needs a GPU.
-TEST_CASE("LitSession draw records on a GPU (LP6.1)", "[.][litgpu]")
+TEST_CASE("LitSession draw records on a GPU (LP6.1)", "[.][litgpu4]")
 {
   const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
   if (!gamePathValue || !*gamePathValue)
@@ -6983,7 +6984,10 @@ std::optional<ParityFrame> settledParityFrame(
     const auto& f = frame->frame;
     const auto ready = f.settled && f.lit.camera == camera && f.tonemap.tonemapped
                        && f.tonemap.blitted && f.lit.prepassDraws > 0
-                       && (!needsLight || f.lit.lightsDrawn > 0)
+                       && (!needsLight || f.lit.lightsDrawn > 0
+                           // F3.3: or one the masked occlusion culling dropped (on in the
+                           // [parity-moc] case alone)
+                           || f.lit.lightsMocCulled > 0)
                        && f.lit.interactionsSkipped == interactionsSkipped;
     if (ready)
     {
@@ -7421,7 +7425,7 @@ struct HeapBytesForTesting
 // or a test refuses, and a texture larger than a heap, dedicated as before; a texture let
 // go frees its range in its frame, handed out again once that frame has finished; one
 // heap is one allocation; at Stop nothing is left
-TEST_CASE("LitSession texture heaps on a GPU (LP6.4a)", "[.][litgpu]")
+TEST_CASE("LitSession texture heaps on a GPU (LP6.4a)", "[.][litgpu4]")
 {
   namespace ei = engine_image;
   const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
@@ -7722,7 +7726,7 @@ TEST_CASE("LitSession texture heaps on a GPU (LP6.4a)", "[.][litgpu]")
 // inside the window the still timer drew it. A frame drawn before the first batch is
 // whole, and the first frame after it, hold nothing: they settle as a still camera's
 // (CpuPool::ThreadCount is 2: one entity job is held, the other worker builds the lights)
-TEST_CASE("LitSession the early frame and the shadow hold (LP6.4a)", "[.][litgpu]")
+TEST_CASE("LitSession the early frame and the shadow hold (LP6.4a)", "[.][litgpu4]")
 {
   const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
   if (!gamePathValue || !*gamePathValue)
@@ -7914,6 +7918,16 @@ TEST_CASE("LitSession the early frame and the shadow hold (LP6.4a)", "[.][litgpu
       return frame.whole && !frame.records.empty();
     });
     REQUIRE(first != drawn.end());
+    // F2.8 (2026-11-05): the case proves the rule only when that frame started inside
+    // the nudge's moving window (a slower machine would pass without the rule): fail
+    // instead of passing then
+    std::cout << fmt::format(
+      "F2.8: the first whole frame started {:.1f} ms after the nudge (the window {} "
+      "ms)\n",
+      first->ms - released,
+      StillTimerDelay.count());
+    CHECK(first->ms >= released);
+    CHECK(first->ms - released < double(StillTimerDelay.count()));
     CHECK_FALSE(first->moving);
     CHECK_FALSE(first->settleWanted);
     for (const auto& [light, lod, exact] : first->records)
@@ -7921,6 +7935,10 @@ TEST_CASE("LitSession the early frame and the shadow hold (LP6.4a)", "[.][litgpu
       CAPTURE(light);
       CHECK(lod == exact);
     }
+    // F2.8, F3.1 (2026-11-05): and the still timer never fired: no frame inside the
+    // window drifted the held layout or held a LOD while the scene arrived (teardown's
+    // check, 0)
+    CHECK(session->stillTimerFiringsForTesting() == 0u);
     teardown(*session);
     CHECK(session->lastDeviceReleaseCount() == 0u);
     CHECK(session->nvrhiErrorCount() == 0u);
@@ -8010,7 +8028,40 @@ TEST_CASE("LitSession parity rows: the ambient-only switch (LP4.2b)")
  * and O02b's; a row's skip_ambient may be its own (O01's 0 on the ambient map). Hidden:
  * it needs a GPU and the root of a parity.py run.
  */
-TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
+namespace
+{
+
+/**
+ * F3.3 (2026-11-05): the rows of a [parity] or [parity-moc] case whose read-back with the
+ * masked occlusion culling on (the product default) K51 or E-LIT-16 lets differ from the
+ * cull-off one, by id with the reason: compared on their counts only. Every other row's
+ * read-back is byte-equal to the cull-off one (a difference is a wrong cull on a flowed
+ * tree)
+ */
+const auto MocExplainedRows = std::map<std::string, std::string>{};
+
+// a file's bytes in one read (a Debug stream iterator takes a second per read-back)
+std::vector<std::uint8_t> readBytes(const std::filesystem::path& path)
+{
+  auto error = std::error_code{};
+  const auto size = std::filesystem::file_size(path, error);
+  auto bytes = std::vector<std::uint8_t>(error ? 0 : std::size_t(size));
+  auto stream = std::ifstream{path, std::ios::binary};
+  stream.read(reinterpret_cast<char*>(bytes.data()), std::streamsize(bytes.size()));
+  bytes.resize(std::size_t(stream.gcount()));
+  return bytes;
+}
+
+/**
+ * The body of the [parity] case (moc false: the culling off, M-PARITY-04) and of the
+ * [parity-moc] case (F3.3, moc true): the same rows, fixtures and session, the culling
+ * on; its outputs under TB_LIT_PARITY_OUT/moc, each row's read-back compared byte for
+ * byte with the [parity] case's in TB_LIT_PARITY_OUT (which must have run first), the
+ * rows of MocExplainedRows on their counts only (lights_moc_culled and
+ * surfaces_moc_culled are printed per row); the rows' "expect" is the cull-off case's
+ * alone.
+ */
+void parityRows(const bool moc)
 {
   // U2.13
   constexpr auto ParityRowBound = std::chrono::milliseconds{10000};
@@ -8025,7 +8076,9 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
       "root of a parity.py run");
   }
   const auto root = std::filesystem::path{rootValue};
-  const auto out = std::filesystem::path{outValue};
+  // F3.3: the cull-off case's outputs, which the culling's are compared with
+  const auto cullOff = std::filesystem::path{outValue};
+  const auto out = moc ? cullOff / "moc" : cullOff;
   // LP6.5a (D185, the director's reading (1)): the rows' sessions run with SSAO, so the
   // 24 rows of litpreview_ambient.map (the one baked map, SC817) move on the preview's
   // side; LP6.5c's engine run shot them with r_useSSAO 1 and recorded their classes.
@@ -8096,8 +8149,9 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
     auto width = std::uint32_t(record->numberOr("width", 1280.0));
     auto height = std::uint32_t(record->numberOr("height", 720.0));
     auto options = SessionOptions{};
-    // LP6.7 (C75, Q45): the masked occlusion culling off, as before it
-    options.maskedOcclusionForTesting = false;
+    // LP6.7 (C75, Q45): the masked occlusion culling off, as before it (M-PARITY-04);
+    // F3.3: on in the [parity-moc] case, the product default
+    options.maskedOcclusionForTesting = moc;
     options.validation = true;
     options.gamePath = root;
     options.frameLogPath = frameLog;
@@ -8230,6 +8284,40 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
           std::streamsize(image->rgba.size()));
       }
       const auto& lit = settled->lit;
+      // F3.3: the culling's read-back against the cull-off case's, byte for byte
+      if (moc)
+      {
+        const auto reference = cullOff / (id + ".rgba");
+        INFO(
+          "[parity-moc] compares with the [parity] case's read-backs: run [.][parity] "
+          "first into the same TB_LIT_PARITY_OUT");
+        REQUIRE(std::filesystem::exists(reference));
+        const auto cullOffBytes = readBytes(reference);
+        const auto same = cullOffBytes == image->rgba;
+        auto differing = std::size_t{0};
+        if (!same && cullOffBytes.size() == image->rgba.size())
+        {
+          for (std::size_t i = 0; i < image->rgba.size(); i += 4)
+          {
+            differing += std::memcmp(&cullOffBytes[i], &image->rgba[i], 3) != 0 ? 1 : 0;
+          }
+        }
+        const auto explained = MocExplainedRows.find(id);
+        std::cout << fmt::format(
+          "F3.3 parity-moc {}: the read-back {} the cull-off one ({} pixels differ); "
+          "lights_moc_culled {}, surfaces_moc_culled {}; {}\n",
+          id,
+          same ? "equals" : "DIFFERS from",
+          differing,
+          lit.lightsMocCulled,
+          lit.surfacesMocCulled,
+          explained != MocExplainedRows.end() ? "listed: " + explained->second
+                                              : std::string{"compared byte for byte"});
+        if (explained == MocExplainedRows.end())
+        {
+          CHECK(same);
+        }
+      }
       // LP4.1 (C38): the view lights' scissors, in GL's unflipped space, and whether one
       // is smaller than the view's (0, 0, w - 1, h - 1)
       auto viewLights = std::vector<std::string>{};
@@ -8403,8 +8491,9 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
       }
 
       // LP4.1 (C38): the row's expected flow statistics, as parity.py's row table records
-      // them (view_area "known": an area, not -1); LP4.2b: the view's probe candidates
-      if (expect)
+      // them (view_area "known": an area, not -1); LP4.2b: the view's probe candidates;
+      // F3.3: the cull-off case's (the culling moves the lists' counts)
+      if (expect && !moc)
       {
         for (const auto& [key, value] : expect->object)
         {
@@ -8784,9 +8873,29 @@ TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
     CHECK(gathered > 0u);
   }
 
-  messages.print("parity, validation");
+  messages.print(moc ? "parity-moc, validation" : "parity, validation");
   CHECK(messages.errors == 0);
   CHECK(messages.warnings == 0);
+}
+
+} // namespace
+
+TEST_CASE("LitSession parity rows (LP2.3)", "[.][parity]")
+{
+  parityRows(false);
+}
+
+/**
+ * F3.3 (2026-11-05): the parity rows with the masked occlusion culling on, the product
+ * default (the [parity] case runs it off, M-PARITY-04): every row's read-back byte-equal
+ * to the [parity] case's cull-off one, which this case reads (run it after [.][parity],
+ * with the same TB_LIT_PARITY_ROOT and TB_LIT_PARITY_OUT); its own outputs under
+ * TB_LIT_PARITY_OUT/moc. Hidden: it needs a GPU and the root of a parity.py run.
+ */
+TEST_CASE(
+  "LitSession parity rows with the masked occlusion culling (F3.3)", "[.][parity-moc]")
+{
+  parityRows(true);
 }
 
 namespace
@@ -17521,9 +17630,12 @@ TEST_CASE("LitSession shadows on a GPU (LP3.1)", "[.][litgpu2]")
           record.placements[s].x, record.placements[s].y, record.placements[s].size});
       }
     }
-    // turned round: light B's volume behind the view, A's around the camera
+    // turned round at x 200: light B's volume behind the view, A's around the camera and
+    // box A in front of it (F3.4, 2026-11-05: turned round at -200, box A and its
+    // shadow's bounds, x 32..400, are behind the camera, so A casts nothing there, as in
+    // the engine, and takes no tile)
     const auto one = settledShadowFrame(
-      *session, litCamera({-200, 0, 128}, {-1, 0, 0}, {0, 0, 1}), 1, true, before);
+      *session, litCamera({200, 0, 128}, {-1, 0, 0}, {0, 0, 1}), 1, true, before);
     REQUIRE(one);
     REQUIRE(one->records.size() == 1u);
     auto after = std::vector<AtlasRect>{};
@@ -18331,7 +18443,10 @@ TEST_CASE("LitSession shadow records on a GPU (LP3.3)", "[.][litgpu2]")
   SECTION("(k) settled: the still timer's frame settles a held layout (D151, C62, A49)")
   {
     const auto ahead = litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1});
-    const auto behind = litCamera({-200, 0, 128}, {-1, 0, 0}, {0, 0, 1});
+    // F3.4 (2026-11-05): turned round at x 200, box A (x 32..64) in front of the camera,
+    // so light A keeps its caster (turned round at -200 box A and its shadow's bounds
+    // are behind the camera: A casts nothing there, as in the engine)
+    const auto behind = litCamera({200, 0, 128}, {-1, 0, 0}, {0, 0, 1});
     offer(lp3MapText("lp3_vacated.map"), "lp3_vacated.map");
     const auto both = settledShadowFrame(*session, ahead, 2, false);
     REQUIRE(both);
@@ -19759,7 +19874,7 @@ bool oneFrame(LitSession& session)
 // sixteenth, Evicted (their intrinsics bound, not pending), asked again only when a frame
 // draws them; with no unbound one left and the budget passed, the bound ones' mip floor
 // through the Replacing path; an emptied heap released; at Stop nothing is left
-TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgpu]")
+TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgpu4]")
 {
   const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
   if (!gamePathValue || !*gamePathValue)
@@ -19797,6 +19912,9 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
       // which slots it bound
       REQUIRE(settledChain(*session, view2));
       const auto seen2 = passes.last();
+      // F3.19 (2026-11-05): the second view's picture before its textures are evicted
+      const auto view2Before = settledHdr(*session, view2, 1);
+      REQUIRE(view2Before);
       REQUIRE(settledChain(*session, view1));
       const auto seen1 = passes.last();
       // the first view for six settled frames (the pacer's)
@@ -19864,10 +19982,12 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
         slotNames(slots, b));
       REQUIRE_FALSE(b.empty());
 
-      // the budget between the visible set and the live figure: live less half of B
+      // the budget between the visible set and the live figure: live less half of B;
+      // F2.1 (2026-11-05): B's slots idle for EvictionIdleTime as well as four frames
       const auto live = before.live();
       const auto budget = live - bBytes / 2;
       const auto from = passes.size();
+      std::this_thread::sleep_for(EvictionIdleTime + 100ms);
       session->setVramBudgetForTesting(budget);
       REQUIRE(oneFrame(*session));
       REQUIRE(waitQuiet(*session));
@@ -19984,6 +20104,16 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
         CHECK_FALSE(containsSlot(b, id));
       }
       CHECK(session->lastFrameSettledForTesting());
+      // F3.19 (2026-11-05): the picture after B's re-upload is the one before its
+      // eviction, byte for byte
+      const auto view2After = settledHdr(*session, view2, 1);
+      REQUIRE(view2After);
+      const auto samePicture = view2After->first.rgba == view2Before->first.rgba;
+      std::cout << fmt::format(
+        "F3.19: view 2 after B's eviction and re-upload, the picture equal to the one "
+        "before {}\n",
+        samePicture);
+      CHECK(samePicture);
       // (c) over the whole of (a)
       CHECK(stampFaults(passes.taken()) == 0u);
 
@@ -20063,9 +20193,14 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
         ++boundFrames;
         boundIntrinsic += intrinsic ? 1u : 0u;
       });
-      // the budget below the visible set: live less half of the floor's texture
+      // F2.2 (2026-11-05): the picture before the floor
+      const auto pictureBefore = settledHdr(*session, view1, 1);
+      REQUIRE(pictureBefore);
+      // the budget below the visible set: live less half of the floor's texture (F2.1:
+      // the slots no frame bound idle for EvictionIdleTime first)
       const auto budget = before.live() - floorBefore.bytes / 2;
       const auto from = passes.size();
+      std::this_thread::sleep_for(EvictionIdleTime + 100ms);
       session->setVramBudgetForTesting(budget);
       REQUIRE(oneFrame(*session));
       REQUIRE(settledChain(*session, view1));
@@ -20159,6 +20294,52 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
       CHECK(session->lastFrameSettledForTesting());
       CHECK(events.countContaining(SessionEvent::Warning, budgetText) == 1u);
 
+      // F2.2 (2026-11-05): the budget raised (the default's): the floors are lifted -
+      // floored 1 -> 0, the floor's texture its full 1024 x 1024 and every level again -
+      // and the settled picture is the one before the floor
+      const auto lifting = passes.size();
+      session->setVramBudgetForTesting(0);
+      REQUIRE(oneFrame(*session));
+      REQUIRE(settledChain(*session, view1));
+      REQUIRE(waitQuiet(*session));
+      settle(*session);
+      REQUIRE(waitQuiet(*session));
+      auto unfloored = std::vector<ImageSlotId>{};
+      for (const auto& report : passes.taken(lifting))
+      {
+        unfloored.insert(
+          unfloored.end(), report.unfloored.begin(), report.unfloored.end());
+      }
+      auto slotsLifted = std::map<ImageSlotId, BudgetSlot>{};
+      REQUIRE(inFrame(
+        *session, [&](RenderFrameAccess& access) { slotsLifted = budgetSlots(access); }));
+      const auto pictureAfter = settledHdr(*session, view1, 1);
+      REQUIRE(pictureAfter);
+      const auto liftedStatus = session->status();
+      std::cout << fmt::format(
+        "F2.2: the budget raised: unfloored {}; textures_floored {} -> {}; the floor's "
+        "texture {} x {}, {} levels (before the floor {} x {}, {}); the picture equal to "
+        "the one before the floor {}\n",
+        slotNames(slotsLifted, unfloored),
+        status.texturesFloored,
+        liftedStatus.texturesFloored,
+        slotsLifted.at(floor).width,
+        slotsLifted.at(floor).height,
+        slotsLifted.at(floor).levels,
+        floorBefore.width,
+        floorBefore.height,
+        floorBefore.levels,
+        pictureAfter->first.rgba == pictureBefore->first.rgba);
+      CHECK(containsSlot(unfloored, floor));
+      CHECK(liftedStatus.texturesFloored == 0u);
+      CHECK_FALSE(slotsLifted.at(floor).floored);
+      CHECK(slotsLifted.at(floor).state == ImageSlots::State::Resident);
+      CHECK(slotsLifted.at(floor).width == floorBefore.width);
+      CHECK(slotsLifted.at(floor).height == floorBefore.height);
+      CHECK(slotsLifted.at(floor).levels == floorBefore.levels);
+      CHECK(pictureAfter->first.rgba == pictureBefore->first.rgba);
+      CHECK(session->lastFrameSettledForTesting());
+
       session->setVramBudgetForTesting(0);
       session->setBudgetPassHookForTesting({});
       teardown(*session);
@@ -20239,6 +20420,51 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
       session->setVramBudgetForTesting(budget);
       REQUIRE(oneFrame(*session));
       settle(*session);
+      // F2.1 (2026-11-05): the emptied heap is kept for EmptyHeapKeepTime: the next
+      // placement takes it (no new heap, no allocation), and it goes only once it stayed
+      // empty that long
+      auto keptHeaps = std::size_t{0};
+      auto keptReleased = std::uint64_t{0};
+      auto third = NoImageSlot;
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        keptHeaps = access.heaps.heaps();
+        keptReleased = access.heaps.heapsReleased();
+        third = access.images.provideForTesting(
+          testImageKey("textures/lp6/second_heap_2"),
+          syntheticImage(256, ei::FormatRgba8, 5));
+      }));
+      REQUIRE(waitForSlots(*session, {third}));
+      // (the third is evicted again at once, never bound: no new heap and no release
+      // meanwhile proves it took the kept one)
+      auto heapsWithThird = std::size_t{0};
+      auto releasedWithThird = std::uint64_t{0};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        heapsWithThird = access.heaps.heaps();
+        releasedWithThird = access.heaps.heapsReleased();
+      }));
+      const auto allocationsWithThird = session->deviceMemoryAllocations();
+      std::cout << fmt::format(
+        "F2.1: the emptied heap kept (texture_heaps {}, released {}); after the next "
+        "placement texture_heaps {}, released {}, allocations {} -> {}\n",
+        keptHeaps,
+        keptReleased,
+        heapsWithThird,
+        releasedWithThird,
+        allocationsBefore,
+        allocationsWithThird);
+      CHECK(keptHeaps == 2u);
+      CHECK(keptReleased == 0u);
+      CHECK(heapsWithThird == 2u);
+      CHECK(releasedWithThird == 0u);
+      CHECK(allocationsWithThird == allocationsBefore);
+      // the third goes too (never bound, the budget still tight), and the heap, empty for
+      // the keep time, is released
+      settle(*session);
+      std::this_thread::sleep_for(EmptyHeapKeepTime + 200ms);
+      REQUIRE(oneFrame(*session));
+      settle(*session);
+      std::this_thread::sleep_for(EmptyHeapKeepTime + 200ms);
+      REQUIRE(oneFrame(*session));
       settle(*session);
       auto heapsAfter = std::size_t{0};
       auto states = std::array<ImageSlots::State, 4>{};
@@ -20284,6 +20510,164 @@ TEST_CASE("LitSession eviction against the budget on a GPU (LP6.4b)", "[.][litgp
       CHECK(events.count(SessionEvent::Error) == 0u);
     }
     CHECK(resetDispatcher());
+    CHECK(messages.errors == 0);
+    CHECK(messages.warnings == 0);
+  }
+
+  SECTION("(f) F2.1: the fixed part alone over the budget; a camera turning under it")
+  {
+    // Q49 per DQ-1 (2026-11-05): eviction lowers the textures toward the budget less the
+    // targets, buffers and arenas; when those alone pass it (the allowance under an
+    // eighth of the budget), the session says so once and evicts nothing; and a slot is
+    // idle only after EvictionIdleTime as well as four frames, so a camera that turns
+    // between two views under pressure evicts and asks again nothing within that time
+    const auto fixedText = std::string_view{"the targets and geometry alone pass"};
+    auto messages = ValidationMessages{};
+    messages.mirroredMessageId = OutputNotConsumedId;
+    {
+      const auto instance = testInstance(true, false, messages);
+      REQUIRE(instance.valid());
+      REQUIRE(initInstanceDispatcher(instance.handles()));
+      auto service = rootService(root);
+      auto events = Events{};
+      auto session = rootSession(instance, events, *service, root);
+      auto passes = BudgetPasses{};
+      session->setBudgetPassHookForTesting(passes.hook());
+      session->setExposed(true);
+      REQUIRE(waitFor(
+        [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; },
+        5000ms,
+        false));
+      REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+      REQUIRE(settledChain(*session, view2));
+      const auto seen2 = passes.last();
+      REQUIRE(settledChain(*session, view1));
+      const auto seen1 = passes.last();
+      REQUIRE(waitQuiet(*session));
+      auto slots = std::map<ImageSlotId, BudgetSlot>{};
+      auto before = GpuMemoryAccount{};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        slots = budgetSlots(access);
+        before = accountOf(access);
+      }));
+      const auto textures = before.heapUsedBytes + before.dedicatedTextureBytes;
+      const auto fixed = before.live() - textures;
+      const auto movedOf = [](const std::vector<BudgetPassReport>& reports) {
+        auto moved = std::size_t{0};
+        for (const auto& report : reports)
+        {
+          moved +=
+            report.evicted.size() + report.floored.size() + report.reRequested.size();
+        }
+        return moved;
+      };
+
+      // (1) the budget half the fixed part, every slot idle long enough: said once,
+      // nothing evicted, floored or asked again, the session settles
+      std::this_thread::sleep_for(EvictionIdleTime + 100ms);
+      const auto from = passes.size();
+      session->setVramBudgetForTesting(fixed / 2);
+      REQUIRE(oneFrame(*session));
+      REQUIRE(settledChain(*session, view2));
+      REQUIRE(settledChain(*session, view1));
+      REQUIRE(waitQuiet(*session));
+      const auto fixedReports = passes.taken(from);
+      const auto fixedMoved = movedOf(fixedReports);
+      const auto fixedOver = std::ranges::any_of(
+        fixedReports, [](const BudgetPassReport& report) { return report.fixedOver; });
+      std::cout << fmt::format(
+        "F2.1 (1): the fixed part {} B (live {}, textures {}), the budget {}: {} passes, "
+        "fixed over {}, {} evictions, floors or re-requests; warned {} time(s); settled "
+        "{}\n",
+        fixed,
+        before.live(),
+        textures,
+        fixed / 2,
+        fixedReports.size(),
+        fixedOver,
+        fixedMoved,
+        events.countContaining(SessionEvent::Warning, fixedText),
+        session->lastFrameSettledForTesting());
+      CHECK(fixedOver);
+      CHECK(fixedMoved == 0u);
+      CHECK(events.countContaining(SessionEvent::Warning, fixedText) == 1u);
+      CHECK(events.countContaining(SessionEvent::Warning, budgetText) == 0u);
+      CHECK(session->lastFrameSettledForTesting());
+
+      // (2) the budget live less half of view 2's own textures (as (a)), the camera
+      // turning between the views, six frames each, for 1.6 s: the four-frame rule alone
+      // evicted view 2's own on view 1 and asked them again on view 2 every turn
+      session->setVramBudgetForTesting(0);
+      REQUIRE(settledChain(*session, view1));
+      auto bBytes = std::uint64_t{0};
+      const auto drawn1 = drawnOf(seen1);
+      for (const auto id : drawnOf(seen2))
+      {
+        const auto& slot = slots.at(id);
+        if (
+          !drawn1.contains(id) && !slot.intrinsic
+          && slot.state == ImageSlots::State::Resident)
+        {
+          bBytes += slot.bytes;
+        }
+      }
+      REQUIRE(bBytes > 0u);
+      auto live = std::uint64_t{0};
+      REQUIRE(inFrame(
+        *session, [&](RenderFrameAccess& access) { live = accountOf(access).live(); }));
+      const auto turning = passes.size();
+      session->setVramBudgetForTesting(live - bBytes / 2);
+      const auto turnStart = std::chrono::steady_clock::now();
+      auto turns = 0;
+      for (auto step = 0; std::chrono::steady_clock::now() - turnStart < 1600ms; ++step)
+      {
+        auto view = (step / 6) % 2 == 0 ? view1 : view2;
+        view.position[2] += float(step % 6) * 0.01f;
+        const auto mark = session->framesPresented();
+        session->setCamera(view);
+        REQUIRE(
+          waitFor([&] { return session->framesPresented() > mark; }, 5000ms, false));
+        turns += step % 6 == 0 ? 1 : 0;
+      }
+      const auto turned = passes.taken(turning);
+      auto evictedIds = std::set<ImageSlotId>{};
+      auto cycles = std::size_t{0};
+      for (const auto& report : turned)
+      {
+        for (const auto& [id, lastBound] : report.evicted)
+        {
+          evictedIds.insert(id);
+        }
+        for (const auto id : report.reRequested)
+        {
+          cycles += evictedIds.contains(id) ? 1 : 0;
+        }
+      }
+      std::cout << fmt::format(
+        "F2.1 (2): the camera turned {} times in {} passes under the budget: {} slots "
+        "evicted, {} asked again after their eviction\n",
+        turns,
+        turned.size(),
+        evictedIds.size(),
+        cycles);
+      CHECK(turns >= 4);
+      CHECK(cycles == 0u);
+      CHECK(evictedIds.empty());
+
+      session->setVramBudgetForTesting(0);
+      session->setBudgetPassHookForTesting({});
+      teardown(*session);
+      CHECK(session->lastDeviceReleaseCount() == 0u);
+      CHECK(session->nvrhiErrorCount() == 0u);
+      CHECK(session->deviceMemoryAllocations() == 0);
+      CHECK(events.count(SessionEvent::Error) == 0u);
+      session.reset();
+      service->requestStop();
+      service->join();
+    }
+    CHECK(resetDispatcher());
+    CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+    messages.print("F2.1, validation");
     CHECK(messages.errors == 0);
     CHECK(messages.warnings == 0);
   }
@@ -23363,7 +23747,10 @@ TEST_CASE("LitSession the progressive TAA on a GPU (LP6.6)", "[.][litgpu4]")
     auto firings = std::uint64_t{0};
     auto turnedAt = FrameClock::time_point{};
     const auto ahead = litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1});
-    const auto behind = litCamera({-200, 0, 128}, {-1, 0, 0}, {0, 0, 1});
+    // F3.4 (2026-11-05): turned round at x 200, box A (x 32..64) in front of the camera,
+    // so light A keeps its caster (turned round at -200 box A and its shadow's bounds
+    // are behind the camera: A casts nothing there, as in the engine)
+    const auto behind = litCamera({200, 0, 128}, {-1, 0, 0}, {0, 0, 1});
     {
       const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
@@ -23379,6 +23766,12 @@ TEST_CASE("LitSession the progressive TAA on a GPU (LP6.6)", "[.][litgpu4]")
         false));
       REQUIRE(session->offerSnapshot(
         lp3Snapshot(lp3MapText("lp3_vacated.map"), root, "lp3_vacated.map", 1)));
+      // F3.1 (2026-11-05): the view behind seen and settled first, so that the turn finds
+      // its materials, registers and light triangles answered: the moving frames then
+      // differ from the settled one by the camera alone (a scene change or a casting
+      // light answered inside the window would restart the hold, and no settle would be
+      // wanted)
+      REQUIRE(settledShadowFrame(*session, behind, 0, false));
       REQUIRE(settledShadowFrame(*session, ahead, 2, false));
       std::this_thread::sleep_for(300ms);
       const auto before = session->stillTimerFiringsForTesting();
@@ -24654,6 +25047,445 @@ TEST_CASE("LitSession masked occlusion culling on a GPU (LP6.7)", "[.][litgpu4]"
   std::cout << fmt::format(
     "LP6.7 masked occlusion culling on a GPU: {:.1f} s\n",
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+}
+
+// F3.10 (2026-11-05): a view side of 1 halves to a masked occlusion buffer side of 0,
+// which the library leaves without a buffer: the lists build tests nothing (every count
+// 0) and keeps the buffer's implementation name; a session made 1 x 120, then resized to
+// 160 x 120 (the culling on again), to 1 x 120 and to 120 x 1, draws its frames with the
+// culling on and no crash, allocations 0 and validation 0 / 0 after Stop. Hidden: it
+// needs a GPU and the game's blobs.
+TEST_CASE("LitSession masked occlusion at a view side of 1 (F3.10)", "[.][litgpu4]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  const auto lit = litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0});
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto service = rootService(root);
+    auto events = Events{};
+    auto options = SessionOptions{};
+    options.validation = true;
+    options.gamePath = root;
+    options.skipShadowsForTesting = true;
+    options.maskedOcclusionForTesting = true;
+    auto session = LitSession::create(
+                     instance.handles(),
+                     VK_NULL_HANDLE,
+                     1,
+                     120,
+                     options,
+                     events.sink(),
+                     7,
+                     service.get())
+                   | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+    session->skipShaderPassesForTesting(true);
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+    REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+
+    struct Seen
+    {
+      std::string size;
+      bool active = false;
+      std::size_t lightsTested = 0;
+      std::size_t surfacesTested = 0;
+      std::string implementation;
+    };
+    auto seen = std::vector<Seen>{};
+    const auto look = [&](const std::string& size, const CameraState& camera) {
+      REQUIRE(settledHdr(*session, camera, 0));
+      const auto lists = mocListsOf(*session);
+      const auto status = session->status();
+      seen.push_back(Seen{
+        size,
+        lists.active,
+        status.lightsMocTested,
+        status.surfacesMocTested,
+        status.mocImplementation});
+    };
+    look("1 x 120", lit);
+    session->resizeHeadlessForTesting(160, 120);
+    look("160 x 120", litCamera({60, 0, 80.01f}, {0, 0, -1}, {1, 0, 0}));
+    session->resizeHeadlessForTesting(1, 120);
+    look("1 x 120 again", lit);
+    session->resizeHeadlessForTesting(120, 1);
+    look("120 x 1", litCamera({60, 0, 80.01f}, {0, 0, -1}, {1, 0, 0}));
+    for (const auto& s : seen)
+    {
+      std::cout << fmt::format(
+        "F3.10 {}: the culling active {}, lights tested {}, surfaces tested {}, the "
+        "buffer's implementation '{}'\n",
+        s.size,
+        s.active,
+        s.lightsTested,
+        s.surfacesTested,
+        s.implementation);
+    }
+    REQUIRE(seen.size() == 4u);
+    for (const auto i : {0u, 2u, 3u})
+    {
+      CAPTURE(seen[i].size);
+      CHECK_FALSE(seen[i].active);
+      CHECK(seen[i].lightsTested == 0u);
+      CHECK(seen[i].surfacesTested == 0u);
+      CHECK_FALSE(seen[i].implementation.empty());
+    }
+    CHECK(seen[1].active);
+    CHECK(seen[1].surfacesTested > 0u);
+    CHECK(seen[1].implementation == seen[0].implementation);
+
+    teardown(*session);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  CHECK(resetDispatcher());
+  CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+  messages.print("F3.10, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+  std::filesystem::remove_all(root);
+}
+
+namespace
+{
+
+// F3.2: an uncompressed 32-bit TGA of width x height, one colour
+std::string solidTga(const int width, const int height, const std::uint8_t grey)
+{
+  auto tga = std::string(18, '\0');
+  tga[2] = 2;
+  tga[12] = char(width & 0xff);
+  tga[13] = char(width >> 8);
+  tga[14] = char(height & 0xff);
+  tga[15] = char(height >> 8);
+  tga[16] = 32;
+  tga[17] = 8;
+  for (auto i = 0; i < width * height; ++i)
+  {
+    tga += std::string{char(grey), char(grey), char(grey), char(-1)};
+  }
+  return tga;
+}
+
+// F3.2: the extent in s of a material's chunks' vertices (the UVs' span along the image's
+// width: halved when the editor image's width doubles)
+std::optional<float> sExtentOf(LitSession& session, const std::string& material)
+{
+  auto extent = std::make_shared<std::optional<float>>();
+  if (!inFrame(session, [extent, material](RenderFrameAccess& access) {
+        auto low = std::numeric_limits<float>::max();
+        auto high = std::numeric_limits<float>::lowest();
+        for (const auto& [key, chunk] : access.chunks)
+        {
+          if (key.material != material)
+          {
+            continue;
+          }
+          for (const auto& vert : chunk.verts)
+          {
+            const auto s = engineF16toF32(vert.st[0]);
+            low = std::min(low, s);
+            high = std::max(high, s);
+          }
+        }
+        if (high >= low)
+        {
+          *extent = high - low;
+        }
+      }))
+  {
+    return std::nullopt;
+  }
+  return *extent;
+}
+
+} // namespace
+
+// F3.2 (2026-11-05, DQ-7): with the poll off (rootService), an image file that changes
+// size and a re-parse of its material served before any poll: the slot is published
+// provisional (Default, unmeasured; the kept Ready size dropped because its files
+// changed) and no frame settles at the old size; measured, the settled frame's UVs are
+// the new size's. Before the fix the re-parse published the kept 64 x 32 unmeasured,
+// sizeFinalIn called it final and the frame settled with the old UVs. Hidden: it needs a
+// GPU and the game's blobs.
+TEST_CASE(
+  "LitSession a re-parse after an image changed size, no poll (F3.2)", "[.][litgpu4]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto root = assembleLitRoot(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  const auto lit = litCamera({60, 0, 80}, {0, 0, -1}, {1, 0, 0});
+  const auto floor = std::string{"textures/lp1b/floor"};
+  const auto floorText = std::string{
+    "{\n\tqer_editorimage\ttextures/lp1b/floor.tga\n\tdiffusemap\ttextures/lp1b/"
+    "floor.tga\n}\n"};
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto service = rootService(root);
+    auto events = Events{};
+    auto session = rootSession(instance, events, *service, root);
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+    REQUIRE(session->offerSnapshot(lp22aSnapshot(lp22aMapText(), root, 7, 1)));
+
+    // the floor measured at its file's 64 x 32
+    REQUIRE(settledHdr(*session, lit, 1));
+    const auto first = service->table()->find(floor);
+    REQUIRE(first);
+    REQUIRE(first->entry);
+    CHECK(first->sizeMeasured);
+    CHECK(
+      first->entry->editorImageSize
+      == EditorImageSize{64, 32, EditorImageSize::State::Ready, {}});
+    const auto firstExtent = sExtentOf(*session, floor);
+    REQUIRE(firstExtent);
+
+    // the image rewritten at 128 x 64; the measures held, then the re-parse
+    const auto file = root / "base" / "textures" / "lp1b" / "floor.tga";
+    {
+      const auto tga = solidTga(128, 64, 200);
+      auto stream = std::ofstream{file, std::ios::binary | std::ios::trunc};
+      stream.write(tga.data(), std::streamsize(tga.size()));
+    }
+    bumpModificationTime(file);
+    service->holdMeasuresForTesting(true);
+    REQUIRE(service->reparseMaterial(floor, floorText).is_success());
+    REQUIRE(waitForFeed(*service));
+    const auto held = service->table()->find(floor);
+    REQUIRE(held);
+    REQUIRE(held->entry);
+    std::cout << fmt::format(
+      "F3.2: the re-parse published the floor {} x {} ({}), measured {}\n",
+      held->entry->editorImageSize.width,
+      held->entry->editorImageSize.height,
+      held->entry->editorImageSize.state == EditorImageSize::State::Ready ? "Ready"
+                                                                          : "Default",
+      held->sizeMeasured);
+    CHECK_FALSE(held->sizeMeasured);
+    CHECK(held->entry->editorImageSize.state == EditorImageSize::State::Default);
+    // no frame settles while the floor waits as a provisional Default
+    CHECK_FALSE(settledHdr(*session, lit, 1, 3000ms));
+
+    // measured: the new size, the settled frame's UVs at it (the s span halved)
+    service->holdMeasuresForTesting(false);
+    REQUIRE(settledHdr(*session, lit, 1));
+    const auto measured = service->table()->find(floor);
+    REQUIRE(measured);
+    REQUIRE(measured->entry);
+    CHECK(measured->sizeMeasured);
+    CHECK(
+      measured->entry->editorImageSize
+      == EditorImageSize{128, 64, EditorImageSize::State::Ready, {}});
+    const auto measuredExtent = sExtentOf(*session, floor);
+    REQUIRE(measuredExtent);
+    std::cout << fmt::format(
+      "F3.2: the floor's s span {:.4f} at 64 x 32, {:.4f} at 128 x 64\n",
+      *firstExtent,
+      *measuredExtent);
+    CHECK(*measuredExtent == Catch::Approx(*firstExtent / 2.0f).epsilon(0.01));
+
+    teardown(*session);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  CHECK(resetDispatcher());
+  messages.print("F3.2, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+  std::filesystem::remove_all(root);
+}
+
+namespace
+{
+
+/**
+ * F3.4: lp3_point's room with a second light, lp3_side (origin -150 0 128, radius 150:
+ * it lights the room in front of the camera at -200 0 128 and reaches neither lp3_box nor
+ * lp3_anchor) and lp3_offbox, a box behind the camera inside both lights (offIn), else
+ * parked at y 5000 outside every light; the room's faces cast nothing (lp3/room)
+ */
+std::string sideLightMap(const bool offIn)
+{
+  auto map = lp3MapText("lp3_point.map");
+  map +=
+    "// entity 4\n{\n\"classname\" \"light\"\n\"name\" \"lp3_side\"\n\"origin\" \"-150 0 "
+    "128\"\n\"light_radius\" \"150 150 150\"\n\"_color\" \"1 1 1\"\n\"noshadows\" "
+    "\"0\"\n}\n";
+  const auto y = offIn ? 0 : 5000;
+  map += fmt::format(
+    "// entity 5\n{{\n\"classname\" \"func_static\"\n\"name\" \"lp3_offbox\"\n\"model\" "
+    "\"lp3_offbox\"\n\"origin\" \"-250 {} 128\"\n",
+    y);
+  map += boxBrush(-260, y - 16, 112, -240, y + 16, 144, "lp3/box") + "}\n";
+  return map;
+}
+
+} // namespace
+
+// F3.4 (2026-11-05, K49): a caster whose entity is not directly visible casts only when
+// R_ShadowBounds of its bounds passes the view's CullBoundsToMVP (FAL:599-615): lp3_side,
+// whose only caster stands behind the camera, has no shadow surface - no tile, no shadow
+// draw, the plain interaction program - and lp3_point's packing is the one of the scene
+// without that caster; lp3_point keeps its tiles (lp3_box is in view). Hidden: it needs a
+// GPU and the game's blobs.
+TEST_CASE("LitSession a light whose casters are all off the view (F3.4)", "[.][litgpu4]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto root = assembleLp3Root(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  const auto roomView = litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1});
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  {
+    const auto instance = testInstance(true, false, messages);
+    REQUIRE(instance.valid());
+    REQUIRE(initInstanceDispatcher(instance.handles()));
+    auto service = rootService(root);
+    auto events = Events{};
+    auto session = mocSession(instance, events, *service, root, false, true);
+    session->setExposed(true);
+    REQUIRE(waitFor(
+      [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+    auto sequence = std::uint64_t{0};
+    // the scene's records: the light's own (offerMocScene waits for the snapshot taken)
+    const auto anyRecord = [](const LightRecord&) { return true; };
+    const auto drawLog = [&] {
+      REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+        access.passes.setDrawLogForTesting(true);
+      }));
+    };
+
+    // the scene without the off-view caster (parked): lp3_point's packing
+    offerMocScene(
+      *session,
+      lp3Snapshot(sideLightMap(false), root, "lp3_side.map", ++sequence),
+      "lp3_side",
+      anyRecord);
+    drawLog();
+    const auto without = settledShadowFrame(*session, roomView, 2, true);
+    REQUIRE(without);
+    // the off-view caster behind the camera, inside both lights
+    offerMocScene(
+      *session,
+      lp3Snapshot(sideLightMap(true), root, "lp3_side.map", ++sequence),
+      "lp3_side",
+      anyRecord);
+    drawLog();
+    const auto with = settledShadowFrame(*session, roomView, 2, true);
+    REQUIRE(with);
+    const auto side = lightNamed(*session, "lp3_side");
+    const auto point = lightNamed(*session, "lp3_point");
+    REQUIRE(side);
+    REQUIRE(point);
+
+    auto sideShadowDraws = std::size_t{0};
+    auto sideInteractions = std::size_t{0};
+    auto sidePlain = std::size_t{0};
+    auto pointShadowDraws = std::size_t{0};
+    for (const auto& draw : with->drawLog)
+    {
+      if (draw.pass == LitDrawRecord::Pass::Shadow && draw.light == side->id)
+      {
+        ++sideShadowDraws;
+      }
+      if (draw.pass == LitDrawRecord::Pass::Shadow && draw.light == point->id)
+      {
+        ++pointShadowDraws;
+      }
+      if (draw.pass == LitDrawRecord::Pass::Interaction && draw.light == side->id)
+      {
+        ++sideInteractions;
+        sidePlain += draw.program == EngineBuiltinInteraction ? 1 : 0;
+      }
+    }
+    const auto recordOf = [](const ShadowFrame& frame, const PreviewId light) {
+      return std::ranges::find_if(
+        frame.records, [&](const ShadowLightRecord& r) { return r.light == light; });
+    };
+    std::cout << fmt::format(
+      "F3.4: lights [{}]; casting {} (records {}), casters off the view {}; lp3_side's "
+      "shadow draws {}, interactions {} ({} of the plain program); lp3_point's shadow "
+      "draws {}\n",
+      fmt::join(with->lights, " "),
+      with->stats.lightsCasting,
+      with->records.size(),
+      with->stats.castersOffView,
+      sideShadowDraws,
+      sideInteractions,
+      sidePlain,
+      pointShadowDraws);
+    CHECK(with->lights.size() == 2u);
+    CHECK(with->stats.castersOffView >= 1u);
+    CHECK(recordOf(*with, side->id) == with->records.end());
+    CHECK(sideShadowDraws == 0u);
+    CHECK(sideInteractions > 0u);
+    CHECK(sidePlain == sideInteractions);
+    CHECK(pointShadowDraws > 0u);
+    // lp3_point packed as in the scene without the off-view caster
+    const auto withPoint = recordOf(*with, point->id);
+    const auto withoutPoint = recordOf(*without, point->id);
+    REQUIRE(withPoint != with->records.end());
+    REQUIRE(withoutPoint != without->records.end());
+    CHECK(with->records.size() == without->records.size());
+    CHECK(withPoint->imageSize == withoutPoint->imageSize);
+    for (std::size_t s = 0; s < std::size_t(withPoint->sides); ++s)
+    {
+      CAPTURE(s);
+      CHECK(withPoint->placements[s].placed == withoutPoint->placements[s].placed);
+      CHECK(withPoint->placements[s].x == withoutPoint->placements[s].x);
+      CHECK(withPoint->placements[s].y == withoutPoint->placements[s].y);
+    }
+    CHECK(with->hdr.rgba == without->hdr.rgba);
+
+    teardown(*session, std::nullopt);
+    CHECK(session->lastDeviceReleaseCount() == 0u);
+    CHECK(session->nvrhiErrorCount() == 0u);
+    CHECK(session->deviceMemoryAllocations() == 0);
+    CHECK(events.count(SessionEvent::Error) == 0u);
+    session.reset();
+    service->requestStop();
+    service->join();
+  }
+  CHECK(resetDispatcher());
+  CHECK(LitSession::liveDeviceMemoryAllocationsForTesting() == 0);
+  messages.print("F3.4, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+  std::filesystem::remove_all(root);
 }
 
 } // namespace tb::lit

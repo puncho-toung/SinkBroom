@@ -25088,6 +25088,41 @@
       "note": "LP6.7 (C75): the library's statics are read-only: gInstructionSet per instruction set (a constant initialiser, read by GetImplementation), constant tables (maskLUT, SIMD_LANE_MASK, vertexOrder) and function-local SIMD constants made from intrinsics at their first call (guarded local statics, never written after). No mutable global: each MaskedOcclusionCulling object holds its own buffer, and the preview's one object is the render thread's alone (the CPU test's own on its thread). TbLitMoc's objects are not in check_static_init.py's scan (TbLitIdLib, ShaderBlob, SpirvReflect); LP6.7 lists their dynamic initialisers with dumpbin by hand."
     },
     {
+      "id": "M-MOC-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            2125,
+            2202
+          ],
+          "anchor": "R_MakeZeroOneCubeTrisForMaskedOcclusionCulling: tr.maskedZeroOneCubeVerts and the twelve triangles",
+          "sha256": "b7083a9ee301ca10cbd93b20a96d73754b053b8b79eca0ec241baf513917173a"
+        },
+        {
+          "file": "neo/renderer/RenderSystem_init.cpp",
+          "lines": [
+            2204,
+            2236
+          ],
+          "anchor": "R_MakeUnitCubeTrisForMaskedOcclusionCulling: tr.maskedUnitCubeVerts",
+          "sha256": "398aa3bd6a5963bb43912bdfa0fd805d9e010d1728ddd280a54cf4ad78d1e72f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/idtech/shim/src/EngineMaskedOcclusion.cpp",
+          "symbol": "cubeVerts, engineMocZeroOneCubeVerts, engineMocUnitCubeVerts, engineMocCubeIndexes"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineMaskedOcclusion.h",
+          "symbol": "EngineMocCubeVerts, EngineMocCubeIndexes, the three functions (RenderSystem_init.cpp:2125-2202, :2204-2236)"
+        }
+      ],
+      "note": "F1.1 (2026-11-05): the two cubes the masked occlusion tests transform, corner for corner in the engine's order (center + mx or px + my or py + mz or pz, w 1), and the zero-to-one cube's twelve triangles index for index, on which the library's winding (BACKFACE_NONE in the tests) depends; the unit cube's test takes the same triangles, as the engine's (tr_frontend_addmodels.cpp's TestTriangles of maskedZeroOneCubeIndexes)"
+    },
+    {
       "id": "M-MOC-DIFF-01",
       "kind": "difference",
       "engine": [
@@ -33835,6 +33870,133 @@
         }
       ],
       "note": "LP6.5a (C70, D177, K54, P8.13, P8.20): the engine's SSAO samples its window with pixelOffset = GetCurrentPixelOffset( taaFrameCount ), which with r_taaJitter 1 (its default) is the MSAA pattern's offsets[ tr.frameCount % 8 ] even with TAA off, so its picture moves from frame to frame; the preview's pixelOffset is (0, 0), the r_taaJitter 0 picture, and its matClipToView the unjittered inverse projection, on every frame that does not accumulate a TAA history (LP6.6, P8.20: on a frame that does, the frame's jitter and the jittered inverse projection, as the engine's taaFrameCount offset; parity runs without TAA). The parity shots (LP6.5c) run the engine with r_useSSAO 1 and r_taaJitter 0 (A55). The three compute shaders are found by name, not through the builtins table: the preview's named-program table (rows EngineNamedProgramBase + place, the FindShader defines in their order without USE_PUSH_CONSTANTS, the pass's own binding layouts after EngineBindingLayout::Num) goes through the compile thread as a builtin does (the blob by name, the permutation by the defines, D9's reflection against engineExpectedLayout); a missing blob or a mismatch disables the program with one warning naming the blob, and the pass with it (M-PASS-DIFF-05). The engine builds the layouts and pipelines in the pass's constructor and its sets with the pass; the preview's layouts and pipelines are the compile thread's (C20), its three sets the render thread's, made again on a new render-target generation and let go in teardown step 2 (not BindingSetCache's). _ao1 is not made (the new pass never reads it). The pass runs only in a session with SSAO (D177): the panel's switch is LP6.6's (C74)"
+    },
+    {
+      "id": "M-SSAO-01",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Passes/SsaoPass.cpp",
+          "lines": [
+            47,
+            54
+          ],
+          "anchor": "SsaoPass::SsaoPass: the SsaoConstants volatile constant buffer, c_MaxRenderPassConstantBufferVersions versions",
+          "sha256": "645d393dc8673b98c0445828f15212f3d87744e0dac692e224908dcd3ffe6af4"
+        },
+        {
+          "file": "neo/renderer/Passes/SsaoPass.cpp",
+          "lines": [
+            56,
+            71
+          ],
+          "anchor": "SsaoPass::SsaoPass: SSAO/DeinterleavedDepth (R32_FLOAT) and SSAO/DeinterleavedOcclusion (R8_UNORM without directionalOcclusion), ( w + 3 ) / 4 x ( h + 3 ) / 4 x 16 UAV arrays kept in ShaderResource; m_QuantizedGbufferTextureSize",
+          "sha256": "c27a3234e9ad929512c5f6300a8f354b0f2d169b5a1e4d99b0d78e973199c640"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "SsaoConstantBufferVersions; LitPasses::recordSsao (the volatile constant buffer, SsaoPass.cpp:47-54); engineSsaoConstants (invQuantizedGbufferSize from the deinterleaved size x 4)"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameResources.cpp",
+          "symbol": "deinterleavedDesc, FrameResources::makeSsaoTargets (SsaoPass.cpp:56-71)"
+        },
+        {
+          "file": "lib/TbLitLib/src/FrameResources.h",
+          "symbol": "the SSAO targets' comment (SsaoPass.cpp:56-71)"
+        }
+      ],
+      "note": "F1.1 (the final review cycle, 2026-11-05): the SSAO pass's constant buffer and deinterleaved targets, transcribed by LP6.5a (C70) and digested now. The values are the engine's (sizeof the constants' block, 16 versions, the two Texture2DArray descs with params.directionalOcclusion false); the difference is where they live: the buffer is LitPasses' (made at the first run) and the arrays are FrameResources' targets beside _ao0, made with the frame's other targets at its extent and released at teardown, not the pass object's (M-SSAO-DIFF-01)"
+    },
+    {
+      "id": "M-SSAO-02",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Passes/SsaoPass.cpp",
+          "lines": [
+            78,
+            87
+          ],
+          "anchor": "SsaoPass::SsaoPass: the deinterleave binding layout (b1, t0, u0; b0 commented out)",
+          "sha256": "25f841fb9cdadc685388ecab3627d3cafad7ba0e3afa426a6eea403493f7a02c"
+        },
+        {
+          "file": "neo/renderer/Passes/SsaoPass.cpp",
+          "lines": [
+            106,
+            116
+          ],
+          "anchor": "SsaoPass::SsaoPass: the compute binding layout (b1, t0, t1, u0)",
+          "sha256": "134e72dd05345ae5d241d5896102a88fd89ea092d6faef05051bb69e750a69c2"
+        },
+        {
+          "file": "neo/renderer/Passes/SsaoPass.cpp",
+          "lines": [
+            134,
+            145
+          ],
+          "anchor": "SsaoPass::SsaoPass: the blur binding layout (b1, t0, t1, u0, s0)",
+          "sha256": "215f05e57855ad1dfa5abfce7ab73d35bbc339c9179fa810317f9bedefd2801f"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/EngineTables.cpp",
+          "symbol": "engineBindingLayoutDescs: SsaoDeinterleave (SsaoPass.cpp:78-87), SsaoCompute (:106-116), SsaoBlur"
+        },
+        {
+          "file": "lib/TbLitLib/idtech/shim/include/lit/EngineBuiltins.h",
+          "symbol": "EngineBindingLayout::SsaoDeinterleave, SsaoCompute, SsaoBlur (SsaoPass.cpp:78-152)"
+        }
+      ],
+      "note": "F1.1 (2026-11-05): the pass's own three compute binding layouts, item for item and in order, past the engine's numbering of bindingLayouts[] (no renderparm set); the compile thread makes them and the pipelines (C20, M-SSAO-DIFF-01), the engine the pass's constructor"
+    },
+    {
+      "id": "M-SSAO-03",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Passes/SsaoPass.cpp",
+          "lines": [
+            174,
+            212
+          ],
+          "anchor": "SsaoPass::CreateBindingSet: the deinterleave, compute and blur sets",
+          "sha256": "9913fce2a99febbb9f6e5a3faedf1c1f2cf376d153487f70d9d1731ab1eefea6"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "ssaoPassDesc (the three sets' reads and writes), LitPasses::recordSsao (m_ssaoSets, made at the first run and for each new render-target generation)"
+        }
+      ],
+      "note": "F1.1 (2026-11-05): the three binding sets item for item (the constants at b1, the depth, the normals, the deinterleaved arrays, _ao0, the point-clamp sampler of the common passes); made by the render thread at the first run and again for each new render-target generation, let go in teardown step 2, never through BindingSetCache (M-SSAO-DIFF-01)"
+    },
+    {
+      "id": "M-SSAO-04",
+      "kind": "function",
+      "engine": [
+        {
+          "file": "neo/renderer/Passes/SsaoPass.cpp",
+          "lines": [
+            214,
+            293
+          ],
+          "anchor": "SsaoPass::Render: the quarter extent, the constants, the three dispatches",
+          "sha256": "ca4118bf853711e2a45021813b404b8038e45c0ae3b79b4bd7311ffa4fc7cb38"
+        }
+      ],
+      "sinkbroom": [
+        {
+          "file": "lib/TbLitLib/src/LitPasses.cpp",
+          "symbol": "engineSsaoConstants (SsaoPass.cpp:228-270), engineSsaoDispatches (:217-224, 272-293), LitPasses::recordSsao (Render, :214-270: the constants written before the state that binds them)"
+        }
+      ],
+      "note": "F1.1 (2026-11-05): Render over the viewport (0, 0, w - 1, h - 1) with the engine's extra pixel: the quarter extent, every constant (the cvars at their defaults, :33-38, M-PARITY-09), the matrices, radiusToScreen, the dispatch sizes ( q + 7 ) / 8 and ( w + 15 ) / 16 and the 16 slices; the one difference is pixelOffset and matClipToView, (0, 0) and the unjittered inverse projection on every frame that does not accumulate a TAA history (M-SSAO-DIFF-01, which keeps :240-248's digest)"
     },
     {
       "id": "M-TAA-DIFF-01",
