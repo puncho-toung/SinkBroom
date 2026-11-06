@@ -88,7 +88,8 @@ if(TB_ENABLE_LIT_PREVIEW)
       ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitDocumentObserver.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitMeasure.cpp
       ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitPreviewPanel.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitSnapshotBuilder.cpp)
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitSnapshotBuilder.cpp
+      ${CMAKE_CURRENT_SOURCE_DIR}/src/tst_LitUserData.cpp)
   target_link_libraries(TbUiLibTest PRIVATE TbLitLib)
 endif()
 

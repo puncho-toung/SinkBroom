@@ -36,6 +36,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include "../../../TbLitLib/test/src/TestTempPath.h"
 #include "TestEnvironment.h"
 #include "base/Notifier.h"
 #include "base/NotifierConnection.h"
@@ -43,6 +44,7 @@
 #include "gl/GlManager.h"
 #include "gl/PerspectiveCamera.h"
 #include "lit/EngineGeometry.h"
+#include "lit/FrameLog.h"
 #include "lit/GameDeclSource.h"
 #include "lit/LitSession.h"
 #include "lit/MaterialService.h"
@@ -81,6 +83,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <numbers>
@@ -162,7 +165,7 @@ std::filesystem::path outputFolder()
   {
     return pathFromQString(value);
   }
-  return std::filesystem::temp_directory_path() / "TbUiLibTest-lit-measure";
+  return lit::testTempPath("TbUiLibTest-lit-measure");
 }
 
 double millisecondsBetween(const Clock::time_point from, const Clock::time_point to)
@@ -1160,101 +1163,151 @@ struct LogRow
 // the frame log's columns (lit/FrameLog.cpp, frameLogHeader)
 namespace column
 {
-constexpr auto Session = std::size_t{0};
-constexpr auto Event = std::size_t{1};
-constexpr auto Frame = std::size_t{2};
-constexpr auto CpuRecordMs = std::size_t{3};
-constexpr auto AcquireMs = std::size_t{4};
-constexpr auto PresentMs = std::size_t{5};
-constexpr auto GpuFrameMs = std::size_t{6};
-constexpr auto Width = std::size_t{10};
-constexpr auto Height = std::size_t{11};
-constexpr auto VramUsedMb = std::size_t{12};
-constexpr auto AllocCount = std::size_t{14};
-constexpr auto BytesUploaded = std::size_t{15};
-constexpr auto TexturesResident = std::size_t{16};
-constexpr auto ArenaBytes = std::size_t{17};
-constexpr auto GpuPrepassMs = std::size_t{18};
-constexpr auto GpuInteractionsMs = std::size_t{19};
-constexpr auto GpuTonemapMs = std::size_t{20};
-constexpr auto GpuBlitMs = std::size_t{21};
-constexpr auto Draws = std::size_t{22};
-constexpr auto PrepassDraws = std::size_t{23};
-constexpr auto InteractionDraws = std::size_t{24};
-constexpr auto SkippedDraws = std::size_t{25};
-constexpr auto PendingPipelines = std::size_t{26};
-constexpr auto LightsVisible = std::size_t{27};
-constexpr auto LightsDrawn = std::size_t{28};
-constexpr auto LightsOverflowed = std::size_t{29};
-constexpr auto ConstantBytes = std::size_t{30};
-constexpr auto VolatileWrites = std::size_t{31};
-constexpr auto VolatileWriteBudget = std::size_t{32};
+/**
+ * F1.15 (2026-11-05): each column is looked up by its name in frameLogHeader() (a column
+ * inserted mid-row moves every index after it, and a hand-kept index would read another
+ * column silently); a name the header lacks is kept in missing() and answers no index
+ * (the measure checks missing() empty), and Count is the header's own field count
+ */
+inline std::vector<std::string>& missing()
+{
+  static auto names = std::vector<std::string>{};
+  return names;
+}
+
+inline std::vector<std::string_view> headerNames()
+{
+  auto names = std::vector<std::string_view>{};
+  auto header = lit::frameLogHeader();
+  while (!header.empty() && (header.back() == '\n' || header.back() == '\r'))
+  {
+    header.remove_suffix(1);
+  }
+  for (auto at = std::size_t{0};;)
+  {
+    const auto comma = header.find(',', at);
+    names.push_back(
+      header.substr(at, comma == std::string_view::npos ? comma : comma - at));
+    if (comma == std::string_view::npos)
+    {
+      break;
+    }
+    at = comma + 1;
+  }
+  return names;
+}
+
+inline std::size_t of(const std::string_view name)
+{
+  const auto names = headerNames();
+  if (const auto it = std::ranges::find(names, name); it != names.end())
+  {
+    return std::size_t(it - names.begin());
+  }
+  missing().emplace_back(name);
+  return std::numeric_limits<std::size_t>::max();
+}
+
+inline std::size_t count()
+{
+  return headerNames().size();
+}
+
+inline const auto Session = of("session");
+inline const auto Event = of("event");
+inline const auto Frame = of("frame");
+inline const auto CpuRecordMs = of("cpu_record_ms");
+inline const auto AcquireMs = of("acquire_ms");
+inline const auto PresentMs = of("present_ms");
+inline const auto GpuFrameMs = of("gpu_frame_ms");
+inline const auto Width = of("width");
+inline const auto Height = of("height");
+inline const auto VramUsedMb = of("vram_used_mb");
+inline const auto AllocCount = of("alloc_count");
+inline const auto BytesUploaded = of("bytes_uploaded");
+inline const auto TexturesResident = of("textures_resident");
+inline const auto ArenaBytes = of("arena_bytes");
+inline const auto GpuPrepassMs = of("gpu_prepass_ms");
+inline const auto GpuInteractionsMs = of("gpu_interactions_ms");
+inline const auto GpuTonemapMs = of("gpu_tonemap_ms");
+inline const auto GpuBlitMs = of("gpu_blit_ms");
+inline const auto Draws = of("draws");
+inline const auto PrepassDraws = of("prepass_draws");
+inline const auto InteractionDraws = of("interaction_draws");
+inline const auto SkippedDraws = of("skipped_draws");
+inline const auto PendingPipelines = of("pending_pipelines");
+inline const auto LightsVisible = of("lights_visible");
+inline const auto LightsDrawn = of("lights_drawn");
+inline const auto LightsOverflowed = of("lights_overflowed");
+inline const auto ConstantBytes = of("constant_bytes");
+inline const auto VolatileWrites = of("volatile_writes");
+inline const auto VolatileWriteBudget = of("volatile_write_budget");
 // LP4.1 (C16, P4.27): the view's portal flow
-constexpr auto ViewArea = std::size_t{37};
-constexpr auto AreasFlowed = std::size_t{38};
-constexpr auto LightsInView = std::size_t{39};
-constexpr auto PortalChains = std::size_t{40};
-constexpr auto FlowMs = std::size_t{41};
+inline const auto ViewArea = of("view_area");
+inline const auto AreasFlowed = of("areas_flowed");
+inline const auto LightsInView = of("lights_in_view");
+inline const auto PortalChains = of("portal_chains");
+inline const auto FlowMs = of("flow_ms");
 // LP4.2a (C34, P4.27): the ambient pass's
-constexpr auto AmbientDraws = std::size_t{42};
-constexpr auto GpuAmbientMs = std::size_t{43};
+inline const auto AmbientDraws = of("ambient_draws");
+inline const auto GpuAmbientMs = of("gpu_ambient_ms");
 // LP4.3 (D86, D92): set 9's writes and the surfaces on the light-grid path
-constexpr auto AmbientWrites = std::size_t{44};
-constexpr auto GridSurfaces = std::size_t{45};
+inline const auto AmbientWrites = of("ambient_writes");
+inline const auto GridSurfaces = of("grid_surfaces");
 // LP5.3 (D92's second measurement): the interaction phases' math and ambient lights,
 // the stage pass's draws and GPU time, pass 9's fog and blend draws and GPU time
-constexpr auto MathLights = std::size_t{49};
-constexpr auto AmbientLights = std::size_t{50};
-constexpr auto StageDraws = std::size_t{51};
-constexpr auto StageSkipped = std::size_t{52};
-constexpr auto GpuStagesMs = std::size_t{53};
-constexpr auto FogDraws = std::size_t{54};
-constexpr auto BlendDraws = std::size_t{55};
-constexpr auto GpuFogMs = std::size_t{56};
+inline const auto MathLights = of("math_lights");
+inline const auto AmbientLights = of("ambient_lights");
+inline const auto StageDraws = of("stage_draws");
+inline const auto StageSkipped = of("stage_skipped");
+inline const auto GpuStagesMs = of("gpu_stages_ms");
+inline const auto FogDraws = of("fog_draws");
+inline const auto BlendDraws = of("blend_draws");
+inline const auto GpuFogMs = of("gpu_fog_ms");
 // LP7.2 (C52, C56, P7.14): the models' counts (LP7.0's columns), the dress decals' and
 // the adoption's triangles
-constexpr auto ModelEntities = std::size_t{58};
-constexpr auto ModelInstances = std::size_t{59};
-constexpr auto ModelDraws = std::size_t{60};
-constexpr auto ModelsPending = std::size_t{61};
-constexpr auto ModelsSkinned = std::size_t{62};
-constexpr auto DressSurfaces = std::size_t{63};
-constexpr auto AdoptedTris = std::size_t{66};
+inline const auto ModelEntities = of("model_entities");
+inline const auto ModelInstances = of("model_instances");
+inline const auto ModelDraws = of("model_draws");
+inline const auto ModelsPending = of("models_pending");
+inline const auto ModelsSkinned = of("models_skinned");
+inline const auto DressSurfaces = of("dress_surfaces");
+inline const auto AdoptedTris = of("adopted_tris");
 // LP3.1 (D157): pass 6's draws and CPU record time; LP3.0 (C57): the caster gathering's
 // time (inside lists_ms)
-constexpr auto ShadowDraws = std::size_t{70};
+inline const auto ShadowDraws = of("shadow_draws");
 // LP6.2 (D169): pass 6's tiles drawn and provisional
-constexpr auto TilesDrawn = std::size_t{71};
-constexpr auto TilesProvisional = std::size_t{75};
-constexpr auto ShadowCpuMs = std::size_t{82};
+inline const auto TilesDrawn = of("tiles_drawn");
+inline const auto TilesProvisional = of("tiles_provisional");
+inline const auto ShadowCpuMs = of("shadow_cpu_ms");
 // LP6.2 (C66): the caster pairs pending (light triangles not known yet)
-constexpr auto CasterPairsPending = std::size_t{90};
-constexpr auto CasterMs = std::size_t{92};
+inline const auto CasterPairsPending = of("caster_pairs_pending");
+inline const auto CasterMs = of("caster_ms");
 // LP6.0 (C65): the CPU record's split after perforated_draws
-constexpr auto ListsMs = std::size_t{95};
-constexpr auto PrepassCpuMs = std::size_t{96};
-constexpr auto AmbientCpuMs = std::size_t{97};
-constexpr auto InteractionCpuMs = std::size_t{98};
-constexpr auto StageCpuMs = std::size_t{99};
-constexpr auto FogCpuMs = std::size_t{100};
-constexpr auto TonemapCpuMs = std::size_t{101};
-constexpr auto UploadMs = std::size_t{102};
-constexpr auto SubmitMs = std::size_t{103};
-constexpr auto RecordOtherMs = std::size_t{104};
+inline const auto ListsMs = of("lists_ms");
+inline const auto PrepassCpuMs = of("prepass_cpu_ms");
+inline const auto AmbientCpuMs = of("ambient_cpu_ms");
+inline const auto InteractionCpuMs = of("interaction_cpu_ms");
+inline const auto StageCpuMs = of("stage_cpu_ms");
+inline const auto FogCpuMs = of("fog_cpu_ms");
+inline const auto TonemapCpuMs = of("tonemap_cpu_ms");
+inline const auto UploadMs = of("upload_ms");
+inline const auto SubmitMs = of("submit_ms");
+inline const auto RecordOtherMs = of("record_other_ms");
 // LP6.0 (C65): the reserved GPU columns LP6.5a fills (passes 3 and 4) and LP6.6 (pass 11)
-constexpr auto GpuGbufferMs = std::size_t{105};
-constexpr auto GpuSsaoMs = std::size_t{106};
-constexpr auto GpuTaaMs = std::size_t{107};
+inline const auto GpuGbufferMs = of("gpu_gbuffer_ms");
+inline const auto GpuSsaoMs = of("gpu_ssao_ms");
+inline const auto GpuTaaMs = of("gpu_taa_ms");
 // LP6.1 (C64): the draw records held and resolved, after LP6.0's reserved GPU columns
-constexpr auto RecordsHeld = std::size_t{108};
-constexpr auto RecordResolves = std::size_t{109};
+inline const auto RecordsHeld = of("records_held");
+inline const auto RecordResolves = of("record_resolves");
 // LP6.2 (C65): lists_ms's parts after them (flow_ms and caster_ms are the others)
-constexpr auto SurfacesMs = std::size_t{110};
-constexpr auto LightsMs = std::size_t{111};
-constexpr auto LinksMs = std::size_t{112};
+inline const auto SurfacesMs = of("surfaces_ms");
+inline const auto LightsMs = of("lights_ms");
+inline const auto LinksMs = of("links_ms");
 // LP6.2 (C66, D169): the caster sets made and the tiles drawn again for an image
-constexpr auto CasterSetsBuilt = std::size_t{113};
-constexpr auto TilesImageRedrawn = std::size_t{114};
+inline const auto CasterSetsBuilt = of("caster_sets_built");
+inline const auto TilesImageRedrawn = of("tiles_image_redrawn");
 // LPF.1 (C44, P5.21): and the live feed's three (feed_applied, feed_ms, override_bytes);
 // LP5.1 (C45): and the interaction phases' two (math_lights, ambient_lights); LP5.2a
 // (C46): and the stage pass's three (stage_draws, stage_skipped, gpu_stages_ms); LP5.3
@@ -1273,19 +1326,21 @@ constexpr auto TilesImageRedrawn = std::size_t{114};
 // textures_dedicated), the 118th; LP6.4b (C68 (b)-(d)): and textures_evicted,
 // textures_floored, feeds_in_place and arena_moved_bytes, the 122nd; LP6.6 (C73): and
 // taa_history, the 123rd; LP6.7 (C75): and lights_moc_culled, surfaces_moc_culled and
-// moc_ms, the 126th the last
-constexpr auto TextureHeaps = std::size_t{115};
-constexpr auto HeapBytes = std::size_t{116};
-constexpr auto TexturesDedicated = std::size_t{117};
-constexpr auto TexturesEvicted = std::size_t{118};
-constexpr auto TexturesFloored = std::size_t{119};
-constexpr auto FeedsInPlace = std::size_t{120};
-constexpr auto ArenaMovedBytes = std::size_t{121};
-constexpr auto TaaHistory = std::size_t{122};
-constexpr auto LightsMocCulled = std::size_t{123};
-constexpr auto SurfacesMocCulled = std::size_t{124};
-constexpr auto MocMs = std::size_t{125};
-constexpr auto Count = std::size_t{126};
+// moc_ms, the 126th the last; F2.11 (2026-11-05): moc_ms split into moc_fill_ms and
+// moc_test_ms, the 127th the last
+inline const auto TextureHeaps = of("texture_heaps");
+inline const auto HeapBytes = of("heap_bytes");
+inline const auto TexturesDedicated = of("textures_dedicated");
+inline const auto TexturesEvicted = of("textures_evicted");
+inline const auto TexturesFloored = of("textures_floored");
+inline const auto FeedsInPlace = of("feeds_in_place");
+inline const auto ArenaMovedBytes = of("arena_moved_bytes");
+inline const auto TaaHistory = of("taa_history");
+inline const auto LightsMocCulled = of("lights_moc_culled");
+inline const auto SurfacesMocCulled = of("surfaces_moc_culled");
+inline const auto MocFillMs = of("moc_fill_ms");
+inline const auto MocTestMs = of("moc_test_ms");
+inline const auto Count = count();
 } // namespace column
 
 /**
@@ -1299,7 +1354,7 @@ struct SplitColumn
   std::size_t index = 0;
 };
 
-constexpr auto SplitColumns = std::array{
+const auto SplitColumns = std::array{
   SplitColumn{"lists_ms", column::ListsMs},
   SplitColumn{"prepass_cpu_ms", column::PrepassCpuMs},
   SplitColumn{"ambient_cpu_ms", column::AmbientCpuMs},
@@ -1317,7 +1372,7 @@ constexpr auto SplitColumns = std::array{
 // flow, the frontend's surfaces and lights, the caster gathering and what follows the
 // frontend (the old lists' release, the caches' endBuild, the stage order, the links);
 // the rest of lists_ms is the flow's inputs and rebuildLists' own key and set-up
-constexpr auto ListsParts = std::array{
+const auto ListsParts = std::array{
   SplitColumn{"flow_ms", column::FlowMs},
   SplitColumn{"surfaces_ms", column::SurfacesMs},
   SplitColumn{"lights_ms", column::LightsMs},
@@ -1960,8 +2015,7 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
   const auto sizes = editorImageSizes(gamePath, materials);
   auto conversion = ConversionStats{};
   const auto converted = convertToValve220(entities, sizes, conversion);
-  const auto mapFolder =
-    std::filesystem::temp_directory_path() / "TbUiLibTest-lit-measure-map";
+  const auto mapFolder = lit::testTempPath("TbUiLibTest-lit-measure-map");
   std::filesystem::create_directories(mapFolder);
   const auto removeMapFolder =
     kdl::invoke_later{[&] { std::filesystem::remove_all(mapFolder); }};
@@ -2870,8 +2924,9 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     summary += fmt::format(
       "| Camera moving: CPU record at its p95, split (each column's mean over the {} "
       "frames at or above {:.2f} ms) | cpu_record_ms {:.2f} ms: {}; draws {:.0f} "
-      "(prepass {:.0f}, ambient {:.0f}, interactions {:.0f}, stages {:.0f}), "
-      "shadow draws {:.0f} | — | — |\n",
+      "(prepass {:.0f}, ambient {:.0f}, interactions {:.0f}, stages {:.0f}, fog {:.0f}, "
+      "blend {:.0f}; the rest {:.0f}: pass 3 and the tonemap passes), shadow draws "
+      "{:.0f} (not among the draws) | — | — |\n",
       tail.size(),
       cpu.p95,
       mean(column::CpuRecordMs),
@@ -2881,6 +2936,12 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       mean(column::AmbientDraws),
       mean(column::InteractionDraws),
       mean(column::StageDraws),
+      mean(column::FogDraws),
+      mean(column::BlendDraws),
+      // F1.16 (2026-11-05): the eight terms' remainder (FrameLog.h's draws)
+      mean(column::Draws) - mean(column::PrepassDraws) - mean(column::AmbientDraws)
+        - mean(column::InteractionDraws) - mean(column::StageDraws)
+        - mean(column::FogDraws) - mean(column::BlendDraws),
       mean(column::ShadowDraws));
   }
   // the fit per pass: each pass's record time against its own draws (the whole frame's
@@ -3228,16 +3289,26 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
   // draws 71 / 137); the GPU p95; the settled start view's draws; at each Start's first
   // lit frame the fill's moc_ms and its counts
   {
+    // F2.11 (2026-11-05): the fill (moc_fill_ms, the engine's pc.mocMicroSec) and the
+    // light and surface tests (moc_test_ms) apart, D183's 2 ms against their sum until
+    // the plan says otherwise
     auto mocBuilds = std::vector<double>{};
+    auto fillBuilds = std::vector<double>{};
+    auto testBuilds = std::vector<double>{};
     for (auto i = orbitBegin; i <= orbitEnd; ++i)
     {
-      const auto ms = firstRows[i].number(column::MocMs).value_or(0.0);
-      if (ms > 0.0)
+      const auto fill = firstRows[i].number(column::MocFillMs).value_or(0.0);
+      const auto test = firstRows[i].number(column::MocTestMs).value_or(0.0);
+      if (fill + test > 0.0)
       {
-        mocBuilds.push_back(ms);
+        mocBuilds.push_back(fill + test);
+        fillBuilds.push_back(fill);
+        testBuilds.push_back(test);
       }
     }
     const auto mocMs = distributionOf(mocBuilds);
+    const auto fillMs = distributionOf(fillBuilds);
+    const auto testMs = distributionOf(testBuilds);
     const auto lightsCulled = orbit(column::LightsMocCulled);
     const auto surfacesCulled = orbit(column::SurfacesMocCulled);
     auto tail = std::vector<std::size_t>{};
@@ -3268,7 +3339,8 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       const auto& st = record->status;
       return fmt::format(
         "frame {}: lights {} of {} tested ({:.0f} %; {} visible), surfaces {} of {} "
-        "({:.1f} %), moc_ms of its last build {:.3f}",
+        "({:.1f} %), moc_fill_ms {:.3f} and moc_test_ms {:.3f} of its last build; the "
+        "occluders' index copies {} B (moc_index_copy_bytes)",
         measure.settledFrame,
         st.lightsMocCulled,
         st.lightsMocTested,
@@ -3277,7 +3349,9 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
         st.surfacesMocCulled,
         st.surfacesMocTested,
         share(double(st.surfacesMocCulled), double(st.surfacesMocTested)),
-        st.mocMs);
+        st.mocFillMs,
+        st.mocTestMs,
+        st.mocIndexCopyBytes);
     };
     const auto firstLitText = [&](const StartMeasure& measure) {
       const auto rows = sessionFrames(log, measure.generation);
@@ -3287,9 +3361,11 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       }
       const auto& row = rows[measure.firstLitFrame - 1];
       return fmt::format(
-        "frame {}: moc_ms {:.3f}, lights {} and surfaces {} culled",
+        "frame {}: moc_fill_ms {:.3f}, moc_test_ms {:.3f}, lights {} and surfaces {} "
+        "culled",
         measure.firstLitFrame,
-        row.number(column::MocMs).value_or(0.0),
+        row.number(column::MocFillMs).value_or(0.0),
+        row.number(column::MocTestMs).value_or(0.0),
         row.number(column::LightsMocCulled).value_or(0.0),
         row.number(column::SurfacesMocCulled).value_or(0.0));
     };
@@ -3305,14 +3381,17 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       "{} / {} / {}; over the orbit's {} frames: lights_moc_culled median {:.0f}, p95 "
       "{:.0f}, max {:.0f} ({} of the {} lights tested, {:.1f} %; the lights visible "
       "{}), surfaces_moc_culled median {:.0f}, p95 {:.0f}, max {:.0f} ({} of {} tested, "
-      "{:.1f} %); moc_ms over the orbit's {} list builds median {:.3f}, p95 {:.3f}, max "
-      "{:.3f} ms (≤ 2 ms: {}); the moving CPU record p95 {:.2f} ms (≤ 10 ms: {}; "
+      "{:.1f} %); moc_fill_ms + moc_test_ms over the orbit's {} list builds median "
+      "{:.3f}, p95 {:.3f}, max {:.3f} ms (≤ 2 ms: {}): moc_fill_ms median {:.3f}, p95 "
+      "{:.3f}, moc_test_ms median {:.3f}, p95 {:.3f}; the moving CPU record p95 {:.2f} "
+      "ms "
+      "(≤ 10 ms: {}; "
       "LP6.6 10.96 / 10.93 ms), at the {} frames at or above it draws {:.0f}, tiles "
       "drawn "
       "{:.1f}, lights drawn {:.1f}, shadow draws {:.0f} (LP6.6: draws 3681 / 3571, tiles "
       "6.4 / 11.2, lights drawn 32.9 / 31.0, shadow draws 71 / 137), lists_ms {:.2f}; "
       "the GPU p95 {:.2f} ms; the settled start view's draws {:.0f}; the first lit "
-      "frames {} / {} / {} | moc_ms p95 ≤ 2 ms (D183) | {} |\n",
+      "frames {} / {} / {} | moc_fill_ms + moc_test_ms p95 ≤ 2 ms (D183) | {} |\n",
       orbitMoc.implementation.empty() ? std::string{"(none)"} : orbitMoc.implementation,
       settledText(first),
       settledText(second),
@@ -3336,6 +3415,10 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       mocMs.p95,
       mocMs.max,
       pass(mocMs.p95 <= 2.0),
+      fillMs.median,
+      fillMs.p95,
+      testMs.median,
+      testMs.p95,
       cpu.p95,
       pass(cpu.p95 <= 10.0),
       tail.size(),
@@ -3353,6 +3436,8 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
     // the measure's sessions run with the culling on (the host's default)
     CHECK_FALSE(orbitMoc.implementation.empty());
     CHECK(mocMs.count > 0u);
+    // F1.15: every column the measure reads is in the header
+    CHECK(column::missing().empty());
   }
   summary += fmt::format(
     "| Device memory allocations | peak {} / {} / {} (first, second, third Start); "

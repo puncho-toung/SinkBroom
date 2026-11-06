@@ -183,6 +183,13 @@ lit::SessionOptions sessionOptions(
   return options;
 }
 
+// F1.17: a test run's process-wide default for the container index's folder (main thread)
+auto& defaultIndexFolderForTesting()
+{
+  static auto folder = std::optional<std::filesystem::path>{};
+  return folder;
+}
+
 } // namespace
 
 LitPreviewPanel::LitPreviewPanel(const SidebarContext& context, QWidget* parent)
@@ -316,9 +323,12 @@ void LitPreviewPanel::start()
   // user-data folder (§3.12) unless a test gave a folder of its own
   if (!m_containerIndex)
   {
+    // F1.17: a test run's process-wide default before the user-data folder
     m_containerIndex = std::make_shared<lit::GameContainerIndex>(
       m_containerIndexFolder ? *m_containerIndexFolder
-                             : SystemPaths::userDataDirectory() / "lit-preview");
+      : defaultIndexFolderForTesting()
+        ? *defaultIndexFolderForTesting()
+        : SystemPaths::userDataDirectory() / "lit-preview");
   }
 
   // C1: the material service reads the game the document's map belongs to; the host's
@@ -383,6 +393,12 @@ lit::MaterialService* LitPreviewPanel::materialsForTesting() const
 std::uint64_t LitPreviewPanel::materialsVersionForTesting() const
 {
   return m_materialsVersion;
+}
+
+void LitPreviewPanel::setDefaultIndexFolderForTesting(
+  std::optional<std::filesystem::path> folder)
+{
+  defaultIndexFolderForTesting() = std::move(folder);
 }
 
 void LitPreviewPanel::setContainerIndexFolderForTesting(std::filesystem::path folder)

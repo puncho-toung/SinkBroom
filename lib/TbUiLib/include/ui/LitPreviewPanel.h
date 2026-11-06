@@ -220,6 +220,14 @@ public:
    * empty. Not while a session runs
    */
   void setContainerIndexFolderForTesting(std::filesystem::path folder);
+  /**
+   * F1.17 (2026-11-05, DQ-18 (i)): the container index's folder of every panel without
+   * one of its own (setContainerIndexFolderForTesting), process-wide, instead of the
+   * user-data folder's: a test run's listener sets it before any test (nullopt: the
+   * user-data folder again). Tests only
+   */
+  static void setDefaultIndexFolderForTesting(
+    std::optional<std::filesystem::path> folder);
   // LP6.3 (P8.18): the index's memory copy dropped, as at a new launch: the next Start
   // reads the persisted file
   void dropContainerIndexMemoryForTesting();
