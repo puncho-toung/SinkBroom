@@ -19,9 +19,10 @@
 
 #pragma once
 
+#include "kd/contracts.h"
+
 #include <algorithm>
 #include <array>
-#include <cassert>
 #include <cstddef>
 #include <initializer_list>
 
@@ -32,7 +33,11 @@ namespace tb::lit
  * LP6.1 (C64): at most N items held inline with their count, for the keys and bindings
  * the draws build (BindingSetKey's slots and resources, ImageSlots::Binding's versions):
  * no heap allocation. Equality and iteration see the used prefix only. N is the largest
- * use, so an item past it is a programming error (asserted; dropped in Release). Pure.
+ * use, so an item past it is a programming error: F1.18 (2026-11-05) a contract in Debug
+ * (contract_assert: the capacities are program facts, not driver or file conditions);
+ * in Release the item is dropped and the vector marked overflowed, which equality reads
+ * and BindingSetCache refuses as a key (two keys that lost different items would
+ * otherwise compare equal and share a set bound to other textures). Pure.
  */
 template <typename T, std::size_t N>
 class InlineVector
@@ -42,6 +47,7 @@ class InlineVector
 private:
   std::array<T, N> m_items = {};
   std::size_t m_size = 0;
+  bool m_overflowed = false;
 
 public:
   using value_type = T;
@@ -75,10 +81,16 @@ public:
 
   constexpr void push_back(const T& item)
   {
-    assert(m_size < N);
+#if !defined(NDEBUG)
+    contract_assert(m_size < N);
+#endif
     if (m_size < N)
     {
       m_items[m_size++] = item;
+    }
+    else
+    {
+      m_overflowed = true;
     }
   }
 
@@ -91,9 +103,15 @@ public:
     }
   }
 
-  constexpr void clear() { m_size = 0; }
+  constexpr void clear()
+  {
+    m_size = 0;
+    m_overflowed = false;
+  }
 
   constexpr std::size_t size() const { return m_size; }
+  // F1.18: an item was dropped past the capacity (Release; Debug fails the contract)
+  constexpr bool overflowed() const { return m_overflowed; }
   constexpr bool empty() const { return m_size == 0; }
 
   constexpr T* begin() { return m_items.data(); }
@@ -108,7 +126,7 @@ public:
 
   friend constexpr bool operator==(const InlineVector& lhs, const InlineVector& rhs)
   {
-    return std::ranges::equal(lhs, rhs);
+    return lhs.m_overflowed == rhs.m_overflowed && std::ranges::equal(lhs, rhs);
   }
 };
 

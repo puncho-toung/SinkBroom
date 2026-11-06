@@ -20,6 +20,7 @@
 #include "BindingSetCache.h"
 
 #include <algorithm>
+#include <cassert>
 #include <functional>
 #include <utility>
 
@@ -84,6 +85,13 @@ BindingSetCache::Entry* BindingSetCache::entryOf(
   const std::uint64_t frame,
   const std::function<nvrhi::BindingSetHandle()>& make)
 {
+  // F1.18 (2026-11-05): a key that lost an item past its capacity (Release; Debug fails
+  // the contract) is never cached nor made: its set would bind other textures
+  if (key.slots.overflowed() || key.resources.overflowed())
+  {
+    ++m_overflowedKeys;
+    return nullptr;
+  }
   if (const auto it = m_sets.find(key); it != m_sets.end())
   {
     it->second.lastUsed = frame;
@@ -214,6 +222,11 @@ std::uint64_t BindingSetCache::heldErased() const
   return m_heldErased;
 }
 
+std::uint64_t BindingSetCache::overflowedKeys() const
+{
+  return m_overflowedKeys;
+}
+
 void BindingSetCache::clear()
 {
   m_bySlot.clear();
@@ -227,10 +240,14 @@ void BindingSetCache::erase(
   {
     return;
   }
-  // LP6.1 (C64): a record still holding it would draw an erased set
+  // LP6.1 (C64): a record still holding it would draw an erased set; F2.7 (2026-11-05):
+  // its next stamp or release would write the freed entry, so a held entry is never
+  // erased: asserted in Debug, kept in Release (the fault counted)
   if (it->second.holds > 0)
   {
+    assert(it->second.holds == 0 && "a binding set a draw record holds is erased");
     ++m_heldErased;
+    return;
   }
   for (const auto& slot : it->first.slots)
   {

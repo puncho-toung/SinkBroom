@@ -104,6 +104,8 @@ private:
     m_bySlot;
   std::uint64_t m_made = 0;
   std::uint64_t m_heldErased = 0;
+  // F1.18: the keys refused for an overflowed vector
+  std::uint64_t m_overflowedKeys = 0;
 
 public:
   explicit BindingSetCache(std::size_t capacity);
@@ -150,6 +152,8 @@ public:
   std::uint64_t made() const;
   // LP6.1 (C64): the held entries erased so far (a record outliving its set: 0)
   std::uint64_t heldErased() const;
+  // F1.18 (2026-11-05): the keys refused because a vector of theirs overflowed (0)
+  std::uint64_t overflowedKeys() const;
   // teardown step 2
   void clear();
 

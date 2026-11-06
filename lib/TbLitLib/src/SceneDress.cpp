@@ -73,9 +73,12 @@ std::string lowerCase(std::string_view text)
 }
 
 /**
- * K42 (mirror.json M-ENT-01's dmap anchor, usurface.cpp:779-782): dmap inlines a
- * func_static or misc_model with inline 1 on its raw map keys, or every one with
- * worldspawn's inlineAllStatics
+ * K42 (mirror.json M-ENT-01's dmap anchor, usurface.cpp:772-830): dmap inlines a
+ * func_static or misc_model with a model key, with inline 1 on its raw map keys, or every
+ * one with worldspawn's inlineAllStatics; F3.8 (2026-11-05): under inlineAllStatics only
+ * a model whose extension (idStr::ExtractFileExtension) is glb, gltf, lwo, ase, ma or obj
+ * and whose entity has no gui, gui2 or gui3 key ("don't break interactive GUIs"),
+ * whether or not it also has inline 1
  */
 bool isInlined(const SceneEntity& entity, const bool inlineAll)
 {
@@ -85,7 +88,44 @@ bool isInlined(const SceneEntity& entity, const bool inlineAll)
   {
     return false;
   }
-  return inlineAll || spawnBool(entity.keys, "inline", "0");
+  if (!spawnBool(entity.keys, "inline", "0") && !inlineAll)
+  {
+    return false;
+  }
+  const auto modelName = spawnString(entity.keys, "model");
+  if (modelName.empty())
+  {
+    return false;
+  }
+  if (inlineAll)
+  {
+    // the text after the last '.', unless a path separator follows it
+    const auto dot = modelName.find_last_of('.');
+    const auto extension =
+      dot == std::string_view::npos
+          || modelName.find_first_of("/\\", dot) != std::string_view::npos
+        ? std::string_view{}
+        : modelName.substr(dot + 1);
+    if (extension.empty())
+    {
+      return false;
+    }
+    if (
+      !equalsNoCase(extension, "glb") && !equalsNoCase(extension, "gltf")
+      && !equalsNoCase(extension, "lwo") && !equalsNoCase(extension, "ase")
+      && !equalsNoCase(extension, "ma") && !equalsNoCase(extension, "obj"))
+    {
+      return false; // not a supported model format
+    }
+    // don't break interactive GUIs
+    if (
+      findKey(entity.keys, "gui") || findKey(entity.keys, "gui2")
+      || findKey(entity.keys, "gui3"))
+    {
+      return false;
+    }
+  }
+  return true;
 }
 
 // two boxes touch, a grown by growth on each side

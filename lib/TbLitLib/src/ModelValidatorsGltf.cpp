@@ -1462,6 +1462,24 @@ private:
       {
         return problem;
       }
+      // F2.15 (2026-11-05): the containers whose vectors the parser reads by count
+      // (gltfItem_vec4 / vec3 / vec2, gltfParser.cpp:700, :716, :732, M-MODEL-FATAL-42 to
+      // -44) are refused unless they are objects: the parser reads another value's items
+      // as their fields, so a ["baseColorFactor",[1]] reaches the count's FatalError
+      if (const auto* pbr = material.member("pbrMetallicRoughness");
+          pbr && pbr->type != Json::Type::Object)
+      {
+        return fmt::format(
+          "{}: its pbrMetallicRoughness is not an object (gltfParser.cpp:700's count)",
+          what);
+      }
+      if (const auto* extensions = material.member("extensions");
+          extensions && extensions->type != Json::Type::Object)
+      {
+        return fmt::format(
+          "{}: its extensions are not an object (gltfParser.cpp:700, :716's counts)",
+          what);
+      }
       if (const auto* pbr = material.member("pbrMetallicRoughness");
           pbr && pbr->type == Json::Type::Object)
       {
@@ -1513,9 +1531,17 @@ private:
         continue;
       }
       const auto* extensions = value.member("extensions");
-      if (!extensions || extensions->type != Json::Type::Object)
+      if (!extensions)
       {
         continue;
+      }
+      // F2.15 (2026-11-05): read by the parser as an object (gltfParser.cpp:732's count)
+      if (extensions->type != Json::Type::Object)
+      {
+        return fmt::format(
+          "{} {}: its extensions are not an object (gltfParser.cpp:732's count)",
+          what,
+          key);
       }
       if (const auto* transform = extensions->member("KHR_texture_transform");
           transform && transform->type == Json::Type::Object)

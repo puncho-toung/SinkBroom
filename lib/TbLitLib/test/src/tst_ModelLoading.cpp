@@ -2673,6 +2673,35 @@ TEST_CASE("ModelLoading: the glTF validator (LP7.5, D136, P7.2)")
         quad.with(R"("buffers":)", R"("skins":[{"joints":[0],"name":""}],"buffers":)")),
       ContainsSubstring("GetNode's assert"));
   }
+
+  SECTION("F2.15: a pbrMetallicRoughness or an extensions that is not an object")
+  {
+    // M-MODEL-FATAL-42/43/44: the parser reads another value's items as the object's
+    // fields, so a one-number baseColorFactor reaches gltfItem_vec4's count FatalError;
+    // refused at the validator (the default cube, the notice) before any count is read
+    const auto quad = handQuadGlb();
+    const auto at = std::string{R"("materials":[{"name":"textures/lp7/model")"};
+    CHECK_THAT(
+      glbProblem(
+        quad.with(at, at + R"(,"pbrMetallicRoughness":["baseColorFactor",[1]])")),
+      ContainsSubstring("its pbrMetallicRoughness is not an object"));
+    CHECK_THAT(
+      glbProblem(quad.with(
+        at, at + R"(,"extensions":["KHR_materials_pbrSpecularGlossiness",{}])")),
+      ContainsSubstring("its extensions are not an object"));
+    CHECK_THAT(
+      glbProblem(quad.with(
+        at,
+        at
+          + R"(,"pbrMetallicRoughness":{"baseColorTexture":{"index":0,)"
+            R"("extensions":["KHR_texture_transform",{"offset":[1]}]}})")),
+      ContainsSubstring("baseColorTexture: its extensions are not an object"));
+    // the objects themselves pass
+    CHECK(
+      glbProblem(
+        quad.with(at, at + R"(,"pbrMetallicRoughness":{"baseColorFactor":[1,1,1,1]})"))
+        .empty());
+  }
 }
 
 

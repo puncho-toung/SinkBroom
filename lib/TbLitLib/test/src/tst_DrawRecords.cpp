@@ -19,9 +19,16 @@
 
 #include "BindingSetCache.h"
 #include "DrawRecords.h"
+#include "InlineVector.h"
+
+#include "kd/contracts.h"
 
 #include <array>
+#include <cstdlib>
 #include <memory>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -318,14 +325,75 @@ TEST_CASE("DrawRecordTable (LP6.1, C64, P8.1)")
     CHECK(table.records() == 0u);
     CHECK(narrow.slotChanged(9) == 1u);
     CHECK(narrow.heldErased() == 0u);
-    // the other order is counted (a set erased under a holder)
+#if defined(NDEBUG)
+    // the other order is counted (a set erased under a holder); F2.7 (2026-11-05): and
+    // the held entry is kept (its holder's next stamp or release writes it), the fault
+    // counted; Debug asserts there instead
     auto other = BindingSetCache{4};
     auto key = BindingSetKey{};
     key.slots = {SlotVersion{10, 1}};
-    REQUIRE(other.hold(key, 1, [] { return fakeSet(); }));
+    auto* held = other.hold(key, 1, [] { return fakeSet(); });
+    REQUIRE(held);
     CHECK(other.slotChanged(10) == 1u);
     CHECK(other.heldErased() == 1u);
+    CHECK(other.size() == 1u);
+    CHECK(other.setsOf(10) == 1u);
+    auto madeAgain = false;
+    CHECK(other.hold(key, 2, [&] {
+      madeAgain = true;
+      return fakeSet();
+    }) == held);
+    CHECK_FALSE(madeAgain);
+    CHECK(held->holds == 2u);
+    other.release(*held);
+    other.release(*held);
+    CHECK(other.slotChanged(10) == 1u);
+    CHECK(other.size() == 0u);
+    CHECK(other.heldErased() == 1u);
+#endif
   }
+}
+
+// F1.18 (2026-11-05): an item past an InlineVector's capacity breaks its contract in
+// Debug; in Release it is dropped, the vector marked overflowed (equality reads it), and
+// the binding-set cache neither makes nor caches a set for a key that lost an item
+TEST_CASE("InlineVector over its capacity (F1.18)")
+{
+  auto items = InlineVector<int, 2>{1, 2};
+  CHECK_FALSE(items.overflowed());
+#if !defined(NDEBUG)
+  kd::set_contract_violation_handler(
+    [](std::string_view, int, std::string_view type, std::string_view condition) {
+      throw std::logic_error{std::string{type} + " " + std::string{condition}};
+    });
+  CHECK_THROWS_AS(items.push_back(3), std::logic_error);
+  kd::set_contract_violation_handler(
+    [](std::string_view, int, std::string_view, std::string_view) { std::abort(); });
+  CHECK(items.size() == 2u);
+#else
+  items.push_back(3);
+  CHECK(items.overflowed());
+  CHECK(items.size() == 2u);
+  CHECK_FALSE(items == (InlineVector<int, 2>{1, 2}));
+  items.clear();
+  CHECK_FALSE(items.overflowed());
+
+  auto cache = BindingSetCache{4};
+  auto key = BindingSetKey{};
+  for (std::uint32_t i = 0; i <= BindingSetKeyResources; ++i)
+  {
+    key.resources.push_back(&cache);
+  }
+  REQUIRE(key.resources.overflowed());
+  auto made = false;
+  CHECK_FALSE(cache.get(key, 1, [&] {
+    made = true;
+    return fakeSet();
+  }));
+  CHECK_FALSE(made);
+  CHECK(cache.size() == 0u);
+  CHECK(cache.overflowedKeys() == 1u);
+#endif
 }
 
 } // namespace tb::lit

@@ -3325,6 +3325,60 @@ TEST_CASE("SceneGeometry, the dress decals from the .proc (LP7.3, C54)")
       });
     CHECK_FALSE(inlineAdopted);
   }
+
+  SECTION("F3.8: under inlineAllStatics a gui-bearing static is not inlined")
+  {
+    // dmap inlines under inlineAllStatics only a glb, gltf, lwo, ase, ma or obj model
+    // whose entity has no gui key (usurface.cpp:793-830, "don't break interactive
+    // GUIs"): the gui-bearing static's copy is not dmap's, so the same-material surface
+    // inside its bounds is the decal's fragment, identified and drawn; the same static
+    // without the key is inlined (its copy neither adopted nor identified, K42)
+    for (const auto gui : {true, false})
+    {
+      CAPTURE(gui);
+      auto dress = DressScene{
+        procWithSurfaces(
+          {dressSurface("textures/lp73/decal"),
+           fmt::format(
+             "{{ \"textures/lp73/decal\" /* numVerts = */ 4 /* numIndexes = */ 6 /* "
+             "vertexFormat = */ 0\n{}{}{}{}\n0 1 2 0 2 3\n}}",
+             procVertex({116, 0, 40}, {0, 0}, std::nullopt),
+             procVertex({148, 0, 40}, {1, 0}, std::nullopt),
+             procVertex({148, 32, 40}, {1, 1}, std::nullopt),
+             procVertex({116, 32, 40}, {0, 1}, std::nullopt))}),
+        "\"classname\" \"worldspawn\"",
+        "\"classname\" \"worldspawn\"\n\"inlineAllStatics\" \"1\""};
+      writeTextFile(
+        dress.game.base() / "models" / "test" / "lp73_inline.obj",
+        "v 0 0 0\nv 32 0 0\nv 32 32 0\nv 0 32 0\nvt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvn 0 0 "
+        "1\nusemtl textures/lp73/decal\nf 1/1/1 2/2/1 3/3/1\nf 1/1/1 3/3/1 4/4/1\n");
+      const auto snapshot = dress.take(
+        decalEntities(
+          "d1", "textures/lp73/decal", "\"depth\" \"100\"\n\"decalSize\" \"600 600\"\n")
+        + dressEntity(
+          "func_static",
+          std::string{"\"name\" \"inl\"\n\"origin\" \"116 0 40\"\n\"model\" "
+                      "\"models/test/lp73_inline.obj\"\n"}
+            + (gui ? "\"gui\" \"guis/lp73/panel.gui\"\n" : "")));
+      REQUIRE(std::ranges::any_of(dress.scene->instances(), [&](const auto& entry) {
+        return entry.second.entity == dressEntityId(snapshot, "inl");
+      }));
+      const auto surfaces = identifiedArea0(*dress.scene);
+      const auto copyIdentified = std::ranges::any_of(
+        surfaces, [](const DressSurface& surface) { return surface.surface == 5u; });
+      const auto counts = dress.scene->dressCounts();
+      std::cout << fmt::format(
+        "F3.8: inlineAllStatics, the static {} a gui key: {} dress surfaces identified "
+        "(its copy among them {}), inlined {}\n",
+        gui ? "with" : "without",
+        surfaces.size(),
+        copyIdentified,
+        counts.inlined);
+      CHECK(copyIdentified == gui);
+      CHECK(counts.inlined == (gui ? 0u : 1u));
+      CHECK(surfaces.size() == (gui ? 2u : 1u));
+    }
+  }
 }
 
 } // namespace tb::lit
