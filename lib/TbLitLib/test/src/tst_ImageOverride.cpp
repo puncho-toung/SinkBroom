@@ -313,6 +313,34 @@ TEST_CASE("MaterialService image overrides, the Feed work kind (D96, D100)")
     CHECK(ran[2] == "lookup");
   }
 
+  SECTION("F2.6: a continuous feed lets a lookup through after eight feed items")
+  {
+    // 2026-11-05: twenty names handed over, a lookup asked after them: the lookup is
+    // served after the eighth feed item (the fairness rule), not after the twentieth
+    holdThread(*service, *hold, *entry);
+    static_cast<void>(kinds->taken());
+    for (auto i = 0; i < 20; ++i)
+    {
+      REQUIRE(service
+                ->setImageOverride(
+                  fmt::format("textures/feed/fair_{}", i),
+                  overrideOf(rgba8(64, 64, std::uint8_t(i), 2, 3)))
+                .is_success());
+    }
+    static_cast<void>(service->lookup("textures/lp1a/expr"));
+    hold->open();
+    waitForFeeds(*service);
+    REQUIRE(waitUntilIdle(*service));
+    const auto ran = kinds->taken();
+    const auto lookup = std::ranges::find(ran, std::string{"lookup"});
+    REQUIRE(lookup != ran.end());
+    const auto feedsBefore = std::ranges::count(ran.begin(), lookup, std::string{"feed"});
+    std::cout << fmt::format(
+      "F2.6: the lookup served after {} of the 20 feed items\n", feedsBefore);
+    CHECK(feedsBefore == 8);
+    CHECK(std::ranges::count(ran, std::string{"feed"}) == 20);
+  }
+
   SECTION("one item per name: the newest hand-over wins, the older is dropped")
   {
     holdThread(*service, *hold, *entry);

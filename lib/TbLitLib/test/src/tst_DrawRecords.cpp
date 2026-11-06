@@ -20,6 +20,7 @@
 #include "BindingSetCache.h"
 #include "DrawRecords.h"
 #include "InlineVector.h"
+#include "LitTestUtils.h"
 
 #include "kd/contracts.h"
 
@@ -395,5 +396,50 @@ TEST_CASE("InlineVector over its capacity (F1.18)")
   CHECK(cache.overflowedKeys() == 1u);
 #endif
 }
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+// F2.16 (2026-11-05): 50 builds of three surfaces' records resolved, a slot's bump that
+// releases one and a render-target generation that clears them all leave the CRT's debug
+// heap as two warm-up builds left it
+TEST_CASE("DrawRecordTable: 50 builds on the debug heap (F2.16)")
+{
+  auto scene = Scene{};
+  auto cache = BindingSetCache{64};
+  auto table = DrawRecordTable{};
+  auto generation = std::uint64_t{1};
+  auto frame = std::uint64_t{0};
+  const auto cycle = [&] {
+    ++frame;
+    table.beginBuild(lifetimeOf(scene));
+    static_cast<void>(table.generations(generation, 1));
+    for (std::uint32_t i = 0; i < 3; ++i)
+    {
+      auto made = false;
+      auto& group = table.surface(scene.surface(i), made);
+      if (group.prepass.state != DrawRecord::State::Resolved)
+      {
+        resolveFake(table, cache, group.prepass, {{{i + 1, 1}}}, frame);
+      }
+    }
+    table.endBuild();
+    REQUIRE(table.slotChanged(2) == 1u);
+    static_cast<void>(cache.slotChanged(2));
+    ++generation;
+    REQUIRE(table.generations(generation, 1));
+    REQUIRE(table.records() == 0u);
+    static_cast<void>(cache.renderTargetsChanged(generation));
+    static_cast<void>(cache.trim(frame + 1));
+  };
+  cycle();
+  cycle();
+  CHECK_FALSE(heapGrows([&] {
+    for (auto i = 0; i < 50; ++i)
+    {
+      cycle();
+    }
+  }));
+  CHECK(cache.size() <= cache.capacity());
+}
+#endif
 
 } // namespace tb::lit

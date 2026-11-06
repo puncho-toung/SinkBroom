@@ -24,6 +24,7 @@
 // and rects behind it and in front of it, the depth buffer read back, and the MXCSR's
 // FTZ | DAZ set around the calls and given back.
 
+#include "LitTestUtils.h"
 #include "MaskedOcclusion.h"
 #include "lit/EngineGeometry.h"
 #include "lit/EngineMaskedOcclusion.h"
@@ -228,5 +229,51 @@ TEST_CASE("MaskedOcclusion: the spot's TestRect depth (F3.11)")
   CHECK(engineMocRectWmin(0.5f, 3.0f) == 6.0f);
   CHECK(engineMocRectWmin(0.0f, 3.0f) == 3.0f);
 }
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+// F2.16 (2026-11-05): 50 cycles of the library's Create (RenderSystem_init.cpp:2473-2476,
+// under FTZ | DAZ), a fill and a test, and its Destroy leave the CRT's debug heap as two
+// warm-up cycles left it
+TEST_CASE(
+  "EngineMaskedOcclusion: 50 Create, fill and Destroy cycles on the debug heap (F2.16)")
+{
+  auto verts = std::vector<EngineDrawVert>(4);
+  verts[0].xyz = {-20.0f, -20.0f, -10.0f};
+  verts[1].xyz = {-20.0f, 20.0f, -10.0f};
+  verts[2].xyz = {0.0f, 20.0f, -10.0f};
+  verts[3].xyz = {0.0f, -20.0f, -10.0f};
+  const auto indexes = std::vector<unsigned int>{0, 1, 2, 0, 2, 3};
+  const auto layout = EngineMocVertexLayout{int(sizeof(EngineDrawVert)), 4, 8};
+  const auto cycle = [&] {
+    const auto scope = EngineMocFloatScope{};
+    auto moc = EngineMaskedOcclusion::create();
+    REQUIRE(moc);
+    moc->setResolution(BufferSize, BufferSize);
+    moc->setNearClipPlane(1.0f);
+    moc->clearBuffer();
+    REQUIRE(
+      moc->renderTriangles(
+        verts.front().xyz.data(),
+        indexes.data(),
+        2,
+        ModelToClip.data(),
+        EngineMocBackface::Ccw,
+        EngineMocClipAll,
+        layout)
+      == EngineMocResult::Visible);
+    REQUIRE(
+      moc->testRect(-0.75f, -0.25f, -0.25f, 0.25f, 20.0f) == EngineMocResult::Occluded);
+    moc.reset();
+  };
+  cycle();
+  cycle();
+  CHECK_FALSE(heapGrows([&] {
+    for (auto i = 0; i < 50; ++i)
+    {
+      cycle();
+    }
+  }));
+}
+#endif
 
 } // namespace tb::lit

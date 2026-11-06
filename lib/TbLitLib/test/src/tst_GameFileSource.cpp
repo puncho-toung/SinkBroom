@@ -733,6 +733,48 @@ TEST_CASE("GameContainerIndex (LP6.3)")
     CHECK(indexFiles(folder).size() == 1u);
   }
 
+  SECTION("F3.12: a replacement of the same size that keeps the time is read again")
+  {
+    auto index = GameContainerIndex{folder};
+    const auto first = index.makeSource(game.path(), nullptr);
+    REQUIRE(first->scannedTables() != nullptr);
+    const auto pk4 = game.path() / "base" / "aa_first.pk4";
+    const auto time = std::filesystem::last_write_time(pk4);
+    const auto stampBefore = statGameFile(pk4);
+    REQUIRE(stampBefore);
+    // one entry renamed by a letter, in its local header and in the central directory:
+    // the same size, the time set back
+    auto bytes = bytesOf(pk4);
+    const auto from = std::string{"materials/pk4_only.mtr"};
+    const auto to = std::string{"materials/pk4_onlz.mtr"};
+    auto renamed = std::size_t{0};
+    for (auto at = bytes.find(from); at != std::string::npos; at = bytes.find(from, at))
+    {
+      bytes.replace(at, from.size(), to);
+      ++renamed;
+    }
+    REQUIRE(renamed == 2u);
+    writeBytes(pk4, bytes);
+    std::filesystem::last_write_time(pk4, time);
+    const auto stampAfter = statGameFile(pk4);
+    REQUIRE(stampAfter);
+    REQUIRE(stampAfter->size == stampBefore->size);
+    REQUIRE(stampAfter->time == stampBefore->time);
+    // the key's digest differs: neither the memory copy nor the file, a scan
+    const auto again = index.makeSource(game.path(), nullptr);
+    CHECK(again->containerTablesOrigin().kind == Origin::Scan);
+    CHECK(again->readFile("materials/pk4_onlz.mtr", nullptr).has_value());
+    again->closeFiles();
+    // and the file written for the new key: a new index object reads it
+    auto other = GameContainerIndex{folder};
+    CHECK(
+      other.makeSource(game.path(), nullptr)->containerTablesOrigin().kind
+      == Origin::File);
+    // the digest: 0 for a file without a table there, nullopt for none
+    CHECK(containerTableDigest(pk4, true).value_or(0) != 0u);
+    CHECK(containerTableDigest(game.path() / "base" / "none.pk4", true) == std::nullopt);
+  }
+
   SECTION("a changed, added, removed or renamed container rebuilds the key's tables")
   {
     auto index = GameContainerIndex{folder};
@@ -1070,8 +1112,9 @@ TEST_CASE("GameContainerIndex (LP6.3)")
         Catch::Matchers::StartsWith("Unable to open zip file zz_second.pk4"));
       CHECK_FALSE(
         contains(locked->readFile("materials/both_res.mtr", nullptr), "both_res_second"));
-      REQUIRE(locked->scannedTables() != nullptr);
-      CHECK(locked->scannedTables()->tableless == std::vector<std::string>{"binary.pk4"});
+      // F3.12 (2026-11-05): the listing could not read the locked containers' tables for
+      // their digests, so the scan has no key and keeps no tables to store
+      CHECK(locked->scannedTables() == nullptr);
       CHECK(index.memoryEntriesForTesting() == 0u);
       CHECK(indexFiles(folder).empty());
     }
@@ -1132,6 +1175,33 @@ TEST_CASE("GameContainerIndex (LP6.3)")
     CHECK(indexFiles(folder).size() == 1u);
   }
 
+  SECTION("the first store removes a killed write's stale temporary file (F2.13)")
+  {
+    // a write killed between its temporary file and the rename leaves the temporary;
+    // the first store of an index removes those older than a minute, never a younger one
+    // (another index may be writing it) nor any other file
+    std::filesystem::create_directories(folder);
+    const auto stale = folder / "containers-0123456789abcdef.idx.aa-bb.tmp";
+    const auto young = folder / "containers-0123456789abcdef.idx.cc-dd.tmp";
+    const auto other = folder / "notes.tmp";
+    for (const auto& path : {stale, young, other})
+    {
+      writeBytes(path, "half a file");
+    }
+    std::filesystem::last_write_time(
+      stale, std::filesystem::file_time_type::clock::now() - std::chrono::minutes{2});
+    std::filesystem::last_write_time(
+      other, std::filesystem::file_time_type::clock::now() - std::chrono::minutes{2});
+    auto index = GameContainerIndex{folder};
+    CHECK(
+      index.makeSource(game.path(), nullptr)->containerTablesOrigin().kind
+      == Origin::Scan);
+    CHECK(index.leftoversRemoved() == 1u);
+    CHECK_FALSE(std::filesystem::exists(stale));
+    CHECK(std::filesystem::exists(young));
+    CHECK(std::filesystem::exists(other));
+  }
+
   SECTION("two indexes read and write one file")
   {
     auto first = GameContainerIndex{folder};
@@ -1152,5 +1222,53 @@ TEST_CASE("GameContainerIndex (LP6.3)")
     CHECK(indexFiles(folder).size() == 1u);
   }
 }
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+// F2.16 (2026-11-05): 50 cycles of the index's store (a scan written to its file) and its
+// load (the file read into a new memory copy) leave the CRT's debug heap as two warm-up
+// cycles left it (the case's name short: the test folder's path and the index's
+// temporary file stay under MAX_PATH)
+TEST_CASE("GameContainerIndex heap cycles (F2.16)")
+{
+  const auto game = FakeGame{};
+  const auto folder = game.path() / "index";
+  auto index = GameContainerIndex{folder};
+  const auto cycle = [&] {
+    // the store: no memory copy and no file, so a scan, then its file written
+    index.dropMemoryForTesting();
+    for (const auto& file : indexFiles(folder))
+    {
+      auto ec = std::error_code{};
+      std::filesystem::remove(file, ec);
+    }
+    {
+      auto source = index.makeSource(game.path(), nullptr);
+      REQUIRE(source->containerTablesOrigin().kind == Origin::Scan);
+      const auto warnings = source->takeWarnings();
+      if (!warnings.empty())
+      {
+        FAIL("the store warned: " + warnings.front());
+      }
+      source->closeFiles();
+    }
+    // the load: the memory copy dropped, the file read
+    index.dropMemoryForTesting();
+    {
+      auto source = index.makeSource(game.path(), nullptr);
+      REQUIRE(source->containerTablesOrigin().kind == Origin::File);
+      source->closeFiles();
+    }
+  };
+  cycle();
+  cycle();
+  CHECK_FALSE(heapGrows([&] {
+    for (auto i = 0; i < 50; ++i)
+    {
+      cycle();
+    }
+  }));
+  CHECK(indexFiles(folder).size() == 1u);
+}
+#endif
 
 } // namespace tb::lit

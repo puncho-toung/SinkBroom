@@ -27,6 +27,8 @@
 
 #include <nvrhi/nvrhi.h>
 
+#include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -630,7 +632,8 @@ TEST_CASE("ImageSlots")
     auto slots = ImageSlots{};
     slots.setRequest(service.request());
     auto fits = true;
-    slots.setInPlaceRule([&](const CachedImage&, const nvrhi::ITexture&) { return fits; });
+    slots.setInPlaceRule(
+      [&](const CachedImage&, const nvrhi::ITexture&) { return fits; });
     const auto id = slots.request(key);
     CHECK(slots.slot(id)->adoptedOverride);
     const auto texture = fakeTexture();
@@ -1029,6 +1032,117 @@ TEST_CASE("ImageSlots and BindingSetCache: 100 cycles on the debug heap (U2.4)")
       }
     }));
     CHECK(cache.size() <= cache.capacity());
+  }
+}
+
+// F2.16 (2026-11-05): 50 cycles of each LP6.4b and F2 path of the slot table (an
+// eviction and the re-request a draw makes, a floor and its lift, a room refusal and its
+// re-request, a fed image written in place) leave the CRT's debug heap as two warm-up
+// cycles left it
+TEST_CASE("ImageSlots: 50 cycles of each budget path on the debug heap (F2.16)")
+{
+  auto service = FakeService{};
+  auto slots = ImageSlots{};
+  slots.setRequest(service.request());
+  auto frame = std::uint64_t{0};
+  // a slot's texture of bytes written whole
+  const auto written = [&](const ImageSlotId id, const std::uint64_t bytes) {
+    slots.attachTexture(id, fakeTexture(), 3, bytes);
+    slots.levelsWritten(id, 0);
+    slots.dropPixels(id);
+  };
+  const auto settle = [&] {
+    static_cast<void>(slots.takeChangedSlots());
+    static_cast<void>(slots.takeUsageChangedSlots());
+    slots.collectRetired(frame + 1);
+  };
+  const auto fifty = [&](const std::function<void()>& cycle) {
+    cycle();
+    cycle();
+    CHECK_FALSE(heapGrows([&] {
+      for (auto i = 0; i < 50; ++i)
+      {
+        cycle();
+      }
+    }));
+  };
+
+  SECTION("evicted, then asked again by a draw")
+  {
+    const auto key = keyOf("textures/f216_evict", UsageDiffuse);
+    service.publish(key, true);
+    const auto id = slots.request(key);
+    written(id, 84);
+    fifty([&] {
+      ++frame;
+      REQUIRE(slots.evict(id, frame) == 84u);
+      slots.want(id);
+      slots.reRequestEvicted(id, frame);
+      REQUIRE(slots.slot(id)->state == ImageSlots::State::Loading);
+      written(id, 84);
+      settle();
+    });
+    CHECK(slots.evicted() == 0u);
+    CHECK(slots.retiredBytes() == 0u);
+    CHECK(slots.evictions() == 52u);
+  }
+
+  SECTION("floored, then lifted (F2.2)")
+  {
+    const auto key = keyOf("textures/f216_floor", UsageDiffuse);
+    service.publish(key, true);
+    const auto id = slots.request(key);
+    written(id, 84);
+    fifty([&] {
+      ++frame;
+      REQUIRE(slots.floor(id, frame));
+      written(id, 16);
+      REQUIRE(slots.unfloor(id, frame));
+      written(id, 84);
+      settle();
+    });
+    CHECK(slots.floored() == 0u);
+    CHECK(slots.flooringBytes() == 0u);
+    CHECK(slots.unfloors() == 52u);
+    CHECK(slots.retiredBytes() == 0u);
+  }
+
+  SECTION("refused for the room, then asked again (F2.4)")
+  {
+    const auto key = keyOf("textures/f216_room", UsageDiffuse);
+    service.publish(key, true);
+    const auto id = slots.request(key);
+    REQUIRE(slots.slot(id)->state == ImageSlots::State::Loading);
+    fifty([&] {
+      ++frame;
+      slots.refuseForRoom(id, "no allocation room (a test)");
+      REQUIRE(slots.roomRefused() == 1u);
+      REQUIRE(slots.reRequestRoomRefused(frame) == 1u);
+      REQUIRE(slots.slot(id)->state == ImageSlots::State::Loading);
+      settle();
+    });
+    CHECK(slots.roomRefused() == 0u);
+    CHECK(slots.roomReRequests() == 52u);
+  }
+
+  SECTION("a fed image written in place")
+  {
+    const auto key = keyOf("textures/f216_fed", UsageDiffuse);
+    service.publish(key, true, {}, true);
+    slots.setInPlaceRule([](const CachedImage&, const nvrhi::ITexture&) { return true; });
+    const auto id = slots.request(key);
+    written(id, 84);
+    fifty([&] {
+      ++frame;
+      service.change(key);
+      service.publish(key, true, {}, true);
+      slots.refresh(service.table, frame);
+      REQUIRE(slots.inPlace() == std::vector<ImageSlotId>{id});
+      slots.inPlaceWritten(id);
+      settle();
+    });
+    CHECK(slots.inPlaceWrites() == 52u);
+    CHECK_FALSE(slots.hasLoading());
   }
 }
 #endif

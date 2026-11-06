@@ -1504,4 +1504,63 @@ TEST_CASE("SceneGeometry: an entity id taken by another kind (LP7.2, C52)")
   CHECK(model.scene->modelCounts().entities == 0);
 }
 
+#if defined(_MSC_VER) && defined(_DEBUG)
+// F2.16 (2026-11-05): 50 cycles of a compaction (the least-used arena's ranges moved, the
+// arena released) and the arena made again for new chunks leave the CRT's debug heap as
+// two warm-up cycles left it
+TEST_CASE("GeometryArenas: 50 compactions on the debug heap (F2.16)")
+{
+  auto arenas = GeometryArenas{};
+  // four 256-byte vertex ranges (8 vertices) fill an arena
+  arenas.setCpuArenasForTesting(1024);
+  const auto chunksOf = [](const std::vector<int>& cells) {
+    auto chunks = std::map<ChunkKey, Chunk>{};
+    for (const auto cell : cells)
+    {
+      auto chunk = Chunk{};
+      chunk.key.material = "textures/f216/compact";
+      chunk.key.cell = {cell, 0, 0};
+      chunk.verts.resize(8);
+      chunk.indexes = {0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7};
+      chunk.casterVersion = 1;
+      chunk.appearanceVersion = 1;
+      const auto key = chunk.key;
+      chunks.emplace(key, std::move(chunk));
+    }
+    return chunks;
+  };
+  const auto all = chunksOf({0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11});
+  const auto kept = chunksOf({0, 4, 7, 8, 9});
+  auto frame = std::uint64_t{1};
+  arenas.sync(all, frame);
+  REQUIRE(arenas.placeForTesting(all, 1 << 20).is_success());
+  REQUIRE(arenas.vertexArenas() == 3u);
+  const auto cycle = [&] {
+    arenas.sync(kept, ++frame);
+    arenas.reclaim(++frame);
+    const auto plan = arenas.planCompaction();
+    REQUIRE(plan);
+    const auto result = arenas.compact(nullptr, *plan, ++frame);
+    REQUIRE(result.releasedBytes == 1024u);
+    REQUIRE(arenas.vertexArenas() == 2u);
+    arenas.reclaim(++frame);
+    arenas.sync(all, ++frame);
+    REQUIRE(arenas.placeForTesting(all, 1 << 20).is_success());
+    REQUIRE(arenas.vertexArenas() == 3u);
+    arenas.reclaim(++frame);
+  };
+  cycle();
+  cycle();
+  CHECK_FALSE(heapGrows([&] {
+    for (auto i = 0; i < 50; ++i)
+    {
+      cycle();
+    }
+  }));
+  CHECK(arenas.compactions() == 52u);
+  CHECK(arenas.arenasReleased() == 52u);
+  arenas.releaseAll();
+}
+#endif
+
 } // namespace tb::lit

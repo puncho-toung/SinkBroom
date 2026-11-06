@@ -17,11 +17,13 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "LitTestUtils.h"
 #include "TextureHeaps.h"
 
 #include <nvrhi/nvrhi.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <set>
 #include <string>
@@ -350,5 +352,46 @@ TEST_CASE("TextureHeaps")
     CHECK(heaps.heaps() == 0u);
   }
 }
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+// F2.16 (2026-11-05): 50 cycles of two heaps made, filled, emptied, released after the
+// keep time (F2.1) and made again leave the CRT's debug heap as two warm-up cycles left
+// it
+TEST_CASE("TextureHeaps: 50 cycles on the debug heap (F2.16)")
+{
+  auto heaps = TextureHeaps{};
+  heaps.setCpuHeapsForTesting(128 * KiB);
+  const auto textures = fakeTextures(3);
+  auto frame = std::uint64_t{0};
+  auto now = std::chrono::steady_clock::time_point{} + std::chrono::hours{1};
+  const auto keep = std::chrono::milliseconds{1000};
+  const auto cycle = [&] {
+    ++frame;
+    REQUIRE(heaps.place(textures[0].Get(), requirements(128 * KiB, 4 * KiB)));
+    REQUIRE(heaps.place(textures[1].Get(), requirements(64 * KiB, 4 * KiB)));
+    REQUIRE(heaps.place(textures[2].Get(), requirements(32 * KiB, 4 * KiB)));
+    for (const auto& texture : textures)
+    {
+      REQUIRE(heaps.retire(texture.Get(), frame));
+    }
+    heaps.reclaim(frame + 1);
+    REQUIRE(heaps.releaseEmpty(now, keep) == 0u);
+    now += std::chrono::seconds{2};
+    REQUIRE(heaps.releaseEmpty(now, keep) == 2u);
+    now += std::chrono::seconds{2};
+  };
+  cycle();
+  cycle();
+  CHECK_FALSE(heapGrows([&] {
+    for (auto i = 0; i < 50; ++i)
+    {
+      cycle();
+    }
+  }));
+  CHECK(heaps.heaps() == 0u);
+  CHECK(heaps.heapsReleased() == 104u);
+  heaps.releaseAll();
+}
+#endif
 
 } // namespace tb::lit

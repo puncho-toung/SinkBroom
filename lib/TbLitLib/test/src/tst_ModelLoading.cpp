@@ -1051,7 +1051,7 @@ TEST_CASE("ModelLoading: the OBJ validator (LP7.1a, D136, P7.2)")
     // has 123072): a file passes with more, its finished surfaces are what the engine's
     // 16-bit indexes bound (modelSurfaceProblem)
     auto text = ObjHead;
-    for (auto i = std::size_t{0}; i < MaxObjCorners / 3 + 100; ++i)
+    for (auto i = std::size_t{0}; i < 32767 / 3 + 100; ++i)
     {
       text += "f 1/1/1 2/1/1 3/1/1\n";
     }
@@ -2219,6 +2219,11 @@ TEST_CASE("ModelLoading: the LWO validator (LP7.1b, D136, P7.2)")
     CHECK_FALSE(lwoFileProblem(handLwo(HandQuadPoints, {{0, 1, 2}, {0, 2, 3}})));
     // a quad passes: the conversion skips it (Model.cpp:2372-2376)
     CHECK_FALSE(lwoFileProblem(handLwo(HandQuadPoints, {{0, 1, 2, 3}, {0, 1, 2}})));
+    // F3.17 (2026-11-05): 36,000 triangle corners welded into 3 vertices pass (LP7.1b's
+    // 32,767 corners per layer are no bound of the engine's: its bound is a surface's
+    // 65,536 welded vertices, Model.cpp:2477, modelSurfaceProblem's after the finish)
+    CHECK_FALSE(lwoFileProblem(handLwo(
+      HandQuadPoints, std::vector<std::vector<std::uint32_t>>(12000, {0, 1, 2}))));
     CHECK_FALSE(lwoFileProblem(handLwo(
       HandQuadPoints,
       {{0, 1, 2}},

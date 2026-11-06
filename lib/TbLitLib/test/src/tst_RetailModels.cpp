@@ -345,6 +345,28 @@ std::string firstDifference(const ModelRecord& source, const ModelRecord& binary
   return {};
 }
 
+/**
+ * F3.18 (2026-11-05): the first difference left once every vertex's normal[3], color and
+ * color2 are set equal on both sides ("" when E-LIT-7's fields, M-GEO-DEFECT-03, are the
+ * only ones that differ)
+ */
+std::string differenceBesidesColours(ModelRecord source, ModelRecord binary)
+{
+  for (auto* record : {&source, &binary})
+  {
+    for (auto& surface : record->surfaces)
+    {
+      for (auto& vert : surface.verts)
+      {
+        vert.normal[3] = 0;
+        vert.color = {};
+        vert.color2 = {};
+      }
+    }
+  }
+  return firstDifference(source, binary);
+}
+
 struct SourceCount
 {
   std::size_t files = 0;
@@ -508,6 +530,10 @@ TEST_CASE(
               else
               {
                 const auto fields = fieldCounts(record, stored);
+                // F3.18: every difference lies in normal[3], color or color2 (E-LIT-7)
+                const auto besides = differenceBesidesColours(record, stored);
+                INFO(canonical << ": " << besides);
+                CHECK(besides.empty());
                 count.binaryDifferent.push_back(
                   canonical + ": " + difference
                   + (fields.empty() ? "" : " (" + fields + ")"));

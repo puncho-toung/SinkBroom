@@ -28,6 +28,7 @@
 #include "LitMapFixture.h"
 #include "LitTestUtils.h"
 #include "RenderThread.h"
+#include "TestTempPath.h"
 #include "TonemapModel.h"
 #include "lit/EngineTables.h"
 #include "lit/FeedHost.h"
@@ -136,7 +137,7 @@ void writeBinaryFile(const std::filesystem::path& path, const std::string& bytes
 std::filesystem::path assembleFeedRoot(
   const std::string& name, const std::filesystem::path& gamePath)
 {
-  const auto root = std::filesystem::temp_directory_path() / name;
+  const auto root = testTempPath(name);
   std::filesystem::remove_all(root);
   const auto base = root / "base";
   std::filesystem::create_directories(base / "materials");
@@ -219,9 +220,13 @@ struct ValidationCount
   VulkanMessageSink sink()
   {
     return [this](const VulkanMessage& message) {
+      // F1.14 (2026-11-05, DQ-10): M-PIPE-DEFECT-01 by its text (the id is also a
+      // stage-interface output no next stage reads, which counts as a warning)
       if (
         !message.error
-        && (message.id == OutputNotConsumedId || message.id == DepthOnlyOutputId))
+        && ((message.id == OutputNotConsumedId
+             && message.text.find("not consumed by vertex shader") != std::string::npos)
+            || message.id == DepthOnlyOutputId))
       {
         ++mirrored;
         return;
@@ -236,7 +241,7 @@ struct ValidationCount
   {
     const auto lock = std::scoped_lock{mutex};
     std::cout << label << ": validation errors " << errors << ", warnings " << warnings
-              << ", mirrored engine warnings " << mirrored << "\n";
+              << ", mirrored engine warnings " << mirrored << ", mirrored by text: all\n";
     for (const auto& text : texts)
     {
       std::cout << "  " << text << "\n";
@@ -699,8 +704,7 @@ TEST_CASE(
     "readbackLdr: a settled frame, one staging texture per extent, a storm's timeout")
   {
     // LP6.4b step 0b: the frame log says each frame's table's feed count and its settle
-    const auto frameLogPath =
-      std::filesystem::temp_directory_path() / "TbLitLibTest-feed-storm-frame-log.csv";
+    const auto frameLogPath = testTempPath("TbLitLibTest-feed-storm-frame-log.csv");
     std::filesystem::remove(frameLogPath);
     auto hostOptions = HostOptions{};
     hostOptions.frameLogPath = frameLogPath;
@@ -741,16 +745,45 @@ TEST_CASE(
     REQUIRE(host.session->readbackLdr(10000ms).is_success());
     CHECK(host.session->ldrStagingCreationsForTesting() == creations + 1);
 
+    // F2.17 (2026-11-05): a park while a readback waits for its frame (a resize, a hidden
+    // window) keeps the request: it is answered by the first settled frame after the
+    // unpark, at the new extent, where it answered "stopped before a settled frame"
+    {
+      const auto requeued = host.session->ldrReadbacksRequeuedForTesting();
+      host.session->parkDuringLdrReadbackForTesting();
+      auto parkedRead = std::optional<Result<LdrImage>>{};
+      auto reader =
+        std::thread{[&] { parkedRead.emplace(host.session->readbackLdr(30000ms)); }};
+      REQUIRE(waitFor([&] { return host.session->isParked(); }, 10000ms));
+      host.session->resizeHeadlessForTesting(80, 48);
+      host.session->unpark();
+      reader.join();
+      REQUIRE(parkedRead);
+      CHECK(parkedRead->is_success());
+      if (parkedRead->is_success())
+      {
+        CHECK(parkedRead->value().width == 80u);
+        CHECK(parkedRead->value().height == 48u);
+      }
+      CHECK(host.session->ldrReadbacksRequeuedForTesting() == requeued + 1);
+      std::cout << "F2.17: a readback across a park: "
+                << (parkedRead->is_success() ? "answered after the unpark" : "dropped")
+                << ", requeued "
+                << host.session->ldrReadbacksRequeuedForTesting() - requeued << "\n";
+    }
+
     // a storm: a feed that keeps every frame behind its counters, so no frame settles and
     // the readback times out with the reason (FEED.md). LP6.4b step 0b: a hand-over every
     // millisecond did not hold every frame behind (a frame whose table, start and check
     // all fell inside the gap between two hand-overs settled: 7 of 20 runs of the section
-    // in Release at e4fa0242c), so the service holds the feed behind by construction
-    // (holdFeedBehindForTesting) while the storm hands over as before. Each hand-over's
-    // stamps (before and after the call: the service's count moved between them) and each
-    // frame's window (its start, the start of its passes after its table was read, the
-    // service's count then) say what a readback that comes back under it was
-    host.service->holdFeedBehindForTesting(true);
+    // in Release at e4fa0242c), so the session is held behind the feed by construction
+    // (F2.5, 2026-11-05: on the render side, LitSession::holdFeedBehindForTesting, a
+    // forced feedBehind term in converge, the service's counters honest) while the storm
+    // hands over as before. Each hand-over's stamps (before and after the call: the
+    // service's count moved between them) and each frame's window (its start, the start
+    // of its passes after its table was read, the service's count then) say what a
+    // readback that comes back under it was
+    host.session->holdFeedBehindForTesting(true);
     auto windowsMutex = std::mutex{};
     auto windows = std::vector<StormFrameWindow>{};
     host.session->setEveryFrameHookForTesting([&](RenderFrameAccess& access) {
@@ -764,7 +797,6 @@ TEST_CASE(
     auto handed = std::atomic<int>{0};
     auto stamps = std::vector<StormStamp>{};
     stamps.reserve(std::size_t{1} << 16);
-    const auto stormStart = std::chrono::steady_clock::now();
     auto storm = std::thread{[&] {
       auto next = std::chrono::steady_clock::now();
       for (auto i = 0; !stop; ++i)
@@ -788,26 +820,13 @@ TEST_CASE(
     }};
     std::this_thread::sleep_for(100ms);
     const auto stormed = host.session->readbackLdr(1500ms);
-    const auto readbackEnd = std::chrono::steady_clock::now();
     stop = true;
     storm.join();
-    host.service->holdFeedBehindForTesting(false);
-    host.session->setEveryFrameHookForTesting({});
+    host.session->holdFeedBehindForTesting(false);
     const auto gaps = longestStormGap(stamps);
     std::cout << "LP6.4b storm: " << handed << " hand-overs, the longest gap "
               << fmt::format("{:.3f}", gaps.ms) << " ms after hand-over " << gaps.after
               << "\n";
-    if (stormed.is_success())
-    {
-      // the log is whole once the session has stopped
-      static_cast<void>(host.close());
-      const auto lock = std::scoped_lock{windowsMutex};
-      const auto verdict =
-        stormVerdict(stamps, windows, stormStart, readbackEnd, frameLogPath);
-      std::cout << "LP6.4b storm: a readback came back: " << verdict.text << "\n";
-      // (i): a settled frame whose table was behind the hand-overs is a counter fault
-      CHECK_FALSE(verdict.counterFault);
-    }
     REQUIRE(stormed.is_error());
     CHECK_THAT(
       std::get<Error>(stormed.error()).msg,
@@ -816,11 +835,70 @@ TEST_CASE(
               << " hand-overs, readback: " << std::get<Error>(stormed.error()).msg
               << "\n";
 
+    // F2.5 (2026-11-05, DQ-8): the 1 kHz storm without the hold, a measure that does not
+    // gate (a frame whose table, start and check fall between two hand-overs settles,
+    // and is right to: it holds every hand-over made before its converge): when a
+    // readback comes back, the verdict over the frame log (once the session stopped)
+    // says whether a settled frame's table was behind the hand-overs, a counter fault
+    {
+      const auto lock = std::scoped_lock{windowsMutex};
+      windows.clear();
+    }
+    stamps.clear();
+    stop = false;
+    handed = 0;
+    const auto measureStart = std::chrono::steady_clock::now();
+    auto measureStorm = std::thread{[&] {
+      auto next = std::chrono::steady_clock::now();
+      for (auto i = 0; !stop; ++i)
+      {
+        const auto before = std::chrono::steady_clock::now();
+        static_cast<void>(host.service->setImageOverride(
+          "textures/lp5/feed_side",
+          constantOverride(
+            64, 64, {std::uint8_t(i * 3), std::uint8_t(255 - i), std::uint8_t(i)})));
+        if (stamps.size() < stamps.capacity())
+        {
+          stamps.push_back(StormStamp{before, std::chrono::steady_clock::now()});
+        }
+        ++handed;
+        next += 1ms;
+        while (std::chrono::steady_clock::now() < next)
+        {
+          std::this_thread::yield();
+        }
+      }
+    }};
+    std::this_thread::sleep_for(100ms);
+    const auto measured = host.session->readbackLdr(1500ms);
+    const auto measureEnd = std::chrono::steady_clock::now();
+    stop = true;
+    measureStorm.join();
+    host.session->setEveryFrameHookForTesting({});
+    const auto measuredHanded = handed.load();
+
     // the storm over, the session settles on the newest hand-over
     const auto after = host.session->readbackLdr(60000ms);
     CHECK(after.is_success());
 
     const auto report = host.close();
+    if (measured.is_success())
+    {
+      const auto lock = std::scoped_lock{windowsMutex};
+      const auto verdict =
+        stormVerdict(stamps, windows, measureStart, measureEnd, frameLogPath);
+      std::cout << "F2.5 the 1 kHz storm without the hold (" << measuredHanded
+                << " hand-overs, not gating): a readback came back: " << verdict.text
+                << "\n";
+      // (i): a settled frame whose table was behind the hand-overs is a counter fault
+      CHECK_FALSE(verdict.counterFault);
+    }
+    else
+    {
+      std::cout << "F2.5 the 1 kHz storm without the hold (" << measuredHanded
+                << " hand-overs, not gating): no readback came back ("
+                << std::get<Error>(measured.error()).msg << ")\n";
+    }
     CHECK(report.deviceReleaseCount == 0u);
     CHECK(report.nvrhiErrors == 0u);
     CHECK_FALSE(report.deviceLost);
@@ -1625,9 +1703,7 @@ void savePicture(const LdrImage& image, const std::string& name)
     rgba.pixels[i] = 255;
   }
   writeBinaryFile(
-    std::filesystem::temp_directory_path() / "TbLitLibTest-feed-pictures"
-      / (name + ".png"),
-    test::pngFile(rgba));
+    testTempPath("TbLitLibTest-feed-pictures") / (name + ".png"), test::pngFile(rgba));
 }
 
 std::array<int, 3> ldrAt(
@@ -2132,8 +2208,7 @@ TEST_CASE("Feed host: the latency of a fed image (LPF.2, Q29)", "[.][feed]")
       root / "base" / "textures" / "lp5" / fmt::format("feed_decode_{}.png", i),
       test::pngFile(source));
   }
-  const auto logPath =
-    std::filesystem::temp_directory_path() / "TbLitLibTest-feed-latency.csv";
+  const auto logPath = testTempPath("TbLitLibTest-feed-latency.csv");
   std::filesystem::remove(logPath);
   {
     auto host = Host{root, *gamePath, HostOptions{160, 120, 6, false, logPath}};

@@ -3346,7 +3346,7 @@ TEST_CASE("SceneGeometry, the dress decals from the .proc (LP7.3, C54)")
              procVertex({148, 0, 40}, {1, 0}, std::nullopt),
              procVertex({148, 32, 40}, {1, 1}, std::nullopt),
              procVertex({116, 32, 40}, {0, 1}, std::nullopt))}),
-        "\"classname\" \"worldspawn\"",
+        R"("classname" "worldspawn")",
         "\"classname\" \"worldspawn\"\n\"inlineAllStatics\" \"1\""};
       writeTextFile(
         dress.game.base() / "models" / "test" / "lp73_inline.obj",

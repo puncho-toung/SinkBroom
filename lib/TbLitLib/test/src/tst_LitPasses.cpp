@@ -2334,6 +2334,31 @@ TEST_CASE("LitPasses: the kept caster sets (LP6.2, C66, D168, P8.2)")
     return lists;
   };
 
+
+#if defined(_MSC_VER) && defined(_DEBUG)
+  SECTION("F2.16 (2026-11-05): 50 cycles of both sets made again on the debug heap")
+  {
+    // the chunks' version (a batch applied) makes both sets again; the camera's move
+    // keeps them
+    const auto cycle = [&] {
+      build.chunksVersion += 1;
+      const auto made = keptListsOf(*f, scene, camera, build);
+      REQUIRE(made.casterSetsBuilt == 2u);
+      static_cast<void>(keptListsOf(*f, scene, moved, build));
+      static_cast<void>(keptListsOf(*f, scene, camera, build));
+    };
+    cycle();
+    cycle();
+    CHECK_FALSE(heapGrows([&] {
+      for (auto i = 0; i < 50; ++i)
+      {
+        cycle();
+      }
+    }));
+    CHECK(sets.size() == 2u);
+  }
+#endif
+
   SECTION("(a) built twice: no set made, the lists equal a fresh build's")
   {
     const auto kept = keptListsOf(*f, scene, camera, build);

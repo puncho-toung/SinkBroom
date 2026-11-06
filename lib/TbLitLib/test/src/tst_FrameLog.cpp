@@ -17,6 +17,7 @@
  along with TrenchBroom. If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "TestTempPath.h"
 #include "lit/FrameLog.h"
 
 #include <algorithm>
@@ -105,7 +106,7 @@ TEST_CASE("FrameLog")
          "resolves,surfaces_ms,lights_ms,links_ms,caster_sets_built,tiles_image_"
          "redrawn,texture_heaps,heap_bytes,textures_dedicated,textures_evicted,"
          "textures_floored,feeds_in_place,arena_moved_bytes,taa_history,lights_moc_"
-         "culled,surfaces_moc_culled,moc_ms\n");
+         "culled,surfaces_moc_culled,moc_fill_ms,moc_test_ms\n");
   }
 
   SECTION("formatFrameLogRow")
@@ -113,7 +114,7 @@ TEST_CASE("FrameLog")
     CHECK(
       formatFrameLogRow(exampleRow())
       == "7,frame,12,0.153,0.051,16.205,0.021,mailbox,2,3,800,600,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
-         ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n");
+         ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n");
 
     // LP2.1: the allocations, the frame's uploads, the textures and the arenas
     auto withResources = exampleRow();
@@ -124,7 +125,7 @@ TEST_CASE("FrameLog")
     CHECK(
       formatFrameLogRow(withResources)
       == "7,frame,12,0.153,0.051,16.205,0.021,mailbox,2,3,800,600,,,211,33554432,205,"
-         "134217728,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n");
+         "134217728,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n");
 
     // LP2.2b: the passes' GPU times, the draws, the lights, the constant buffers' writes
     // and whether the frame is settled
@@ -149,20 +150,20 @@ TEST_CASE("FrameLog")
     CHECK(
       formatFrameLogRow(withPasses)
       == "7,frame,12,0.153,0.051,16.205,0.021,mailbox,2,3,800,600,,,,,,,0.012,0.250,0."
-         "046,0.008,30,11,17,0,0,2,2,0,800,2,2730,660,1,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n");
+         "046,0.008,30,11,17,0,0,2,2,0,800,2,2730,660,1,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n");
     withPasses.settled = false;
     CHECK(formatFrameLogRow(withPasses)
             .ends_with(",660,0,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
-                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
+                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
     // U2.3: the allocation headroom's refusals; V2.2: the triangles the cull took out
     withPasses.allocRefused = 3;
     CHECK(formatFrameLogRow(withPasses)
             .ends_with(",660,0,3,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
-                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
+                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
     withPasses.culledTriangles = 12;
     CHECK(formatFrameLogRow(withPasses)
             .ends_with(",660,0,3,12,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
-                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
+                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
     // LP4.1: the view's portal flow: the view's area (-1 outside the world), the areas
     // flowed, the lights in view, the chains and the flow's time
     withPasses.viewArea = -1;
@@ -172,61 +173,61 @@ TEST_CASE("FrameLog")
     withPasses.flowMs = 0.04271;
     CHECK(formatFrameLogRow(withPasses)
             .ends_with(",660,0,3,12,-1,8,6,8,0.043,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
-                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
+                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
     withPasses.viewArea = 3;
     withPasses.flowMs = 0.0;
     CHECK(formatFrameLogRow(withPasses)
             .ends_with(",12,3,8,6,8,0.000,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
-                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
+                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
     // LP4.2a: the ambient pass's draws and its GPU time
     withPasses.ambientDraws = 9;
     withPasses.gpuAmbientMs = 0.01849;
     CHECK(formatFrameLogRow(withPasses)
             .ends_with(",12,3,8,6,8,0.000,9,0.018,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
-                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
+                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
     // LP4.3: set 9's writes and the surfaces on the light-grid path
     withPasses.ambientWrites = 4;
     withPasses.gridSurfaces = 7;
     CHECK(formatFrameLogRow(withPasses)
             .ends_with(",8,0.000,9,0.018,4,7,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
-                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
+                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
     // LPF.1: the frame's table's feed counter, the landing frame's feed time and the
     // override store's bytes; a frame on which no feed item lands has no feed time
     withPasses.feedApplied = 12;
     withPasses.overrideBytes = 16384;
     CHECK(formatFrameLogRow(withPasses)
             .ends_with(",9,0.018,4,7,12,,16384,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
-                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
+                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
     withPasses.feedMs = 21.34567;
     CHECK(formatFrameLogRow(withPasses)
             .ends_with(",9,0.018,4,7,12,21.346,16384,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
-                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
+                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
     // LP5.1: the math phase's lights and the ambientLight lights
     withPasses.mathLights = 2;
     withPasses.ambientLights = 1;
     CHECK(formatFrameLogRow(withPasses)
             .ends_with(",12,21.346,16384,2,1,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
-                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
+                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
     // LP5.2a: the stage pass's draws, its skipped stages and its GPU time
     withPasses.stageDraws = 5;
     withPasses.stageSkipped = 2;
     CHECK(formatFrameLogRow(withPasses)
             .ends_with(",16384,2,1,5,2,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
-                       ",,,,,,,,,,,,,,,,,,,,,,\n"));
+                       ",,,,,,,,,,,,,,,,,,,,,,,\n"));
     withPasses.gpuStagesMs = 0.03149;
     CHECK(formatFrameLogRow(withPasses)
             .ends_with(",16384,2,1,5,2,0.031,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
-                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
+                       ",,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
     // LP5.3: pass 9's fog draws, blend draws and its GPU time
     withPasses.fogDraws = 3;
     withPasses.blendDraws = 1;
     CHECK(formatFrameLogRow(withPasses)
             .ends_with(",5,2,0.031,3,1,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
-                       ",,,,,,,,,,,,,,,,,,,\n"));
+                       ",,,,,,,,,,,,,,,,,,,,\n"));
     withPasses.gpuFogMs = 0.01234;
     CHECK(formatFrameLogRow(withPasses)
             .ends_with(",5,2,0.031,3,1,0.012,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
-                       ",,,,,,,,,,,,,,,,,,,,,,,,\n"));
+                       ",,,,,,,,,,,,,,,,,,,,,,,,,\n"));
 
     // a row without its GPU time has an empty field
     auto row = exampleRow();
@@ -238,19 +239,19 @@ TEST_CASE("FrameLog")
     CHECK(
       formatFrameLogRow(row)
       == "7,frame,12,0.153,0.000,0.000,,headless,0,3,800,600,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,"
-         ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n");
+         ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n");
 
     // a session's start and stop carry the VRAM in use, and nothing of a frame
     CHECK(
       formatFrameLogRow(sessionRow(FrameLogEvent::Start))
-      == "7,start,,,,,,,,,,,812.3,6912.0,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n");
+      == "7,start,,,,,,,,,,,812.3,6912.0,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n");
     auto stop = sessionRow(FrameLogEvent::Stop);
     stop.vramUsedMb.reset();
     stop.vramBudgetMb.reset();
     stop.allocCount = 9;
     CHECK(
       formatFrameLogRow(stop)
-      == "7,stop,,,,,,,,,,,,,9,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n");
+      == "7,stop,,,,,,,,,,,,,9,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n");
 
     // LP7.0 (C52, C54, C55, P7.20): LP7's eleven counts, 0 until their sub-packages
     // fill them, and the stop row's proc_bytes; a frame row leaves proc_bytes empty
@@ -270,29 +271,37 @@ TEST_CASE("FrameLog")
     withLp7.inlinedSurfaces = 0u;
     CHECK(formatFrameLogRow(withLp7).ends_with(
       ",3,1,0.012,,0,0,0,0,0,0,0,0,0,0,0,0,,,,,,,,,,"
-      ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
+      ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
     withLp7.modelEntities = 3u;
     withLp7.curvedIslands = 2u;
     withLp7.inlinedSurfaces = 4u;
     CHECK(formatFrameLogRow(withLp7).ends_with(
       ",0.012,,3,0,0,0,0,0,0,0,0,0,2,4,,,,,,,,,,,,,,"
-      ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
+      ",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
     auto stopWithHeaps = stop;
     stopWithHeaps.textureHeaps = 1u;
     stopWithHeaps.heapBytes = 0u;
     stopWithHeaps.texturesDedicated = 0u;
-    CHECK(formatFrameLogRow(stopWithHeaps).ends_with(",,1,0,0,,,,,,,,\n"));
+    CHECK(formatFrameLogRow(stopWithHeaps).ends_with(",,1,0,0,,,,,,,,,\n"));
     // LP6.4b (C68 (d)): an event row carries its own figures in LP6.4b's four
     auto stopWithMoves = stop;
     stopWithMoves.arenaMovedBytes = 65536u;
-    CHECK(formatFrameLogRow(stopWithMoves).ends_with(",,,,65536,,,,\n"));
+    CHECK(formatFrameLogRow(stopWithMoves).ends_with(",,,,65536,,,,,\n"));
     CHECK(fieldCount(formatFrameLogRow(stopWithMoves)) == fieldCount(frameLogHeader()));
+    // the frame-row index gap (2026-11-05): a compaction submission's row carries the
+    // frame number it took; the other events none
+    auto compaction = stopWithMoves;
+    compaction.event = FrameLogEvent::Compaction;
+    compaction.frameIndex = 41u;
+    CHECK(formatFrameLogRow(compaction).starts_with("7,compaction,41,"));
+    CHECK(fieldCount(formatFrameLogRow(compaction)) == fieldCount(frameLogHeader()));
+    CHECK(formatFrameLogRow(stopWithMoves).starts_with("7,stop,,"));
     CHECK(fieldCount(formatFrameLogRow(stopWithHeaps)) == fieldCount(frameLogHeader()));
     auto stopWithTree = stop;
     stopWithTree.procBytes = 8368u;
     CHECK(
       formatFrameLogRow(stopWithTree)
-      == "7,stop,,,,,,,,,,,,,9,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,8368,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n");
+      == "7,stop,,,,,,,,,,,,,9,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,8368,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n");
 
     // as many fields as the header
     const auto header = fieldCount(frameLogHeader());
@@ -309,8 +318,10 @@ TEST_CASE("FrameLog")
     // (a)): 118 with the texture heaps, their bytes and the dedicated slot textures;
     // LP6.4b (C68 (b)-(d)): 122 with the evictions, the floored slots, the in-place feeds
     // and the arena bytes moved; LP6.6 (C73): 123 with the TAA history; LP6.7 (C75):
-    // 126 with the masked occlusion culling's lights and surfaces culled and its time
-    CHECK(header == 126u);
+    // 126 with the masked occlusion culling's lights and surfaces culled and its time;
+    // F2.11 (2026-11-05): 127 with moc_ms split into moc_fill_ms and moc_test_ms. F1.15:
+    // the count is the header's own (its text is pinned above), never kept by hand
+    CHECK(header == std::size_t(std::ranges::count(frameLogHeader(), ',') + 1));
     CHECK(fieldCount(formatFrameLogRow(exampleRow())) == header);
     CHECK(fieldCount(formatFrameLogRow(withResources)) == header);
     CHECK(fieldCount(formatFrameLogRow(withPasses)) == header);
@@ -353,17 +364,16 @@ TEST_CASE("FrameLog")
     CHECK(
       formatFrameLogRow(withShadows)
         .ends_with(",2,4,37,6,2,0,0,0,3,2,1,4,6291456,0.432,0.123,21,1,5,2,11,927,920,7,"
-                   "698,1.500,4096,3,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
+                   "698,1.500,4096,3,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
     CHECK(fieldCount(formatFrameLogRow(withShadows)) == header);
     // a frame row without them leaves the three empty
     auto withoutLists = withShadows;
     withoutLists.smDrawsLocal.reset();
     withoutLists.smDrawsGlobal.reset();
     withoutLists.smDrawsTranslucent.reset();
-    CHECK(
-      formatFrameLogRow(withoutLists)
-        .ends_with(
-          ",0.123,21,,,,11,927,920,7,698,1.500,4096,3,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
+    CHECK(formatFrameLogRow(withoutLists)
+            .ends_with(",0.123,21,,,,11,927,920,7,698,1.500,4096,3,,,,,,,,,,,,,,,,,,,,,,,"
+                       ",,,,,,,,,\n"));
 
     // LP6.0 (C65): a row with every column: the CPU record's split after
     // perforated_draws, lists_ms ... submit_ms and record_other_ms, then the reserved GPU
@@ -412,7 +422,8 @@ TEST_CASE("FrameLog")
     // LP6.7 (C75): the lights and surfaces the masked occlusion buffer hid, its time
     full.lightsMocCulled = 2u;
     full.surfacesMocCulled = 41u;
-    full.mocMs = 0.45678;
+    full.mocFillMs = 0.45678;
+    full.mocTestMs = 0.12345;
     const auto fullRow = formatFrameLogRow(full);
     CHECK(fieldCount(fullRow) == header);
     CHECK(fullRow.find(",,") == std::string::npos);
@@ -420,13 +431,13 @@ TEST_CASE("FrameLog")
       fullRow.ends_with(",698,1.500,4096,3,3.210,1.000,0.500,2.250,0.125,0.002,0.333,0."
                         "050,0.188,0.000,0.247,0.136,0.086,2412,17,1.235,0.500,0.063,3,1,"
                         "2,201326592,5,12,3,1,"
-                        "4194304,16,2,41,0.457\n"));
+                        "4194304,16,2,41,0.457,0.123\n"));
     // the split's, the GPU columns' and the records' fields are empty in a frame row
     // without them (a pass not begun), and in a start or stop row
     CHECK(formatFrameLogRow(withShadows)
-            .ends_with(",4096,3,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
+            .ends_with(",4096,3,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
     CHECK(formatFrameLogRow(sessionRow(FrameLogEvent::Start))
-            .ends_with(",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
+            .ends_with(",,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,\n"));
   }
 }
 
@@ -434,8 +445,7 @@ TEST_CASE("FrameLogWriter")
 {
   SECTION("open, append and close")
   {
-    const auto path =
-      std::filesystem::temp_directory_path() / "TbLitLibTest-frame-log.csv";
+    const auto path = testTempPath("TbLitLibTest-frame-log.csv");
     std::filesystem::remove(path);
 
     auto writer = FrameLogWriter{};
@@ -470,8 +480,7 @@ TEST_CASE("FrameLogWriter")
   SECTION("a log of another format is not appended to")
   {
     // review V.8: rows of the new format under an older header
-    const auto path =
-      std::filesystem::temp_directory_path() / "TbLitLibTest-old-frame-log.csv";
+    const auto path = testTempPath("TbLitLibTest-old-frame-log.csv");
     const auto oldLog = std::string{"frame,cpu_record_ms,gpu_clear_ms\n0,1.000,0.500\n"};
     {
       auto file = std::ofstream{path, std::ios::binary | std::ios::trunc};
@@ -501,9 +510,8 @@ TEST_CASE("FrameLogWriter")
   SECTION("open with an unopenable path is an error message")
   {
     auto writer = FrameLogWriter{};
-    const auto error = writer.open(
-      std::filesystem::temp_directory_path() / "no-such-directory-TbLitLibTest"
-      / "log.csv");
+    const auto error =
+      writer.open(testTempPath("no-such-directory-TbLitLibTest") / "log.csv");
     CHECK(error);
     CHECK_FALSE(writer.isOpen());
   }

@@ -23,6 +23,7 @@
 #include "PipelineCompiler.h"
 #include "RenderThread.h"
 #include "StringMakers.h"
+#include "TestTempPath.h"
 #include "TonemapModel.h"
 #include "fs/TestEnvironment.h"
 #include "lit/BprocModel.h"
@@ -34,6 +35,7 @@
 #include "lit/EnginePipelineState.h"
 #include "lit/EngineTables.h"
 #include "lit/EntityState.h"
+#include "lit/FrameLog.h"
 #include "lit/FramePacer.h"
 #include "lit/GameDeclSource.h"
 #include "lit/GameFile.h"
@@ -383,12 +385,16 @@ using namespace std::chrono_literals;
 // again for an image (C66, D169), LP6.4a's texture heaps, their bytes and the dedicated
 // slot textures (C68 (a)), LP6.4b's evictions, floored slots, in-place feeds and arena
 // bytes moved (C68 (b)-(d)), LP6.6's TAA history (C73), LP6.7's masked occlusion
-// culling's lights and surfaces culled and its time (C75)
-constexpr auto FrameLogFields = std::size_t{126};
+// culling's lights and surfaces culled and its time (C75), F2.11's split of that time
+// (moc_fill_ms, moc_test_ms). F1.15 (2026-11-05): the count is the header's own
+const auto FrameLogFields = std::size_t(std::ranges::count(frameLogHeader(), ',') + 1);
 
 // LP2.0, T0.2: the validation layer's id of "Vertex attribute at location N not consumed
 // by vertex shader" (mirror.json M-PIPE-DEFECT-01), as this machine's layer names it
 constexpr auto OutputNotConsumedId = std::string_view{"WARNING-Shader-OutputNotConsumed"};
+// F1.14 (2026-11-05): and its text, by which the defect is told from other messages of
+// the id (TbUiLib's tests' rule, tst_LitPreviewPanel.cpp)
+constexpr auto OutputNotConsumedText = std::string_view{"not consumed by vertex shader"};
 
 // LP3.1 (C59): the layer's id of "the fragment shader writes to output Location 0 but
 // there is no pColorAttachments[0]": builtin/depth's colour write in the depth-only
@@ -425,7 +431,12 @@ struct ValidationMessages
   // LPF.2: the product instance's message sink (VulkanInstanceOptions::messages)
   void receive(const VulkanMessage& message)
   {
-    if (!message.error && !mirroredMessageId.empty() && message.id == mirroredMessageId)
+    // F1.14 (2026-11-05, DQ-10): by the defect's text, as TbUiLib's tests count it: the
+    // layer gives the id also to a stage-interface output no next stage reads, which is
+    // SinkBroom's own blob's mismatch and counts as a warning, its text kept
+    if (
+      !message.error && !mirroredMessageId.empty() && message.id == mirroredMessageId
+      && message.text.find(OutputNotConsumedText) != std::string::npos)
     {
       ++mirrored;
       return;
@@ -454,7 +465,7 @@ struct ValidationMessages
     const auto lock = std::scoped_lock{mutex};
     std::cout << label << ": validation errors " << errors << ", warnings " << warnings
               << ", mirrored engine warnings " << mirrored << " (" << mirroredDepthOnly
-              << " of the shadow atlas's depth-only pipelines)\n";
+              << " of the shadow atlas's depth-only pipelines), mirrored by text: all\n";
     for (const auto& text : texts)
     {
       std::cout << "  " << text << "\n";
@@ -738,8 +749,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
   {
     const auto validation = GENERATE(false, true);
     auto messages = ValidationMessages{};
-    const auto logPath =
-      std::filesystem::temp_directory_path() / "TbLitLibTest-headless-frame-log.csv";
+    const auto logPath = testTempPath("TbLitLibTest-headless-frame-log.csv");
     std::filesystem::remove(logPath);
     auto deviceName = std::string{};
 
@@ -1425,8 +1435,7 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
   {
     const auto forceFifo = GENERATE(false, true);
     auto messages = ValidationMessages{};
-    const auto logPath =
-      std::filesystem::temp_directory_path() / "TbLitLibTest-window-frame-log.csv";
+    const auto logPath = testTempPath("TbLitLibTest-window-frame-log.csv");
     std::filesystem::remove(logPath);
 
     {
@@ -2722,8 +2731,7 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
   SECTION("D78: a 40 MB batch takes two frames under the 32 MB cap")
   {
     auto messages = ValidationMessages{};
-    const auto logPath =
-      std::filesystem::temp_directory_path() / "TbLitLibTest-upload-frame-log.csv";
+    const auto logPath = testTempPath("TbLitLibTest-upload-frame-log.csv");
     std::filesystem::remove(logPath);
     auto logged = std::vector<std::uint64_t>{};
     {
@@ -3222,6 +3230,35 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
         false));
       CHECK(session->deviceMemoryAllocations() <= live + 1);
       session->setAllocationLimitForTesting(0);
+      // F2.4 (2026-11-05): with room again, the slots refused for it are asked again as
+      // first requests at the next frame (before, a Loading slot refused for the room
+      // stayed refused for good; a Replacing one waits for it, D102)
+      {
+        const auto drawn = session->framesPresented();
+        session->requestFrame();
+        REQUIRE(
+          waitFor([&] { return session->framesPresented() > drawn; }, 5000ms, false));
+      }
+      auto reRequests = std::uint64_t{0};
+      auto stillRefused = std::size_t{0};
+      REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
+        reRequests = access.images.roomReRequests();
+        for (const auto id : ids)
+        {
+          const auto seen = slotSeen(access.images, id);
+          stillRefused +=
+            seen.state == ImageSlots::State::Default
+                && seen.reason.find("maxMemoryAllocationCount") != std::string::npos
+              ? 1
+              : 0;
+        }
+      }));
+      std::cout << fmt::format(
+        "F2.4: room again: {} slots asked again, {} still refused for the room\n",
+        reRequests,
+        stillRefused);
+      CHECK(reRequests == ids.size());
+      CHECK(stillRefused == 0u);
 
       teardown(*session);
       CHECK(session->lastDeviceReleaseCount() == 0u);
@@ -3894,8 +3931,7 @@ TEST_CASE("LitSession GPU resources on the retail game (D72)", "[.][retail]")
   }
 
   auto messages = ValidationMessages{};
-  const auto logPath =
-    std::filesystem::temp_directory_path() / "TbLitLibTest-d72-frame-log.csv";
+  const auto logPath = testTempPath("TbLitLibTest-d72-frame-log.csv");
   std::filesystem::remove(logPath);
   struct Peak
   {
@@ -4109,7 +4145,7 @@ const auto Lp22aMaterials = std::string{
  */
 std::filesystem::path assembleLitRoot(const std::filesystem::path& gamePath)
 {
-  const auto root = std::filesystem::temp_directory_path() / "TbLitLibTest-lp22a";
+  const auto root = testTempPath("TbLitLibTest-lp22a");
   std::filesystem::remove_all(root);
   const auto base = root / "base";
   const auto fixture = litFixtureFolder();
@@ -5188,11 +5224,14 @@ struct ChainFrame
   bool settled = false;
   std::optional<std::array<float, 4>> hdrClear;
   nvrhi::Format targetFormat = nvrhi::Format::UNKNOWN;
+  // F3.16 (2026-11-05): the frame's index (RenderFrameAccess::frameIndex)
+  std::uint64_t frameIndex = 0;
 };
 
 ChainFrame chainFrameOf(const RenderFrameAccess& access)
 {
   auto frame = ChainFrame{};
+  frame.frameIndex = access.frameIndex;
   frame.tonemap = access.tonemap.lastStats();
   frame.lit = access.passes.lastStats();
   frame.convergence = access.convergence;
@@ -5898,8 +5937,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     "idle is zero frames, a camera change one frame; the frame log's columns; the "
     "LDR readback")
   {
-    const auto logPath =
-      std::filesystem::temp_directory_path() / "TbLitLibTest-lp22b-frame-log.csv";
+    const auto logPath = testTempPath("TbLitLibTest-lp22b-frame-log.csv");
     std::filesystem::remove(logPath);
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
@@ -6404,8 +6442,7 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
     snapshot->generation = 7;
     snapshot->sequence = 1;
 
-    const auto logPath =
-      std::filesystem::temp_directory_path() / "TbLitLibTest-v22-frame-log.csv";
+    const auto logPath = testTempPath("TbLitLibTest-v22-frame-log.csv");
     std::filesystem::remove(logPath);
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
@@ -6921,6 +6958,9 @@ struct ParityLists
   std::uint64_t dressIdentified = 0;
   std::uint64_t dressUnmatched = 0;
   std::uint64_t inlinedSurfaces = 0;
+  // F3.25 (2026-11-05): with the draw log on, the frame's own Pass::Blend records (the
+  // log's last blendDraws of them) as "light: material, area, entity, program, depth"
+  std::vector<std::string> blendRecords;
 };
 
 struct ParityFrame
@@ -6943,7 +6983,8 @@ std::optional<ParityFrame> settledParityFrame(
   const CameraState& camera,
   const bool needsLight,
   const bool interactionsSkipped,
-  const std::chrono::milliseconds timeout)
+  const std::chrono::milliseconds timeout,
+  const bool blendLog = false)
 {
   session.setCamera(camera);
   const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -6953,7 +6994,7 @@ std::optional<ParityFrame> settledParityFrame(
     auto frame = std::make_shared<ParityFrame>();
     auto done = std::make_shared<std::promise<void>>();
     auto future = done->get_future();
-    session.runAfterTonemapForTesting([frame, done](RenderFrameAccess& access) {
+    session.runAfterTonemapForTesting([frame, done, blendLog](RenderFrameAccess& access) {
       frame->frame = chainFrameOf(access);
       const auto& lists = access.passes.lists();
       frame->lists.flowMs = lists.flowMs;
@@ -6974,6 +7015,46 @@ std::optional<ParityFrame> settledParityFrame(
       {
         const auto* name = findKey(light.record->spawnArgs, "name");
         frame->lists.lights.emplace_back(name ? *name : std::string{}, light.scissor);
+      }
+      if (blendLog)
+      {
+        // F3.25: the log keeps every frame's records since it was switched on; this
+        // frame's blend draws are its last blendDraws Pass::Blend records
+        auto blends = std::vector<const LitDrawRecord*>{};
+        for (const auto& record : access.passes.drawLogForTesting())
+        {
+          if (record.pass == LitDrawRecord::Pass::Blend)
+          {
+            blends.push_back(&record);
+          }
+        }
+        const auto own = std::min(blends.size(), frame->frame.lit.blendDraws);
+        for (auto i = blends.size() - own; i < blends.size(); ++i)
+        {
+          const auto& record = *blends[i];
+          auto lightName = std::string{"?"};
+          for (const auto& light : lists.lights)
+          {
+            if (light.record->id == record.light)
+            {
+              const auto* name = findKey(light.record->spawnArgs, "name");
+              lightName = name ? *name : std::string{};
+            }
+          }
+          const auto depth = record.state & engine_gls::DepthFuncBits;
+          frame->lists.blendRecords.push_back(fmt::format(
+            "{}: {}, area {}, entity {}, program {}, depth {}",
+            lightName,
+            record.chunk.material.empty() ? std::string{"(the light's cube)"}
+                                          : record.chunk.material,
+            record.chunk.area,
+            record.chunk.entity,
+            record.program,
+            depth == engine_gls::DepthFuncEqual    ? "EQUAL"
+            : depth == engine_gls::DepthFuncAlways ? "ALWAYS"
+            : depth == engine_gls::DepthFuncLess   ? "LESS"
+                                                   : "GREATER"));
+        }
       }
       done->set_value();
     });
@@ -8100,7 +8181,13 @@ void parityRows(const bool moc)
     CAPTURE(name);
     REQUIRE(std::filesystem::exists(root / "base" / shaderBlobPath(name, stage)));
   }
-  const auto rowsText = readTextFile(root / "parity" / "rows.json");
+  // F3.15 (2026-11-05): TB_LIT_PARITY_ROWS, when set, names the rows.json read instead of
+  // the root's (a refresh-meta --out into a scratch folder, before the director installs
+  // it in the root)
+  const auto* rowsValue = std::getenv("TB_LIT_PARITY_ROWS");
+  const auto rowsPath = rowsValue && *rowsValue ? std::filesystem::path{rowsValue}
+                                                : root / "parity" / "rows.json";
+  const auto rowsText = readTextFile(rowsPath);
   const auto record = JsonReader{rowsText}.value();
   REQUIRE(record);
   const auto* rows = record->find("rows");
@@ -8256,13 +8343,32 @@ void parityRows(const bool moc)
         expect && expect->find("lights_drawn")
         && expect->find("lights_drawn")->kind == JsonValue::Kind::Number
         && expect->find("lights_drawn")->number == 0.0;
+      // F3.25 (2026-11-05): F05's Pass::Blend records dumped once (the cull-off case)
+      const auto blendLog = id == "F05" && !moc;
+      if (blendLog)
+      {
+        REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+          access.passes.setDrawLogForTesting(true);
+        }));
+      }
       const auto settledRow = settledParityFrame(
         *session,
         camera,
         !control && !expectsNoLight && !ambientOnly,
         ambientOnly,
-        left());
+        left(),
+        blendLog);
       REQUIRE(settledRow);
+      if (blendLog)
+      {
+        REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+          access.passes.setDrawLogForTesting(false);
+        }));
+        std::cout << fmt::format(
+          "F3.25: F05's blend draws ({}): {}\n",
+          settledRow->frame.lit.blendDraws,
+          fmt::join(settledRow->lists.blendRecords, "; "));
+      }
       const auto* settled = &settledRow->frame;
       const auto image = session->readbackLdrForTesting(left());
       REQUIRE(image);
@@ -8423,7 +8529,8 @@ void parityRows(const bool moc)
           "\"fog_draws\": {}, \"blend_draws\": {}, "
           "\"fog_lights\": {}, "
           "\"blend_lights\": {}, \"portals_fogged\": {}, \"model_entities\": {}, "
-          "\"model_instances\": {}, \"model_draws\": {}, \"models_pending\": {}, "
+          "\"model_instances\": {}, \"model_draws\": {}, \"model_view_draws\": {}, "
+          "\"model_shadow_draws\": {}, \"models_pending\": {}, "
           "\"models_skinned\": {}, \"dress_surfaces\": {}, \"dress_unmatched\": {}, "
           "\"dress_identified\": {}, \"inlined_surfaces\": {}, {}, \"view_lights\": "
           "[{}]}}\n",
@@ -8473,6 +8580,8 @@ void parityRows(const bool moc)
           settledRow->lists.modelEntities,
           settledRow->lists.modelInstances,
           lit.modelDraws,
+          lit.modelDraws - lit.modelShadowDraws,
+          lit.modelShadowDraws,
           settledRow->lists.modelsPending,
           settledRow->lists.modelsSkinned,
           lit.dressSurfaces,
@@ -8610,6 +8719,19 @@ void parityRows(const bool moc)
             // as nothing (K41)
             CAPTURE(lit.modelDraws);
             CHECK(parityCountHolds(value, lit.modelDraws));
+          }
+          else if (key == "model_view_draws")
+          {
+            // F3.15 (2026-11-05, DQ-14): the view's draws of model instances, pass 6's
+            // apart (a settled frame that keeps its tiles cached draws none of those):
+            // pinned exact
+            CAPTURE(lit.modelDraws, lit.modelShadowDraws);
+            CHECK(parityCountHolds(value, lit.modelDraws - lit.modelShadowDraws));
+          }
+          else if (key == "model_shadow_draws")
+          {
+            CAPTURE(lit.modelShadowDraws);
+            CHECK(parityCountHolds(value, lit.modelShadowDraws));
           }
           else if (key == "models_pending")
           {
@@ -9300,8 +9422,7 @@ TEST_CASE("LitSession ambient pass on a GPU (LP4.2a)", "[.][litgpu2]")
 
   SECTION("no bake: every probe defaulted, the pass black over the prepass's black")
   {
-    const auto logPath =
-      std::filesystem::temp_directory_path() / "TbLitLibTest-lp42a-frame-log.csv";
+    const auto logPath = testTempPath("TbLitLibTest-lp42a-frame-log.csv");
     std::filesystem::remove(logPath);
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
@@ -12568,8 +12689,7 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu2]")
       const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
-      const auto logPath =
-        std::filesystem::temp_directory_path() / "TbLitLibTest-lpf1-trigger.csv";
+      const auto logPath = testTempPath("TbLitLibTest-lpf1-trigger.csv");
       auto rig = FeedRig{instance, root, logPath};
       auto& service = *rig.service;
       auto& session = *rig.session;
@@ -12891,8 +13011,7 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu2]")
       const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
-      const auto logPath =
-        std::filesystem::temp_directory_path() / "TbLitLibTest-lpf1-replacing.csv";
+      const auto logPath = testTempPath("TbLitLibTest-lpf1-replacing.csv");
       auto rig = FeedRig{instance, root, logPath};
       auto& session = *rig.session;
       auto report = std::vector<std::string>{};
@@ -13151,8 +13270,7 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu2]")
       const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
-      const auto logPath =
-        std::filesystem::temp_directory_path() / "TbLitLibTest-lp64b-in-place.csv";
+      const auto logPath = testTempPath("TbLitLibTest-lp64b-in-place.csv");
       auto rig = FeedRig{instance, root, logPath};
       auto& session = *rig.session;
       struct Seen
@@ -13339,8 +13457,7 @@ TEST_CASE("LitSession live feed on a GPU (LPF.1)", "[.][litgpu2]")
       const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
-      const auto logPath =
-        std::filesystem::temp_directory_path() / "TbLitLibTest-lpf1-reparse.csv";
+      const auto logPath = testTempPath("TbLitLibTest-lpf1-reparse.csv");
       auto rig = FeedRig{instance, root, logPath};
       auto& service = *rig.service;
       auto& session = *rig.session;
@@ -14898,8 +15015,7 @@ TEST_CASE("LitSession provisional editor-image sizes on a GPU (LP5.F)", "[.][lit
       const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
-      const auto logPath =
-        std::filesystem::temp_directory_path() / "TbLitLibTest-lp5f-startup.csv";
+      const auto logPath = testTempPath("TbLitLibTest-lp5f-startup.csv");
       const auto maps = std::vector<std::pair<std::string, std::string>>{
         {"the LP2.2a fixture", lp22aMapText()},
         {"the fixture with 2000 boxes", feedBatchMapText(2000)},
@@ -15487,8 +15603,7 @@ TEST_CASE(
       const auto instance = testInstance(true, false, messages);
       REQUIRE(instance.valid());
       REQUIRE(initInstanceDispatcher(instance.handles()));
-      const auto logPath =
-        std::filesystem::temp_directory_path() / "TbLitLibTest-lp5g-reload.csv";
+      const auto logPath = testTempPath("TbLitLibTest-lp5g-reload.csv");
       // the poll on, as the editor's material service runs it
       auto rig = FeedRig{instance, root, logPath, 100ms};
       auto& service = *rig.service;
@@ -15673,8 +15788,7 @@ TEST_CASE(
         const auto instance = testInstance(true, false, messages);
         REQUIRE(instance.valid());
         REQUIRE(initInstanceDispatcher(instance.handles()));
-        const auto logPath =
-          std::filesystem::temp_directory_path() / "TbLitLibTest-lp5g-image.csv";
+        const auto logPath = testTempPath("TbLitLibTest-lp5g-image.csv");
         auto rig = FeedRig{instance, root, logPath, 100ms};
         auto& session = *rig.session;
 
@@ -15913,7 +16027,7 @@ TEST_CASE("LitSession the .proc's triangles adopted on a GPU (LP7.4)", "[.][litg
   REQUIRE_FALSE(root.empty());
   // from inside lp1b_light (64 0 96, radius 200) at the east wall, x 256
   const auto camera = litCamera({60, 0, 64}, {1, 0, 0}, {0, 0, 1});
-  const auto logPath = std::filesystem::temp_directory_path() / "TbLitLibTest-lp74.csv";
+  const auto logPath = testTempPath("TbLitLibTest-lp74.csv");
   std::filesystem::remove(logPath);
   auto messages = ValidationMessages{};
   messages.mirroredMessageId = OutputNotConsumedId;
@@ -19554,6 +19668,200 @@ TEST_CASE("LitSession perforated shadows on a GPU (LP3.4)", "[.][litgpu2]")
   CHECK(messages.warnings == 0);
 }
 
+/**
+ * F3.26 (2026-11-05): the pending-registers solid draw (CasterSets::resolve, D77: a
+ * Perforated caster whose registers are pending is drawn solid as an opaque caster, its
+ * tile provisional; LitPasses' perforated shadow draws). LP3.4's grate settled, then
+ * offered again as the map's last entity (another preview id, so no registers of its own
+ * are kept, D52) with a shaderParm no evaluation has met, while the service's
+ * evaluations are held: the grate's pass-6 draws carry no texture_color draw, its tile
+ * is provisional and the frame unsettled; released, the texture_color draws come back
+ * and the tile settles with bars and holes. Hidden: it needs a GPU and the blobs.
+ */
+TEST_CASE(
+  "LitSession perforated caster with its registers pending on a GPU (F3.26)",
+  "[.][litgpu4]")
+{
+  const auto* gamePathValue = std::getenv("TB_LIT_GAME_PATH");
+  if (!gamePathValue || !*gamePathValue)
+  {
+    SKIP("TB_LIT_GAME_PATH is not set: the passes need the engine's shader blobs");
+  }
+  const auto started = std::chrono::steady_clock::now();
+  const auto root = assembleLp3Root(std::filesystem::path{gamePathValue});
+  REQUIRE_FALSE(root.empty());
+  std::filesystem::copy_file(
+    litFixtureFolder() / "materials" / "lp3_parity.mtr",
+    root / "base" / "materials" / "lp3_parity.mtr");
+
+  // the service's "evaluate" work items wait in the parse thread's hook while held
+  struct Hold
+  {
+    std::mutex mutex;
+    std::condition_variable changed;
+    bool held = false;
+    std::size_t waited = 0;
+  };
+  const auto hold = std::make_shared<Hold>();
+  const auto release = [hold] {
+    {
+      const auto lock = std::scoped_lock{hold->mutex};
+      hold->held = false;
+    }
+    hold->changed.notify_all();
+  };
+  auto options = MaterialServiceOptions{};
+  options.makeSource = [root](const std::atomic<bool>& cancel) {
+    return std::unique_ptr<DeclSource>{std::make_unique<GameDeclSource>(root, &cancel)};
+  };
+  options.pollInterval = 0ms;
+  options.imageBudgetBytes = 0;
+  options.beforeWorkItemForTesting = [hold](const std::string_view kind) {
+    if (kind != "evaluate")
+    {
+      return;
+    }
+    auto lock = std::unique_lock{hold->mutex};
+    if (hold->held)
+    {
+      ++hold->waited;
+    }
+    hold->changed.wait_for(lock, 60000ms, [&] { return !hold->held; });
+  };
+  auto service = MaterialService::create(std::move(options))
+                 | kdl::if_error([](const auto& e) { FAIL(e.msg); }) | kdl::value();
+  // released on every exit, before the service stops
+  const auto releaseAtExit =
+    std::shared_ptr<void>{nullptr, [release](void*) { release(); }};
+
+  auto messages = ValidationMessages{};
+  messages.mirroredMessageId = OutputNotConsumedId;
+  const auto instance = testInstance(true, false, messages);
+  REQUIRE(instance.valid());
+  REQUIRE(initInstanceDispatcher(instance.handles()));
+  auto events = Events{};
+  auto session = rootSession(instance, events, *service, root, true, false, true);
+  session->setExposed(true);
+  REQUIRE(waitFor(
+    [&] { return events.count(SessionEvent::ReadyForSnapshot) >= 1u; }, 5000ms, false));
+  auto sequence = std::uint64_t{0};
+  const auto offer = [&](const std::string& text) {
+    REQUIRE(session->offerSnapshot(lp3Snapshot(text, root, "lp3_point.map", ++sequence)));
+  };
+  const auto clearLog = [&] {
+    REQUIRE(inFrame(*session, [](RenderFrameAccess& access) {
+      access.passes.setDrawLogForTesting(true);
+    }));
+  };
+  const auto camera = litCamera({-200, 0, 128}, {1, 0, 0}, {0, 0, 1});
+  // the grate's pass-6 draws, and of them the texture_color (alpha-tested) ones
+  const auto grateDraws = [](const std::vector<LitDrawRecord>& log) {
+    auto draws = std::pair<std::size_t, std::size_t>{0, 0};
+    for (const auto& draw : log)
+    {
+      if (
+        draw.pass == LitDrawRecord::Pass::Shadow
+        && draw.chunk.material == "textures/lp3p/grate")
+      {
+        ++draws.first;
+        draws.second += draw.program == EngineBuiltinTextureVertexColor ? 1u : 0u;
+      }
+    }
+    return draws;
+  };
+
+  // the grate settled, its registers evaluated for its entity's parms
+  const auto text = lp3GrateMapText("lp3p/grate");
+  offer(text);
+  clearLog();
+  const auto first = settledShadowFrame(*session, camera, 1, true);
+  REQUIRE(first);
+  REQUIRE(first->records.size() == 1u);
+
+  // the grate as the last entity with shaderParm7 0.25, the evaluations held
+  const auto from = text.find("// entity 2");
+  const auto to = text.find("// entity 3");
+  REQUIRE(from != std::string::npos);
+  REQUIRE(to != std::string::npos);
+  auto grate = text.substr(from, to - from);
+  const auto name = std::string{"\"name\" \"lp3_grate\"\n"};
+  const auto at = grate.find(name);
+  REQUIRE(at != std::string::npos);
+  grate.insert(at + name.size(), "\"shaderParm7\" \"0.25\"\n");
+  {
+    const auto lock = std::scoped_lock{hold->mutex};
+    hold->held = true;
+  }
+  clearLog();
+  offer(text.substr(0, from) + text.substr(to) + grate);
+  auto pending = std::optional<ShadowFrame>{};
+  const auto deadline = std::chrono::steady_clock::now() + 30000ms;
+  while (!pending && std::chrono::steady_clock::now() < deadline)
+  {
+    auto frame =
+      settledShadowFrame(*session, camera, 1, true, {}, std::nullopt, 10000ms, false);
+    REQUIRE(frame);
+    if (
+      frame->records.size() == 1u && frame->records[0].provisional
+      && grateDraws(frame->drawLog).first > 0u)
+    {
+      pending = std::move(frame);
+    }
+  }
+  REQUIRE(pending);
+  const auto held = grateDraws(pending->drawLog);
+  auto waited = std::size_t{0};
+  {
+    const auto lock = std::scoped_lock{hold->mutex};
+    waited = hold->waited;
+  }
+  // drawn solid: no texture_color draw, the tile provisional, the frame not settled
+  CHECK(waited >= 1u);
+  CHECK(held.first >= 1u);
+  CHECK(held.second == 0u);
+  CHECK(pending->stats.tilesProvisional + pending->stats.tilesDrawn >= 1u);
+  CHECK(pending->stats.shadowsPending);
+  CHECK_FALSE(pending->converged);
+  const auto solid = grateTileOf(*pending, pending->records[0]);
+
+  // released: the texture_color draws again, the tile settled with bars and holes
+  clearLog();
+  release();
+  const auto settled = settledShadowFrame(*session, camera, 1, true);
+  REQUIRE(settled);
+  REQUIRE(settled->records.size() == 1u);
+  const auto after = grateDraws(settled->drawLog);
+  CHECK(after.second > 0u);
+  CHECK_FALSE(settled->records[0].provisional);
+  CHECK(settled->converged);
+  CHECK(settled->stats.tilesProvisional == 0u);
+  const auto perforated = grateTileOf(*settled, settled->records[0]);
+  CHECK(perforated.bars > 0u);
+  CHECK(perforated.holes > 0u);
+  std::cout << fmt::format(
+    "F3.26: the registers pending ({} evaluations held): the grate's pass-6 draws {} "
+    "({} texture_color), the tile provisional, {} bars and {} holes in its footprint; "
+    "released: {} draws ({} texture_color), {} bars and {} holes; case {:.1f} s\n",
+    waited,
+    held.first,
+    held.second,
+    solid.bars,
+    solid.holes,
+    after.first,
+    after.second,
+    perforated.bars,
+    perforated.holes,
+    std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
+  teardown(*session, std::nullopt);
+  session.reset();
+  release();
+  service->requestStop();
+  service->join();
+  messages.print("F3.26 the pending-registers solid draw, validation");
+  CHECK(messages.errors == 0);
+  CHECK(messages.warnings == 0);
+}
+
 // LP3.4 (D158, §4's exit): the debug views on the shadows map's rooms H01 and H11, as
 // PNGs under TB_LIT_PNG_OUT for the director: a copy of the parity preview root (read
 // only; the debug view's builtin/texture blobs added from the game folder), H01's and
@@ -19570,7 +19878,7 @@ TEST_CASE("LitSession shadow debug views on the shadows map (LP3.4)", "[.][litgp
   const auto started = std::chrono::steady_clock::now();
   const auto parity = std::filesystem::path{parityValue};
   const auto gamePath = std::filesystem::path{gamePathValue};
-  const auto root = std::filesystem::temp_directory_path() / "TbLitLibTest-lp34-views";
+  const auto root = testTempPath("TbLitLibTest-lp34-views");
   std::filesystem::remove_all(root);
   std::filesystem::create_directories(root);
   std::filesystem::copy(
@@ -20826,9 +21134,9 @@ TEST_CASE("LitSession arena compaction on a GPU (LP6.4b)", "[.][litgpu3]")
     CAPTURE(idle);
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
-    const auto logPath =
-      std::filesystem::temp_directory_path()
-      / (idle ? "TbLitLibTest-lp64b-compaction-idle.csv" : "TbLitLibTest-lp64b-compaction.csv");
+    const auto logPath = testTempPath(
+      idle ? "TbLitLibTest-lp64b-compaction-idle.csv"
+           : "TbLitLibTest-lp64b-compaction.csv");
     std::filesystem::remove(logPath);
     auto movedBytes = std::uint64_t{0};
     {
@@ -21195,6 +21503,43 @@ std::optional<TargetFrame> settledTargets(
     timeout);
 }
 
+/**
+ * F3.16 (2026-11-05): the largest distance of two images' values read from halves, in
+ * units of the half ULP at the larger magnitude of each pair (2^-24 below the normal
+ * range), and how many values differ at all; equal non-finite values are 0 apart, any
+ * other non-finite pair infinitely far
+ */
+std::pair<double, std::size_t> halfUlpsApart(const TargetImage& a, const TargetImage& b)
+{
+  if (a.values.size() != b.values.size())
+  {
+    return {std::numeric_limits<double>::infinity(), a.values.size()};
+  }
+  auto largest = 0.0;
+  auto differing = std::size_t{0};
+  for (std::size_t i = 0; i < a.values.size(); ++i)
+  {
+    const auto x = a.values[i];
+    const auto y = b.values[i];
+    if (x == y)
+    {
+      continue;
+    }
+    ++differing;
+    if (!std::isfinite(x) || !std::isfinite(y))
+    {
+      largest = std::numeric_limits<double>::infinity();
+      continue;
+    }
+    const auto magnitude = std::max(std::abs(x), std::abs(y));
+    const auto ulp = magnitude < 6.103515625e-05f
+                       ? std::ldexp(1.0, -24)
+                       : std::ldexp(1.0, std::ilogb(magnitude) - 10);
+    largest = std::max(largest, std::abs(double(x) - double(y)) / ulp);
+  }
+  return {largest, differing};
+}
+
 // LP6.5a: the LP4.2a synthetic bake (an L0 SH of irradiance 1/4 per automatic probe,
 // constant radiance cubes) and its materials in the root, and an unlit opaque material
 // (one SL_AMBIENT stage: the prepass draws it, the ambient pass and pass 3 do not)
@@ -21310,10 +21655,8 @@ TEST_CASE("LitSession the G-buffer and SSAO on a GPU (LP6.5a)", "[.][litgpu4]")
     "C69: (a) the normals on a wall, (b) no pass 3 without SSAO, (c) pass 3's draws, "
     "(d) Stop")
   {
-    const auto logPath =
-      std::filesystem::temp_directory_path() / "TbLitLibTest-lp65a-frame-log.csv";
-    const auto offLogPath =
-      std::filesystem::temp_directory_path() / "TbLitLibTest-lp65a-off-frame-log.csv";
+    const auto logPath = testTempPath("TbLitLibTest-lp65a-frame-log.csv");
+    const auto offLogPath = testTempPath("TbLitLibTest-lp65a-off-frame-log.csv");
     std::filesystem::remove(logPath);
     std::filesystem::remove(offLogPath);
     auto messages = ValidationMessages{};
@@ -21597,8 +21940,7 @@ TEST_CASE("LitSession the G-buffer and SSAO on a GPU (LP6.5a)", "[.][litgpu4]")
 
   SECTION("C70: (a) SSAO on the baked corner, (e) a resize, (f) Stop")
   {
-    const auto logPath =
-      std::filesystem::temp_directory_path() / "TbLitLibTest-lp65a-ssao-frame-log.csv";
+    const auto logPath = testTempPath("TbLitLibTest-lp65a-ssao-frame-log.csv");
     std::filesystem::remove(logPath);
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
@@ -21818,8 +22160,7 @@ TEST_CASE("LitSession the G-buffer and SSAO on a GPU (LP6.5a)", "[.][litgpu4]")
 
   SECTION("C70: (b) the pending rule: _white at t4 and unconverged until the compile")
   {
-    const auto logPath =
-      std::filesystem::temp_directory_path() / "TbLitLibTest-lp65a-pending-frame-log.csv";
+    const auto logPath = testTempPath("TbLitLibTest-lp65a-pending-frame-log.csv");
     std::filesystem::remove(logPath);
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
@@ -22358,13 +22699,43 @@ TEST_CASE(
     const auto regionPixels =
       std::size_t(region[2] - region[0] + 1) * std::size_t(region[3] - region[1] + 1);
 
+    // F3.9 (2026-11-05): the _currentRender texture refused (an allocation failure):
+    // the panel, the first SS_POST_PROCESS surface, is dropped with the surfaces after
+    // it, the frame stays unconverged and the status names them; allowed again, the next
+    // frame makes the copy and the case goes on
+    {
+      LitSession::refuseCurrentRenderForTesting(true);
+      const auto allowAgain =
+        kdl::invoke_later{[] { LitSession::refuseCurrentRenderForTesting(false); }};
+      REQUIRE(session->offerSnapshot(snapshotOf("lp65b/haze", 2)));
+      const auto named = waitFor(
+        [&] {
+          return session->status().disabledReason.find("_currentRender")
+                 != std::string::npos;
+        },
+        20000ms,
+        false);
+      std::this_thread::sleep_for(500ms);
+      const auto refusedStatus = session->status();
+      std::cout << fmt::format(
+        "F3.9: _currentRender refused: settled {}, disabledReason '{}'\n",
+        refusedStatus.settled,
+        refusedStatus.disabledReason);
+      CHECK(named);
+      CHECK_FALSE(refusedStatus.settled);
+      CHECK_FALSE(session->lastFrameSettledForTesting());
+      CHECK(
+        refusedStatus.disabledReason.find("post-process surfaces") != std::string::npos);
+    }
+    session->requestFrame();
+
     // (a) the panel with its deform: drawn by the second call over the copy, which is
     // made on every frame it is in view
     REQUIRE(inFrame(*session, [&](RenderFrameAccess& access) {
       access.passes.setDrawLogForTesting(true);
     }));
     tally->reset();
-    REQUIRE(session->offerSnapshot(snapshotOf("lp65b/haze", 2)));
+    REQUIRE(session->offerSnapshot(snapshotOf("lp65b/haze", 3)));
     const auto haze = settledWith([](const LitFrameStats& s) {
       return s.stagePostProcess == 1 && s.stagePostProcessDraws == 1;
     });
@@ -22426,7 +22797,7 @@ TEST_CASE(
 
     // the deform 0 (P8.5's control): the stage samples the copy at its own pixel, the
     // panel's region equals the wall exactly (the HDR too); _CurrentRender by C1's rule
-    REQUIRE(session->offerSnapshot(snapshotOf("lp65b/haze_still", 3)));
+    REQUIRE(session->offerSnapshot(snapshotOf("lp65b/haze_still", 4)));
     const auto still = settledWith([](const LitFrameStats& s) {
       return s.stagePostProcess == 1 && s.stagePostProcessDraws == 1;
     });
@@ -22496,7 +22867,7 @@ TEST_CASE(
       199,
       149);
     CHECK(bigStillDiffering == 0u);
-    REQUIRE(session->offerSnapshot(snapshotOf("lp65b/haze", 4)));
+    REQUIRE(session->offerSnapshot(snapshotOf("lp65b/haze", 5)));
     const auto bigHaze = settledWith([](const LitFrameStats& s) {
       return s.stagePostProcessDraws == 1 && s.stageCopies == 1;
     });
@@ -22651,8 +23022,7 @@ TEST_CASE("LitSession bumpyenvironment2 on a GPU (LP6.5b)", "[.][litgpu4]")
   // the east wall straight on, the centre box at the view's centre (columns 70-90, rows
   // 50-70 at 160 x 120), the plain box at its left
   const auto wallView = litCamera({200, 0, 64}, {1, 0, 0}, {0, 0, 1});
-  const auto logPath =
-    std::filesystem::temp_directory_path() / "TbLitLibTest-lp65b-frame-log.csv";
+  const auto logPath = testTempPath("TbLitLibTest-lp65b-frame-log.csv");
   std::filesystem::remove(logPath);
 
   auto messages = ValidationMessages{};
@@ -23263,8 +23633,7 @@ TEST_CASE("LitSession the progressive TAA on a GPU (LP6.6)", "[.][litgpu4]")
     const auto root = assembleLitRoot(gamePath);
     REQUIRE_FALSE(root.empty());
     writeLp65aBake(root);
-    const auto logPath =
-      std::filesystem::temp_directory_path() / "TbLitLibTest-lp66-frame-log.csv";
+    const auto logPath = testTempPath("TbLitLibTest-lp66-frame-log.csv");
     std::filesystem::remove(logPath);
     auto messages = ValidationMessages{};
     messages.mirroredMessageId = OutputNotConsumedId;
@@ -24146,15 +24515,19 @@ TEST_CASE("LitSession the overrides' live path on a GPU (LP6.6)", "[.][litgpu4]"
   const auto openFirst = mean(first->image(fr::CurrentRenderHdr), openWall);
   const auto openDark = mean(dark->image(fr::CurrentRenderHdr), openWall);
   CHECK(openDark < openFirst);
-  // the defaults again: the first picture
-  CHECK(again->image(fr::TaaResolved).values == firstResolved.values);
+  // the defaults again: the first picture, within 2 half ULPs (F3.16, 2026-11-05: both
+  // frames' indices logged; why a settled resolve can differ in a last bit stays open)
+  const auto [ulpsApart, valuesApart] =
+    halfUlpsApart(again->image(fr::TaaResolved), firstResolved);
+  CHECK(ulpsApart <= 2.0);
   CHECK(again->frame.convergence.taaHistory == 16u);
   std::cout << fmt::format(
     "LP6.6 C74: a stale generation's change dropped {}; applied {} / {} / {} / {} (the "
     "histories before and after each change {}); the crease's HDR {:.5f} with SSAO, "
     "{:.5f} without; the open wall's {:.5f} at Force ambient 0.5, {:.5f} at 0 "
-    "(AMBIENT_COLOR {} then {}); the defaults again: the first picture {}; case {:.1f} "
-    "s\n",
+    "(AMBIENT_COLOR {} then {}); the defaults again: the first picture {} (frames {} "
+    "and {}, history indices {} and {}; {} values apart, at most {:.2f} half ULPs); case "
+    "{:.1f} s\n",
     !stale,
     statuses[1].overridesApplied,
     statuses[2].overridesApplied,
@@ -24168,6 +24541,12 @@ TEST_CASE("LitSession the overrides' live path on a GPU (LP6.6)", "[.][litgpu4]"
     ambientParms[0],
     ambientParms[1],
     again->image(fr::TaaResolved).values == firstResolved.values,
+    first->frame.frameIndex,
+    again->frame.frameIndex,
+    first->frame.lit.taaIndex,
+    again->frame.lit.taaIndex,
+    valuesApart,
+    ulpsApart,
     std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count());
 }
 
@@ -24317,6 +24696,8 @@ struct MocLists
   std::string implementation;
   std::thread::id fillThread;
   std::size_t indexCopies = 0;
+  // F3.20: the spot lights' TestRect calls so far
+  std::uint64_t rectTests = 0;
   // the buffer after the build: its size and its pixels written (depth above 0)
   unsigned int bufferWidth = 0;
   unsigned int bufferHeight = 0;
@@ -24337,7 +24718,7 @@ MocLists mocListsOf(LitSession& session)
     lists.runs = l.mocOccluderRuns;
     lists.runsViewCulled = l.mocOccluderRunsViewCulled;
     lists.surfaceTests = l.mocSurfaceTests;
-    lists.ms = l.mocMs;
+    lists.ms = l.mocFillMs + l.mocTestMs;
     ids = {l.mocTestedLights, l.mocCulledLights};
     for (const auto& surface : l.drawSurfs)
     {
@@ -24347,6 +24728,7 @@ MocLists mocListsOf(LitSession& session)
     lists.implementation = std::string{moc.implementationName()};
     lists.fillThread = moc.lastThread();
     lists.indexCopies = moc.indexCopies();
+    lists.rectTests = moc.rectTests();
     const auto depth = moc.depthForTesting(lists.bufferWidth, lists.bufferHeight);
     lists.depthWritten =
       std::size_t(std::ranges::count_if(depth, [](const float d) { return d > 0.0f; }));
@@ -24527,8 +24909,7 @@ TEST_CASE("LitSession masked occlusion culling on a GPU (LP6.7)", "[.][litgpu4]"
   {
     const auto root = assembleLp3Root(gamePath);
     REQUIRE_FALSE(root.empty());
-    const auto logPath =
-      std::filesystem::temp_directory_path() / "TbLitLibTest-lp67-frame-log.csv";
+    const auto logPath = testTempPath("TbLitLibTest-lp67-frame-log.csv");
     std::filesystem::remove(logPath);
     auto implementation = std::string{};
     {
@@ -24666,7 +25047,8 @@ TEST_CASE("LitSession masked occlusion culling on a GPU (LP6.7)", "[.][litgpu4]"
       CHECK(off.indexCopies == 0u);
       CHECK(offFrame->stats.lightsMocCulled == 0u);
       CHECK(offFrame->stats.surfacesMocCulled == 0u);
-      CHECK(offFrame->stats.mocMs == 0.0);
+      CHECK(offFrame->stats.mocFillMs == 0.0);
+      CHECK(offFrame->stats.mocTestMs == 0.0);
       CHECK(offFrame->stats.mocImplementation.empty());
       CHECK(offFrame->stats.lightsDrawn == 2u);
       CHECK(offFrame->stats.lightsCasting == 2u);
@@ -24805,10 +25187,13 @@ TEST_CASE("LitSession masked occlusion culling on a GPU (LP6.7)", "[.][litgpu4]"
       REQUIRE(rows[0].size() == FrameLogFields);
       const auto culledColumn = frameLogColumn(rows, "lights_moc_culled");
       const auto surfacesColumn = frameLogColumn(rows, "surfaces_moc_culled");
-      const auto msColumn = frameLogColumn(rows, "moc_ms");
+      // F2.11 (2026-11-05): moc_ms split into moc_fill_ms and moc_test_ms
+      const auto msColumn = frameLogColumn(rows, "moc_fill_ms");
+      const auto testColumn = frameLogColumn(rows, "moc_test_ms");
       CHECK(culledColumn == 123u);
       CHECK(surfacesColumn == 124u);
       CHECK(msColumn == 125u);
+      CHECK(testColumn == 126u);
       auto withCulled = 0;
       auto withSurfaces = 0;
       auto timed = 0;
@@ -24872,6 +25257,13 @@ TEST_CASE("LitSession masked occlusion culling on a GPU (LP6.7)", "[.][litgpu4]"
       CHECK(onLists.active);
       CHECK(on->stats.lightsMocCulled >= 1u);
       CHECK(std::ranges::find(onLists.culled, "lp1b_small") != onLists.culled.end());
+      // F3.20 (2026-11-05): a spot's verdict, through TestRect: lp1b_spot_through (in
+      // this room, aimed through the doorway) tested and kept
+      CHECK(onLists.rectTests > 0u);
+      CHECK(
+        std::ranges::find(onLists.tested, "lp1b_spot_through") != onLists.tested.end());
+      CHECK(
+        std::ranges::find(onLists.culled, "lp1b_spot_through") == onLists.culled.end());
       session->setEveryFrameHookForTesting({});
       checkWatch(onLists, "no tree");
       switchMoc(*session, false);
@@ -24883,11 +25275,16 @@ TEST_CASE("LitSession masked occlusion culling on a GPU (LP6.7)", "[.][litgpu4]"
       CHECK(on->stats.lightsVisible <= off->stats.lightsVisible);
       std::cout << fmt::format(
         "LP6.7 (d): no tree: lights tested [{}], culled [{}] (lights_moc_culled {}); "
-        "surfaces culled {} of {} tested; occluders {} ({} runs); lights visible {} with "
-        "the culling, {} without [{}]\n",
+        "the spot lp1b_spot_through {} through TestRect ({} calls); surfaces culled {} "
+        "of {} tested; occluders {} ({} runs); lights visible {} with the culling, {} "
+        "without [{}]\n",
         fmt::join(onLists.tested, " "),
         fmt::join(onLists.culled, " "),
         on->stats.lightsMocCulled,
+        std::ranges::find(onLists.culled, "lp1b_spot_through") == onLists.culled.end()
+          ? "kept"
+          : "culled",
+        onLists.rectTests,
         onLists.surfacesCulled,
         onLists.surfaceTests,
         onLists.occluders,
