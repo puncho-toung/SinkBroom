@@ -240,6 +240,42 @@ void ImageSlots::refuse(const ImageSlotId id, std::string reason)
   ++m_stateVersion;
 }
 
+void ImageSlots::refuseForRoom(const ImageSlotId id, std::string reason)
+{
+  refuse(id, std::move(reason));
+  m_roomRefused.insert(id);
+}
+
+std::size_t ImageSlots::roomRefused() const
+{
+  return m_roomRefused.size();
+}
+
+std::size_t ImageSlots::reRequestRoomRefused(const std::uint64_t frame)
+{
+  auto asked = std::size_t{0};
+  auto ids = std::vector<ImageSlotId>{m_roomRefused.begin(), m_roomRefused.end()};
+  std::ranges::sort(ids);
+  m_roomRefused.clear();
+  for (const auto id : ids)
+  {
+    // still the refusal's Default (a later request or drop made it something else)
+    if (id < m_slots.size() && m_slots[id].state == State::Default)
+    {
+      m_frame = std::max(m_frame, frame);
+      reRequest(id, frame, false);
+      ++asked;
+    }
+  }
+  m_roomReRequests += asked;
+  return asked;
+}
+
+std::uint64_t ImageSlots::roomReRequests() const
+{
+  return m_roomReRequests;
+}
+
 bool ImageSlots::waitForRoom(const ImageSlotId id)
 {
   auto& slot = m_slots[id];

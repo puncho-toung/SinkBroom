@@ -229,6 +229,9 @@ private:
   std::unordered_set<ImageSlotId> m_wanted;
   std::uint64_t m_evictions = 0;
   std::uint64_t m_floors = 0;
+  // F2.4 (2026-11-05): the slots refused for U2.3's room, asked again once there is room
+  std::unordered_set<ImageSlotId> m_roomRefused;
+  std::uint64_t m_roomReRequests = 0;
   std::uint64_t m_unfloors = 0;
   // LP6.4b (C68 (c)): the in-place rule, and the fed images written in place so far
   InPlaceRule m_inPlace;
@@ -317,6 +320,17 @@ public:
    * false when it is not floored, Resident and complete
    */
   bool unfloor(ImageSlotId slot, std::uint64_t frame);
+  /**
+   * F2.4 (2026-11-05): a Loading slot refused for U2.3's allocation headroom: refused (it
+   * binds its intrinsic, Default with the reason) and kept, so that once the device has
+   * room again (an eviction, an emptied heap, a compaction let allocations go) it is
+   * asked again as a first request (reRequestRoomRefused, the uploads' caller at a frame
+   * whose allocationRoom() holds); how many wait, and how many were asked again so far
+   */
+  void refuseForRoom(ImageSlotId slot, std::string reason);
+  std::size_t roomRefused() const;
+  std::size_t reRequestRoomRefused(std::uint64_t frame);
+  std::uint64_t roomReRequests() const;
   // the session's evictions and floors so far, and the slots at the floor now
   std::uint64_t evictions() const;
   std::uint64_t floors() const;

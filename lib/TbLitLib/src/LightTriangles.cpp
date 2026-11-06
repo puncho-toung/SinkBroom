@@ -124,10 +124,8 @@ void LightTriangleCache::setCapacityForTesting(const std::size_t capacity)
 
 void LightTriangleCache::beginBuild()
 {
-  for (auto& [key, entry] : m_entries)
-  {
-    entry.used = false;
-  }
+  // F2.9 (2026-11-05): O(1): every entry is unused until asked for in this build
+  ++m_build;
 }
 
 std::shared_ptr<const LightTriangles> LightTriangleCache::triangles(
@@ -146,7 +144,7 @@ std::shared_ptr<const LightTriangles> LightTriangleCache::triangles(
   const auto key = Key{light, chunk.key};
   const auto stamp = Stamp{lightVersion, chunk.casterVersion, modelMatrix};
   auto& entry = m_entries[key];
-  entry.used = true;
+  entry.usedBuild = m_build;
   if (entry.stamp == stamp && (entry.triangles || entry.asked))
   {
     // known, or asked for these versions already (queued, or in a job)
@@ -202,7 +200,7 @@ std::shared_ptr<const LightTriangles> LightTriangleCache::triangles(
   const auto key = Key{light, instance.key()};
   const auto stamp = Stamp{lightVersion, instance.header.casterVersion, modelMatrix};
   auto& entry = m_entries[key];
-  entry.used = true;
+  entry.usedBuild = m_build;
   if (entry.stamp == stamp && (entry.triangles || entry.asked))
   {
     return entry.triangles ? entry.triangles : m_pending;
@@ -230,7 +228,8 @@ void LightTriangleCache::endBuild(
   if (m_entries.size() > m_capacity)
   {
     std::erase_if(m_entries, [&](const auto& entry) {
-      return !entry.second.used && !(held && held(entry.first.light, entry.first.chunk));
+      return entry.second.usedBuild != m_build
+             && !(held && held(entry.first.light, entry.first.chunk));
     });
   }
   // the requests hold what they need

@@ -19,6 +19,7 @@
 
 #include "lit/MaterialService.h"
 
+#include "LitHelpers.h"
 #include "StackThread.h"
 #include "lit/CpuPool.h"
 #include "lit/EditorImageSize.h"
@@ -50,6 +51,11 @@ namespace tb::lit
 {
 namespace
 {
+
+// F2.6 (2026-11-05): the parse thread's fairness: after this many feed items in a row, or
+// this long of them, one other item (a lookup, a bake, an image step) is served first
+constexpr auto FeedFairnessItems = std::size_t{8};
+constexpr auto FeedFairnessTime = std::chrono::milliseconds{100};
 
 using Clock = std::chrono::steady_clock;
 
@@ -84,11 +90,6 @@ std::uint64_t mixHash(std::uint64_t hash, const std::uint64_t value)
 {
   hash ^= value + 0x9E3779B97F4A7C15ull + (hash << 6) + (hash >> 2);
   return hash;
-}
-
-double secondsSince(const Clock::time_point start)
-{
-  return std::chrono::duration<double>(Clock::now() - start).count();
 }
 
 bool isProblem(const DeclMessageKind kind)
@@ -309,8 +310,6 @@ struct MaterialService::Shared
   // D100: every hand-over, bumped with the mutex held; atomic, so that the render thread
   // reads it without the mutex
   std::atomic<std::uint64_t> feedRequested = 0;
-  // LP6.4b step 0b: feedRequested() answers one more (holdFeedBehindForTesting)
-  std::atomic<bool> feedHeldBehind = false;
   // C40: what became of each name's last hand-over
   std::unordered_map<std::string, ImageOverrideStatus> overrideStatus;
   // LPF.0b (D96): the re-parse hand-overs, one per name as asked, in the order the names
@@ -633,6 +632,9 @@ private:
   // a rebuild that a change of the loose files asks for, and when it may run
   bool m_autoReloadPending = false;
   std::optional<Clock::time_point> m_lastAutoReload;
+  // F2.6 (2026-11-05): the feed items served in a row, and when the first of them was
+  std::size_t m_feedStreak = 0;
+  Clock::time_point m_feedStreakStart;
   std::size_t m_warnings = 0;
   // the last failure a guard logged
   std::string m_lastFailure;
@@ -906,6 +908,18 @@ private:
       if (auto work = nextWork())
       {
         m_shared.stats.idle = false;
+        // F2.6: the feed's streak, ended by any other item
+        if (work->kind == WorkKind::Feed)
+        {
+          if (m_feedStreak++ == 0)
+          {
+            m_feedStreakStart = Clock::now();
+          }
+        }
+        else
+        {
+          m_feedStreak = 0;
+        }
         return std::move(*work);
       }
 
@@ -964,8 +978,18 @@ private:
     }
     // LPF.0a (D96, P5.3): an override after the evaluations, which are short (a light
     // drag waits for one conversion at most), and ahead of the lookups, so a painting
-    // host starves neither; one name per item
-    if (!m_shared.feeds.empty())
+    // host starves neither; one name per item. F2.6 (2026-11-05): fairly: after
+    // FeedFairnessItems feed items in a row, or FeedFairnessTime of them, one lookup,
+    // bake or image step goes first (a host handing over a large image continuously, its
+    // conversion at its rate or more, would otherwise starve them)
+    const auto feedTurnOver =
+      m_feedStreak >= FeedFairnessItems
+      || (m_feedStreak > 0 && Clock::now() - m_feedStreakStart >= FeedFairnessTime);
+    const auto othersWait = !m_shared.lookups.empty()
+                            || !m_shared.entityDefLookups.empty()
+                            || !m_shared.skinLookups.empty() || !m_shared.mapBakes.empty()
+                            || !m_shared.images.empty();
+    if (!m_shared.feeds.empty() && !(feedTurnOver && othersWait))
     {
       auto work = workOf(WorkKind::Feed);
       work.feedName = std::move(m_shared.feeds.front());
@@ -993,10 +1017,15 @@ private:
       }
       return work;
     }
+    // F2.12 (2026-11-05, DQ-15): a queued bake ahead of the lookups once the decls are
+    // read (the registry made): the lights and the cells' first batch then complete with
+    // the tree instead of before it (a treeless frame asks every texture in the frustum)
+    const auto bakeFirst = !m_shared.mapBakes.empty() && m_decls != nullptr;
     // S2.3: the lookup step takes its names from the queues itself, a step at a time
     if (
-      !m_shared.lookups.empty() || !m_shared.entityDefLookups.empty()
-      || !m_shared.skinLookups.empty())
+      !bakeFirst
+      && (!m_shared.lookups.empty() || !m_shared.entityDefLookups.empty()
+          || !m_shared.skinLookups.empty()))
     {
       return workOf(WorkKind::Lookup);
     }
@@ -1162,7 +1191,7 @@ private:
     if (slot->entry)
     {
       auto& names = m_spellings[slot->entry->name];
-      if (std::find(names.begin(), names.end(), name) == names.end())
+      if (std::ranges::find(names, name) == names.end())
       {
         names.push_back(name);
       }
@@ -1396,7 +1425,7 @@ private:
 
   bool changedOnDisk(const std::vector<FoundGameFile>& files) const
   {
-    return m_source && std::any_of(files.begin(), files.end(), [&](const auto& file) {
+    return m_source && std::ranges::any_of(files, [&](const auto& file) {
              return !sameFile(file.probe, m_source->probe(file.path));
            });
   }
@@ -2157,12 +2186,8 @@ private:
     m_working.changedImages = m_working.changedImages.set(key, m_working.imageChanges);
     m_imageFiles.erase(key);
     unindexKey(key);
-    m_publishedImages.erase(
-      std::remove_if(
-        m_publishedImages.begin(),
-        m_publishedImages.end(),
-        [&](const auto& published) { return published.key == key; }),
-      m_publishedImages.end());
+    std::erase_if(
+      m_publishedImages, [&](const auto& published) { return published.key == key; });
     // X.11: a slot read again is not taken until a consumer takes it
     auto lock = std::scoped_lock{m_shared.mutex};
     m_shared.takenImages.erase(key);
@@ -3997,9 +4022,9 @@ void MaterialService::clearMaterialReparse(std::string name)
 
 std::uint64_t MaterialService::feedRequested() const
 {
-  // LP6.4b step 0b: one ahead of every table while a test holds the feed behind
-  return m_shared->feedRequested.load()
-         + (m_shared->feedHeldBehind.load() ? std::uint64_t{1} : std::uint64_t{0});
+  // F2.5 (2026-11-05): the hand-overs made, always (a test holds the session behind on
+  // the render side: LitSession::holdFeedBehindForTesting)
+  return m_shared->feedRequested.load();
 }
 
 ImageOverrideStatus MaterialService::imageOverrideStatus(
@@ -4084,9 +4109,5 @@ void MaterialService::holdMeasuresForTesting(const bool hold)
   m_shared->requested.notify_one();
 }
 
-void MaterialService::holdFeedBehindForTesting(const bool hold)
-{
-  m_shared->feedHeldBehind = hold;
-}
 
 } // namespace tb::lit

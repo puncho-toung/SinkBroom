@@ -168,6 +168,8 @@ public:
     {
       if (Equal{}(item.first, key))
       {
+        // NOLINTNEXTLINE(bugprone-use-after-move): moved here only on a match, which
+        // breaks the loop and skips the emplace below
         item.second = std::move(value);
         replaced = true;
         break;
@@ -175,6 +177,7 @@ public:
     }
     if (!replaced)
     {
+      // NOLINTNEXTLINE(bugprone-use-after-move): value was not moved (no item matched)
       bucket->items.emplace_back(std::move(key), std::move(value));
       ++root->size;
     }

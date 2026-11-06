@@ -368,11 +368,15 @@ bool TextureUploads::record(
       }
       if (roomRefused)
       {
-        problem = fmt::format(
-          "the device's memory allocations are within {} of its limit "
-          "(maxMemoryAllocationCount)",
-          AllocationHeadroom);
+        // F2.4 (2026-11-05): kept, and asked again once there is room
+        slots.refuseForRoom(
+          id,
+          fmt::format(
+            "the device's memory allocations are within {} of its limit "
+            "(maxMemoryAllocationCount)",
+            AllocationHeadroom));
         ++m_headroomRefusals;
+        continue;
       }
       if (!problem.empty())
       {

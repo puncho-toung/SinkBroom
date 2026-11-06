@@ -720,6 +720,16 @@ std::optional<LdrImage> LitSession::readbackLdrForTesting(
          | kdl::value_or(std::optional<LdrImage>{});
 }
 
+std::uint64_t LitSession::ldrReadbacksRequeuedForTesting() const
+{
+  return m_renderThread ? m_renderThread->ldrReadbacksRequeued() : 0;
+}
+
+void LitSession::parkDuringLdrReadbackForTesting()
+{
+  m_renderThread->parkDuringLdrReadback();
+}
+
 std::uint64_t LitSession::ldrStagingCreationsForTesting() const
 {
   return m_renderThread ? m_renderThread->ldrStagingCreations() : 0;
@@ -765,6 +775,11 @@ void LitSession::setGeometryArenaBytesForTesting(const std::uint64_t bytes)
 void LitSession::holdCompactionForTesting(const bool hold)
 {
   m_renderThread->holdCompaction(hold);
+}
+
+void LitSession::holdFeedBehindForTesting(const bool hold)
+{
+  m_renderThread->holdFeedBehind(hold);
 }
 
 void LitSession::setBudgetPassHookForTesting(
@@ -813,6 +828,11 @@ DebugView LitSession::debugView() const
 void LitSession::failHostAllocationsForTesting(const bool fail)
 {
   tb::lit::failHostAllocationsForTesting(fail);
+}
+
+void LitSession::refuseCurrentRenderForTesting(const bool refuse)
+{
+  FrameResources::refuseCurrentRenderForTesting(refuse);
 }
 
 std::vector<ProgramReport> LitSession::programReport() const

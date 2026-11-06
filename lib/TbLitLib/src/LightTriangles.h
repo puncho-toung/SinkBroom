@@ -122,7 +122,9 @@ private:
   {
     Stamp stamp;
     std::shared_ptr<const LightTriangles> triangles;
-    bool used = false;
+    // F2.9 (2026-11-05): the build that last asked for it (used: this build's, m_build):
+    // beginBuild moves the build instead of clearing every entry's flag
+    std::uint64_t usedBuild = 0;
     // a request for stamp is queued or in a job
     bool asked = false;
   };
@@ -164,6 +166,8 @@ private:
   // the answer of every pair not known yet
   std::shared_ptr<const LightTriangles> m_pending;
   std::uint64_t m_version = 0;
+  // F2.9: the lists build in progress (an entry is used when its usedBuild is this)
+  std::uint64_t m_build = 1;
   std::size_t m_capacity = LightTriangleCacheSize;
   std::uint64_t m_jobs = 0;
   std::uint64_t m_answered = 0;

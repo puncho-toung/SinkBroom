@@ -20,6 +20,7 @@
 #include "RenderThread.h"
 
 #include "GpuDevice.h"
+#include "LitHelpers.h"
 #include "SessionEvents.h"
 #include "StackThread.h"
 #include "Swapchain.h"
@@ -61,11 +62,6 @@ constexpr auto EventPollInterval = std::chrono::milliseconds{1};
 // U2.7: a frame's event that has not completed after this long is said once (a GPU that
 // hangs without the driver reporting the device lost); the wait goes on until a stop
 constexpr auto GpuAnswerBound = std::chrono::seconds{2};
-
-double millisecondsSince(const FrameClock::time_point start)
-{
-  return std::chrono::duration<double, std::milli>(FrameClock::now() - start).count();
-}
 
 /**
  * An open command list that is closed and executed when its scope ends without submit(),
@@ -158,7 +154,8 @@ bool FrameConvergence::otherTermsHold() const
          && !imagesPending && !provisionalChunks && !lutPending && !entityDefsPending
          && !modelsPending && !lightsProvisional && !geometryInFlight && !drawsOverflowed
          && !lightTrianglesPending && !probeImagesPending && !gridImagesPending
-         && !probesInFlight && !feedBehind && !shadowsPending && !budgetLeft;
+         && !probesInFlight && !feedBehind && !shadowsPending && !budgetLeft
+         && !postProcessDropped;
 }
 
 bool FrameConvergence::settled() const
@@ -759,9 +756,15 @@ void RenderThread::converge(const LitFrameStats& lit, const std::uint64_t tableV
   // not hold yet keeps it from being settled, whatever the slots say; feedRequested is
   // read after feedApplied was, so a table published between them only makes this true
   convergence.feedBehind =
-    m_materials && m_frameFeedApplied < m_materials->feedRequested();
-  convergence.passesDisabled =
-    lit.prepassDisabled || lit.interactionsDisabled || tonemap.disabled;
+    (m_materials && m_frameFeedApplied < m_materials->feedRequested())
+    // F2.5 (2026-11-05, DQ-8): a test's hold, on this side (the service's counters stay
+    // honest): every frame behind, as a feed that never lets the session settle
+    || m_feedHeldBehindForTesting;
+  convergence.passesDisabled = lit.prepassDisabled || lit.interactionsDisabled
+                               || tonemap.disabled
+                               // F3.9 (2026-11-05): the post-process surfaces dropped
+                               || lit.postProcessDisabled;
+  convergence.postProcessDropped = lit.postProcessDisabled;
   // LP6.4b (C68 (b)): the budget pass left evictions or floors for the next frame
   convergence.budgetLeft = m_budgetLeft;
   // LP6.6 (C73, P8.12): the resolve's pipeline pending: the frame drew plain
@@ -924,6 +927,16 @@ std::uint64_t RenderThread::ldrStagingCreations() const
   return m_ldrStagingCreations;
 }
 
+std::uint64_t RenderThread::ldrReadbacksRequeued() const
+{
+  return m_ldrReadbacksRequeued;
+}
+
+void RenderThread::parkDuringLdrReadback()
+{
+  m_parkDuringLdrReadbackForTesting = true;
+}
+
 void RenderThread::recordLdrReadback(nvrhi::ICommandList& commandList)
 {
   // C29, P2.25: only a settled frame whose tonemap passes ran is copied; LPF.1's settled
@@ -983,9 +996,31 @@ void RenderThread::finishLdrReadback(const std::size_t slot)
     return;
   }
   auto requests = std::exchange(m_ldrReadbacksInFrame, {});
-  // the frame's copy is read once the frame has finished; a stop or a park drops it
-  if (!waitForFrameEvent(slot))
+  // the frame's copy is read once the frame has finished; a stop drops it. F2.17
+  // (2026-11-05): a park (a resize, a hidden window) keeps the requests: they wait in
+  // m_ldrReadbacks for the next settled frame after the unpark, which they trigger
+  // (a test parks the session at this wait once: parkDuringLdrReadbackForTesting)
+  const auto parkedHere = m_parkDuringLdrReadbackForTesting.exchange(false);
+  if (parkedHere)
   {
+    const auto lock = std::scoped_lock{m_mutex};
+    m_parkRequested = true;
+  }
+  if (parkedHere || !waitForFrameEvent(slot))
+  {
+    if (!m_events.lost())
+    {
+      const auto lock = std::scoped_lock{m_mutex};
+      if (!m_stopRequested)
+      {
+        m_ldrReadbacks.insert(
+          m_ldrReadbacks.begin(),
+          std::make_move_iterator(requests.begin()),
+          std::make_move_iterator(requests.end()));
+        m_pacer.trigger();
+        ++m_ldrReadbacksRequeued;
+      }
+    }
     return;
   }
   auto& device = m_device.device();
@@ -1115,6 +1150,12 @@ bool RenderThread::recordUploads(nvrhi::ICommandList& commandList)
   if (m_arenas.uploadedShared() != m_modelTotalsUploads)
   {
     updateModelTotals();
+  }
+  // F2.4 (2026-11-05): the slots refused for U2.3's room are asked again once the device
+  // has room (a Replacing slot waits for it instead, LPF.1's D102)
+  if (m_images.roomRefused() > 0 && allocationRoom())
+  {
+    m_images.reRequestRoomRefused(m_frameIndex);
   }
   const auto texturesLeft = m_textureUploads.record(
     m_device.device(),
@@ -1391,6 +1432,16 @@ void RenderThread::holdCompaction(const bool hold)
   m_compactionHeldForTesting = hold;
 }
 
+void RenderThread::holdFeedBehind(const bool hold)
+{
+  m_feedHeldBehindForTesting = hold;
+  if (!hold)
+  {
+    // the release lets a frame settle again: one is drawn
+    requestFrame();
+  }
+}
+
 void RenderThread::compactionSubmission()
 {
   try
@@ -1435,6 +1486,8 @@ void RenderThread::compactionSubmission()
     auto row = FrameLogRow{};
     row.session = m_events.generation();
     row.event = FrameLogEvent::Compaction;
+    // its frame number (the one the submission took above: the frame rows' gap)
+    row.frameIndex = m_frameIndex - 1;
     row.allocCount = m_device.deviceMemoryAllocations();
     row.arenaBytes = m_arenas.capacityBytes();
     row.arenaMovedBytes = result.movedBytes;
@@ -3073,7 +3126,8 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
       // the fill's and tests' time when the lists were built
       row.lightsMocCulled = litStats.lightsMocCulled;
       row.surfacesMocCulled = litStats.surfacesMocCulled;
-      row.mocMs = litStats.mocMs;
+      row.mocFillMs = litStats.mocFillMs;
+      row.mocTestMs = litStats.mocTestMs;
       m_timers.frameShown(slot, row);
       ++m_framesPresented;
       // LP2.3 (D9): the panel's status line reads the frame's counts
@@ -3091,11 +3145,15 @@ RenderThread::FrameOutcome RenderThread::drawFrame(const CameraState& camera)
         // LP6.7 (C75)
         status.lightsMocCulled = litStats.lightsMocCulled;
         status.surfacesMocCulled = litStats.surfacesMocCulled;
-        status.mocMs = litStats.mocMs;
+        status.mocFillMs = litStats.mocFillMs;
+        status.mocTestMs = litStats.mocTestMs;
+        status.mocIndexCopyBytes = litStats.mocIndexCopyBytes;
         status.mocImplementation = std::string{litStats.mocImplementation};
         status.lightsMocTested = litStats.mocLightTests;
         status.surfacesMocTested = litStats.mocSurfaceTests;
         status.lightsVisible = litStats.lightsVisible;
+        // F3.9 (2026-11-05): why a pass or its surfaces were not drawn (D9)
+        status.disabledReason = litStats.disabledReason;
         status.lightsDrawn = litStats.lightsDrawn;
         status.lightsOverflowed = litStats.lightsOverflowed;
         // LP3.4 (D158): the lights the atlas left unshadowed, by name

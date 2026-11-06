@@ -255,12 +255,20 @@ struct SessionStatus
   // made, and with the switch off)
   std::size_t lightsMocCulled = 0;
   std::size_t surfacesMocCulled = 0;
-  double mocMs = 0.0;
+  // F2.11 (2026-11-05): the fill's time apart from the tests' (moc_fill_ms, moc_test_ms),
+  // and the occluders' 32-bit index copies' bytes (DQ-17)
+  double mocFillMs = 0.0;
+  double mocTestMs = 0.0;
+  std::uint64_t mocIndexCopyBytes = 0;
   std::string mocImplementation;
   // and the lights tested (their volume does not contain the view) and the surfaces
   // tested in the frame's lists (the measurement's shares)
   std::size_t lightsMocTested = 0;
   std::size_t surfacesMocTested = 0;
+  // F3.9 (2026-11-05): why the frame's lit passes or some of their surfaces were not
+  // drawn (D9: a failed pipeline, a target that cannot be made, the _currentRender copy
+  // naming the post-process surfaces dropped); empty when nothing was
+  std::string disabledReason;
   // LP4.1 (D90's first half, C32): the view's portal flow: the view's area (-1 outside
   // the world), the areas flowed, the tree's area count (0 without a tree: no flow) and
   // the view lights that went on to the pairing
@@ -918,6 +926,15 @@ public:
   // compaction; tests only
   void holdCompactionForTesting(bool hold);
   /**
+   * F2.5 (2026-11-05, DQ-8), any thread: while held, every frame is behind the feed
+   * (FrameConvergence::feedBehind, read by converge on the render side; the service's
+   * feedRequested() stays the hand-overs made), so no frame settles: a feed that never
+   * lets the session settle, by construction (a storm of hand-overs a millisecond apart
+   * does not: a frame whose table, start and check all fall between two hand-overs
+   * settles); the release draws a frame. Tests only.
+   */
+  void holdFeedBehindForTesting(bool hold);
+  /**
    * C38 (LP4.2b's ambient-only parity rows, mirror.json M-TEST-AMB-01), any thread: while
    * on, the frames do not record the interactions pass, as the engine's
    * r_skipInteractions 1 skips DrawInteractions (RenderBackend.cpp:4181); the clears, the
@@ -957,6 +974,9 @@ public:
    * upload chunks and staging). Process-wide, like the allocation counter; tests only.
    */
   static void failHostAllocationsForTesting(bool fail);
+  // F3.9 (2026-11-05): while set, no _currentRender texture is made, as an allocation
+  // failure; process-wide, tests only
+  static void refuseCurrentRenderForTesting(bool refuse);
   /**
    * D9, any thread: every program the compile thread was asked for, enabled or disabled
    * with the field that disabled it; the session's report of its passes.
@@ -1033,6 +1053,11 @@ public:
     std::chrono::milliseconds timeout = std::chrono::milliseconds{60000});
   // LPF.2 (P5.24), any thread: the readbacks' staging textures made so far
   std::uint64_t ldrStagingCreationsForTesting() const;
+  // F2.17 (2026-11-05): the frames whose readbacks a park sent back to the queue, and,
+  // any thread, a park requested at the next readback's wait for its frame (as a resize
+  // or a hidden window during it): the session parks (unpark resumes it)
+  std::uint64_t ldrReadbacksRequeuedForTesting() const;
+  void parkDuringLdrReadbackForTesting();
 
 private:
   LitSession(

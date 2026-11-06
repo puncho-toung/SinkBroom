@@ -217,6 +217,12 @@ struct FrameConvergence
   bool feedBehind = false;
   // D9: a pass is disabled (counts as converged)
   bool passesDisabled = false;
+  // F3.9 (2026-11-05): the _currentRender copy could not be made, so the surfaces from
+  // the first SS_POST_PROCESS one on were dropped (LitFrameStats::postProcessDisabled):
+  // the frame is not the engine's picture and never settles, unlike a disabled pass (D9).
+  // Not a re-trigger: a frame that can make the copy (a new size, the allocation room
+  // back, a Start) is drawn for its own trigger
+  bool postProcessDropped = false;
   // LP3.0 (D151, C62): the frame's shadows are not settled (a tile not drawn against its
   // light's record at the exact LOD, a provisional tile, a cascade budget pending, a
   // caster's light triangles unknown, LP3.3: a held layout not the engine's packing):
@@ -547,6 +553,8 @@ private:
   std::uint64_t m_compactionSubmissions = 0;
   // LP6.4b test hook: while held, no settled frame marks a compaction
   std::atomic<bool> m_compactionHeldForTesting = false;
+  // F2.5: converge's forced feedBehind term (holdFeedBehind)
+  std::atomic<bool> m_feedHeldBehindForTesting = false;
   // C38 (LP4.2b): the interactions are not recorded (setSkipInteractions)
   std::atomic<bool> m_skipInteractionsForTesting = false;
   // LP5.0 (D118): r_skipAmbient's stand-in (setSkipShaderPasses), not read by a pass yet
@@ -637,6 +645,9 @@ private:
   // into its staging texture
   std::vector<std::function<void(LdrImage)>> m_ldrReadbacks;
   std::vector<std::function<void(LdrImage)>> m_ldrReadbacksInFrame;
+  // F2.17 (2026-11-05): the frames whose readbacks a park sent back to the queue
+  std::atomic<std::uint64_t> m_ldrReadbacksRequeued = 0;
+  std::atomic<bool> m_parkDuringLdrReadbackForTesting = false;
   // LPF.2 (P5.24): the readbacks' one staging texture, kept while the target's extent
   // and format stay (released in teardown step 2), and whether this frame copied into it
   nvrhi::StagingTextureHandle m_ldrStaging;
@@ -784,6 +795,11 @@ public:
   // LPF.2 (P5.24), any thread: the readbacks' staging textures made so far (one per
   // extent, not one per readback)
   std::uint64_t ldrStagingCreations() const;
+  // F2.17: the readbacks a park sent back to the queue (frames)
+  std::uint64_t ldrReadbacksRequeued() const;
+  // F2.17 (tests): the next readback's wait for its frame is cut by a park request, as a
+  // resize or a hidden window during the wait does; the session then waits parked
+  void parkDuringLdrReadback();
   // any thread: the arenas hold these chunks instead of the scene's until null replaces
   // them; a frame is triggered
   void setTestChunks(std::shared_ptr<const std::map<ChunkKey, Chunk>> chunks);
@@ -808,6 +824,9 @@ public:
   void setBudgetPassHook(std::function<void(const BudgetPassReport&)> hook);
   // LP6.4b, any thread: while held, no settled frame marks a compaction (tests)
   void holdCompaction(bool hold);
+  // F2.5 (2026-11-05, DQ-8), any thread: while held, every frame's convergence is behind
+  // the feed (feedBehind), so none settles; the release draws a frame (tests)
+  void holdFeedBehind(bool hold);
   // C38 (LP4.2b), any thread: while set, the frames record no interactions
   // (LitPasses::setSkipInteractionsForTesting); a frame is triggered
   void setSkipInteractions(bool skip);
