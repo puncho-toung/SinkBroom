@@ -389,6 +389,34 @@ using namespace std::chrono_literals;
 // (moc_fill_ms, moc_test_ms). F1.15 (2026-11-05): the count is the header's own
 const auto FrameLogFields = std::size_t(std::ranges::count(frameLogHeader(), ',') + 1);
 
+// V-F.17 (2026-11-06): a frame-log column's index by its name in frameLogHeader()
+// (F1.15's rule), for the readers that took fixed indexes
+std::size_t logColumn(const std::string_view name)
+{
+  auto header = frameLogHeader();
+  while (!header.empty() && (header.back() == '\n' || header.back() == '\r'))
+  {
+    header.remove_suffix(1);
+  }
+  auto found = std::optional<std::size_t>{};
+  auto index = std::size_t{0};
+  for (auto start = std::size_t{0}; !found; ++index)
+  {
+    const auto end = header.find(',', start);
+    if (header.substr(start, end == std::string_view::npos ? end : end - start) == name)
+    {
+      found = index;
+    }
+    else if (end == std::string_view::npos)
+    {
+      break;
+    }
+    start = end + 1;
+  }
+  REQUIRE(found);
+  return *found;
+}
+
 // LP2.0, T0.2: the validation layer's id of "Vertex attribute at location N not consumed
 // by vertex shader" (mirror.json M-PIPE-DEFECT-01), as this machine's layer names it
 constexpr auto OutputNotConsumedId = std::string_view{"WARNING-Shader-OutputNotConsumed"};
@@ -402,6 +430,11 @@ constexpr auto OutputNotConsumedText = std::string_view{"not consumed by vertex 
 // M-SHADOW-DEFECT-01)
 constexpr auto DepthOnlyOutputId =
   std::string_view{"Undefined-Value-ShaderOutputNotConsumed"};
+// V-F.16 (2026-11-06): and its text, by which the defect is told from other messages of
+// the id, as F1.14 tells M-PIPE-DEFECT-01's (the layer's "Inside the fragment shader, it
+// writes to output Location %u but there is no
+// VkSubpassDescription::pColorAttachments[%u] and this write is unused.")
+constexpr auto DepthOnlyOutputText = std::string_view{"and this write is unused"};
 
 // T0.2: the Khronos layer's default duplicate_message_limit, the most messages of one id
 // it reports when the test cannot raise it (VK_EXT_layer_settings)
@@ -443,7 +476,9 @@ struct ValidationMessages
     }
     // LP3.1 (mirror.json M-SHADOW-DEFECT-01): the engine's depth-only shadow-atlas
     // pipelines too, counted apart
-    if (!message.error && !mirroredMessageId.empty() && message.id == DepthOnlyOutputId)
+    if (
+      !message.error && !mirroredMessageId.empty() && message.id == DepthOnlyOutputId
+      && message.text.find(DepthOnlyOutputText) != std::string::npos)
     {
       ++mirroredDepthOnly;
       return;
@@ -847,23 +882,23 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       REQUIRE(rows[i].size() == FrameLogFields);
       CHECK(rows[i][0] == "1");
       CHECK(rows[i][1] == "frame");
-      CHECK(rows[i][2] == std::to_string(i - 2));
-      CHECK_FALSE(rows[i][6].empty());
-      CHECK(rows[i][7] == "headless");
-      CHECK(rows[i][10] == "64");
-      CHECK(rows[i][11] == "48");
+      CHECK(rows[i][logColumn("frame")] == std::to_string(i - 2));
+      CHECK_FALSE(rows[i][logColumn("gpu_frame_ms")].empty());
+      CHECK(rows[i][logColumn("present_mode")] == "headless");
+      CHECK(rows[i][logColumn("width")] == "64");
+      CHECK(rows[i][logColumn("height")] == "48");
       // LP2.1: the allocations, nothing uploaded, no texture or arena
-      CHECK_FALSE(rows[i][14].empty());
-      CHECK(rows[i][15] == "0");
-      CHECK(rows[i][16] == "0");
-      CHECK(rows[i][17] == "0");
+      CHECK_FALSE(rows[i][logColumn("alloc_count")].empty());
+      CHECK(rows[i][logColumn("bytes_uploaded")] == "0");
+      CHECK(rows[i][logColumn("textures_resident")] == "0");
+      CHECK(rows[i][logColumn("arena_bytes")] == "0");
     }
     // VK_EXT_memory_budget, which this machine's GPU has
-    CHECK_FALSE(rows[1][12].empty());
-    CHECK_FALSE(rows.back()[12].empty());
+    CHECK_FALSE(rows[1][logColumn("vram_used_mb")].empty());
+    CHECK_FALSE(rows.back()[logColumn("vram_used_mb")].empty());
     // the allocations at the start and the stop
-    CHECK_FALSE(rows[1][14].empty());
-    CHECK_FALSE(rows.back()[14].empty());
+    CHECK_FALSE(rows[1][logColumn("alloc_count")].empty());
+    CHECK_FALSE(rows.back()[logColumn("alloc_count")].empty());
     std::cout << "headless frame log, first rows:\n";
     for (std::size_t i = 0; i < std::min(rows.size(), std::size_t{4}); ++i)
     {
@@ -1628,11 +1663,14 @@ TEST_CASE("LitSession on a GPU", "[.][litgpu]")
       }
       if (forceFifo)
       {
-        CHECK(rows[i][7] == "fifo");
+        CHECK(rows[i][logColumn("present_mode")] == "fifo");
       }
-      longestPresentMs = std::max(longestPresentMs, std::stod(rows[i][5]));
+      longestPresentMs =
+        std::max(longestPresentMs, std::stod(rows[i][logColumn("present_ms")]));
       seen.insert(
-        rows[i][7] + " generation " + rows[i][8] + " " + rows[i][10] + "x" + rows[i][11]);
+        rows[i][logColumn("present_mode")] + " generation "
+        + rows[i][logColumn("swapchain_generation")] + " " + rows[i][logColumn("width")]
+        + "x" + rows[i][logColumn("height")]);
     }
     std::cout << (forceFifo ? "forced FIFO" : "default")
               << " longest present call: " << longestPresentMs << " ms\n";
@@ -2793,11 +2831,12 @@ TEST_CASE("LitSession GPU resources on a GPU (LP2.1)", "[.][litgpu]")
     for (const auto& row : readCsv(logPath))
     {
       if (
-        row.size() == FrameLogFields && row[1] == "frame" && !row[15].empty()
-        && row[15] != "0")
+        row.size() == FrameLogFields && row[1] == "frame"
+        && !row[logColumn("bytes_uploaded")].empty()
+        && row[logColumn("bytes_uploaded")] != "0")
       {
-        fromLog.push_back(std::stoull(row[15]));
-        arenaBytes = row[17];
+        fromLog.push_back(std::stoull(row[logColumn("bytes_uploaded")]));
+        arenaBytes = row[logColumn("arena_bytes")];
       }
     }
     CHECK(fromLog == logged);
@@ -4017,13 +4056,14 @@ TEST_CASE("LitSession GPU resources on the retail game (D72)", "[.][retail]")
   for (const auto& row : readCsv(logPath))
   {
     if (
-      row.size() == FrameLogFields && row[1] != "event" && !row[14].empty()
-      && row[0] != "session")
+      row.size() == FrameLogFields && row[1] != "event"
+      && !row[logColumn("alloc_count")].empty() && row[0] != "session")
     {
-      loggedPeak = std::max(loggedPeak, std::int64_t(std::stoll(row[14])));
+      loggedPeak =
+        std::max(loggedPeak, std::int64_t(std::stoll(row[logColumn("alloc_count")])));
       if (row[1] == "stop")
       {
-        stopAllocations = row[14];
+        stopAllocations = row[logColumn("alloc_count")];
       }
     }
   }
@@ -6139,31 +6179,32 @@ TEST_CASE("LitSession tonemap and blit on a GPU (LP2.2b)", "[.][litgpu]")
       {
         continue;
       }
-      CHECK((rows[i][34] == "0" || rows[i][34] == "1"));
+      const auto& settled = rows[i][logColumn("settled")];
+      CHECK((settled == "0" || settled == "1"));
       // LP6.0 (C65): every frame's split sums to its record time, the settled ones too
       checkCpuSplit(rows[i]);
-      CHECK(rows[i][RecordOtherMsColumn + 1].empty());
-      CHECK(rows[i][RecordOtherMsColumn + 2].empty());
-      CHECK(rows[i][RecordOtherMsColumn + 3].empty());
-      if (rows[i][34] == "1")
+      CHECK(rows[i][logColumn("gpu_gbuffer_ms")].empty());
+      CHECK(rows[i][logColumn("gpu_ssao_ms")].empty());
+      CHECK(rows[i][logColumn("gpu_taa_ms")].empty());
+      if (settled == "1")
       {
         ++settledRows;
       }
       // a pass that drew has its time (the times arrive for every shown frame here)
-      if (fieldValue(rows[i], 23) > 0.0)
+      if (fieldValue(rows[i], logColumn("prepass_draws")) > 0.0)
       {
-        CHECK(fieldValue(rows[i], 18) > 0.0);
+        CHECK(fieldValue(rows[i], logColumn("gpu_prepass_ms")) > 0.0);
       }
-      if (fieldValue(rows[i], 24) > 0.0)
+      if (fieldValue(rows[i], logColumn("interaction_draws")) > 0.0)
       {
-        CHECK(fieldValue(rows[i], 19) > 0.0);
+        CHECK(fieldValue(rows[i], logColumn("gpu_interactions_ms")) > 0.0);
       }
-      if (rows[i][34] == "1" && fieldValue(rows[i], 23) > 0.0)
+      if (settled == "1" && fieldValue(rows[i], logColumn("prepass_draws")) > 0.0)
       {
-        CHECK(fieldValue(rows[i], 22) > 0.0);
-        CHECK(fieldValue(rows[i], 20) > 0.0);
-        CHECK(fieldValue(rows[i], 21) > 0.0);
-        CHECK(fieldValue(rows[i], 6) > 0.0);
+        CHECK(fieldValue(rows[i], logColumn("draws")) > 0.0);
+        CHECK(fieldValue(rows[i], logColumn("gpu_tonemap_ms")) > 0.0);
+        CHECK(fieldValue(rows[i], logColumn("gpu_blit_ms")) > 0.0);
+        CHECK(fieldValue(rows[i], logColumn("gpu_frame_ms")) > 0.0);
         lastLit = rows[i];
       }
     }

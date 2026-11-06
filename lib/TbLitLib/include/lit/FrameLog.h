@@ -300,8 +300,12 @@ struct FrameLogRow
   // last columns
   std::optional<std::uint64_t> lightsMocCulled;
   std::optional<std::uint64_t> surfacesMocCulled;
-  // F2.11 (2026-11-05): moc_ms split: the fill's time (moc_fill_ms, the engine's
-  // pc.mocMicroSec) and the light and surface tests' (moc_test_ms)
+  // F2.11 (2026-11-05): moc_ms split: the fill's time (moc_fill_ms) and the light and
+  // surface tests' (moc_test_ms). V-F.15 (2026-11-06): pc.mocMicroSec's span
+  // (TMOC:546-619) holds the buffer's SetResolution and ClearBuffer and the occluders'
+  // rasterization and excludes R_SortViewEntities (:538); moc_fill_ms holds the same
+  // steps and adds the preview's front-to-back sort of the occluders' runs, their 32-bit
+  // index copies and, at the first build, the library's Create
   std::optional<double> mocFillMs;
   std::optional<double> mocTestMs;
 };

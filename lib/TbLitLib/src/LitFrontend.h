@@ -302,8 +302,9 @@ struct FrontendLists
   std::vector<PreviewId> mocCulledLights;
   // the fill's and every test's time in this build (steady clock), in milliseconds:
   // inside surfacesMs (the fill and the surface tests) and lightsMs (the light tests);
-  // F2.11 (2026-11-05): the fill apart (the engine's pc.mocMicroSec times it alone) from
-  // the surface and light tests together
+  // F2.11 (2026-11-05): the fill apart from the surface and light tests together (V-F.15:
+  // pc.mocMicroSec's span plus the preview's run sort, index copies and first Create;
+  // FrameLog.h's moc_fill_ms)
   double mocFillMs = 0.0;
   double mocTestMs = 0.0;
 

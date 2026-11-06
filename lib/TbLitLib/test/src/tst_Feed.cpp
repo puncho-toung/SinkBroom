@@ -207,6 +207,9 @@ constexpr auto OutputNotConsumedId = std::string_view{"WARNING-Shader-OutputNotC
 // M-SHADOW-DEFECT-01)
 constexpr auto DepthOnlyOutputId =
   std::string_view{"Undefined-Value-ShaderOutputNotConsumed"};
+// V-F.16 (2026-11-06): and its text (the layer's "... but there is no
+// VkSubpassDescription::pColorAttachments[%u] and this write is unused.")
+constexpr auto DepthOnlyOutputText = std::string_view{"and this write is unused"};
 
 // the instance's validation messages, counted; the engine's by-design warnings apart
 struct ValidationCount
@@ -226,7 +229,8 @@ struct ValidationCount
         !message.error
         && ((message.id == OutputNotConsumedId
              && message.text.find("not consumed by vertex shader") != std::string::npos)
-            || message.id == DepthOnlyOutputId))
+            || (message.id == DepthOnlyOutputId
+                && message.text.find(DepthOnlyOutputText) != std::string::npos)))
       {
         ++mirrored;
         return;
@@ -2253,11 +2257,13 @@ TEST_CASE("Feed host: the latency of a fed image (LPF.2, Q29)", "[.][feed]")
     CHECK_FALSE(report.frameLogError);
   }
 
-  // feed_ms (column 47) of every frame row that has one, in order
+  // feed_ms of every frame row that has one, in order (V-F.17, 2026-11-06: its column
+  // found by name in the log's header row, F1.15's rule)
   auto values = std::vector<double>{};
   {
     auto stream = std::ifstream{logPath};
     auto line = std::string{};
+    auto feedColumn = std::optional<std::size_t>{};
     while (std::getline(stream, line))
     {
       auto fields = std::vector<std::string>{};
@@ -2267,9 +2273,18 @@ TEST_CASE("Feed host: the latency of a fed image (LPF.2, Q29)", "[.][feed]")
       {
         fields.push_back(field);
       }
-      if (fields.size() > 47 && fields[1] == "frame" && !fields[47].empty())
+      if (!feedColumn)
       {
-        values.push_back(std::stod(fields[47]));
+        const auto it = std::ranges::find(fields, "feed_ms");
+        REQUIRE(it != fields.end());
+        feedColumn = std::size_t(it - fields.begin());
+        continue;
+      }
+      if (
+        fields.size() > *feedColumn && fields[1] == "frame"
+        && !fields[*feedColumn].empty())
+      {
+        values.push_back(std::stod(fields[*feedColumn]));
       }
     }
   }

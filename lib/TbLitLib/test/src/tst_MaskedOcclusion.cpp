@@ -24,10 +24,14 @@
 // and rects behind it and in front of it, the depth buffer read back, and the MXCSR's
 // FTZ | DAZ set around the calls and given back.
 
+#include "LitFrontend.h"
 #include "LitTestUtils.h"
+#include "LitView.h"
 #include "MaskedOcclusion.h"
 #include "lit/EngineGeometry.h"
+#include "lit/EngineLight.h"
 #include "lit/EngineMaskedOcclusion.h"
+#include "lit/LitSession.h"
 
 #include <array>
 #include <cmath>
@@ -273,6 +277,99 @@ TEST_CASE(
       cycle();
     }
   }));
+}
+
+// V-F.9 (2026-11-06): 50 cycles of TbLitLib's own MaskedOcclusion - a build's fill and
+// surface tests over chunks whose version moves every cycle (their 32-bit index copies
+// made, the last version's swept: m_indexes), a point light's TestTriangles and a spot
+// light's TestRect, a release every tenth cycle (Stop: the buffer and the copies freed,
+// made again by the next build) - leave the CRT's debug heap as two warm-up cycles left
+// it
+TEST_CASE(
+  "MaskedOcclusion: 50 builds, light tests and releases on the debug heap (V-F.9)")
+{
+  auto camera = CameraState{};
+  camera.position = {0, 0, 0};
+  camera.direction = {1, 0, 0};
+  camera.up = {0, 0, 1};
+  camera.fovDegrees = 90.0f;
+  camera.viewportWidth = 128;
+  camera.viewportHeight = 96;
+  const auto view = litViewOf(camera, 128, 96);
+  const auto spaces = std::vector<LitSpace>{
+    litSpaceOf(view, NoPreviewId, {0, 0, 0}, {1, 0, 0, 0, 1, 0, 0, 0, 1}, ShaderParms{})};
+  // a square facing the view at x, its half side h (both windings: one faces the view)
+  const auto square = [](const float x, const float h) {
+    auto chunk = Chunk{};
+    chunk.verts.resize(4);
+    chunk.verts[0].xyz = {x, -h, -h};
+    chunk.verts[1].xyz = {x, h, -h};
+    chunk.verts[2].xyz = {x, h, h};
+    chunk.verts[3].xyz = {x, -h, h};
+    chunk.indexes = {0, 1, 2, 0, 2, 3, 0, 2, 1, 0, 3, 2};
+    chunk.bounds = {EngineVec3{x, -h, -h}, EngineVec3{x, h, h}};
+    return chunk;
+  };
+  // two versions' chunks: a wall and a small square behind it
+  const auto sets = std::array<std::vector<Chunk>, 2>{
+    std::vector<Chunk>{square(50.0f, 100.0f), square(100.0f, 10.0f)},
+    std::vector<Chunk>{square(60.0f, 100.0f), square(120.0f, 10.0f)}};
+  // a light's box behind the wall: the zero-to-one cube to x 150..160, y and z -5..5
+  auto lightBox = engineIdentityMatrix();
+  lightBox[0] = 10.0f;
+  lightBox[3] = 150.0f;
+  lightBox[5] = 10.0f;
+  lightBox[7] = -5.0f;
+  lightBox[10] = 10.0f;
+  lightBox[11] = -5.0f;
+  auto scissor = ScreenRect{};
+  scissor.x1 = 56;
+  scissor.y1 = 40;
+  scissor.x2 = 72;
+  scissor.y2 = 56;
+  scissor.zmin = 0.5f;
+  scissor.zmax = 0.9f;
+  auto moc = MaskedOcclusion{};
+  auto version = std::uint64_t{0};
+  auto culledSurfaces = std::size_t{0};
+  const auto cycle = [&] {
+    ++version;
+    const auto& chunks = sets[version % 2];
+    auto surfaces = std::vector<LitSurface>(chunks.size());
+    for (std::size_t i = 0; i < chunks.size(); ++i)
+    {
+      surfaces[i].chunk = &chunks[i];
+    }
+    const auto occluder = std::vector<char>{1, 0};
+    auto culled = std::vector<char>(surfaces.size(), 0);
+    const auto cull = moc.cullSurfaces(view, version, surfaces, spaces, occluder, culled);
+    REQUIRE(cull);
+    culledSurfaces += cull->culled;
+    auto ms = 0.0;
+    static_cast<void>(moc.lightVisible(view, lightBox, true, scissor, ms));
+    static_cast<void>(moc.lightVisible(view, lightBox, false, scissor, ms));
+    if (version % 10 == 0)
+    {
+      moc.release();
+    }
+  };
+  cycle();
+  cycle();
+  if (moc.implementationName().empty())
+  {
+    SKIP("the masked occlusion library is not built for this CPU");
+  }
+  CHECK_FALSE(heapGrows([&] {
+    for (auto i = 0; i < 50; ++i)
+    {
+      cycle();
+    }
+  }));
+  std::cout << "V-F.9: " << version << " builds, " << culledSurfaces
+            << " surfaces culled, the index copies kept " << moc.indexCopies() << ", "
+            << moc.rectTests() << " TestRect calls\n";
+  CHECK(moc.indexCopies() == 1u);
+  CHECK(moc.rectTests() > 0u);
 }
 #endif
 

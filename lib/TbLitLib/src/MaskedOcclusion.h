@@ -88,8 +88,9 @@ public:
     std::size_t runsViewCulled = 0;
     std::size_t tests = 0;
     std::size_t culled = 0;
-    // F2.11 (2026-11-05): the fill's time (the engine's pc.mocMicroSec) and the surface
-    // tests', in milliseconds
+    // F2.11 (2026-11-05): the fill's time (V-F.15: pc.mocMicroSec's span, SetResolution
+    // and ClearBuffer with the rasterization, plus the run sort, the index copies and a
+    // first build's Create) and the surface tests', in milliseconds
     double fillMs = 0.0;
     double testMs = 0.0;
   };
