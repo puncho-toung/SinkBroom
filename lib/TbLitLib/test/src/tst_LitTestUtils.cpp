@@ -21,10 +21,14 @@
 
 #include "LitTestUtils.h"
 #include "StackThread.h"
+#include "TestTempPath.h"
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 
 #if defined(_MSC_VER) && defined(_DEBUG)
@@ -241,5 +245,44 @@ TEST_CASE("heapGrows counts only what the product owns (LP7.1b step 0)")
   }
 }
 #endif
+
+// V-F.10 (2026-11-06): testTempPath's sweep at a name's first use: the name's leftovers
+// of other runs (another process id) older than a day go; a younger one, the run's own, a
+// name another pattern holds and another name's are kept
+TEST_CASE("testTempPath sweeps its name's old leftovers (V-F.10)")
+{
+  const auto folder = std::filesystem::temp_directory_path();
+  const auto old = folder / "TbLitLibTest-vf10-sweep-111";
+  const auto oldFile = folder / "TbLitLibTest-vf10-sweep-112.txt";
+  const auto young = folder / "TbLitLibTest-vf10-sweep-113";
+  const auto notPid = folder / "TbLitLibTest-vf10-sweep-old";
+  const auto other = folder / "TbLitLibTest-vf10-other-114";
+  for (const auto& path : {old, young, notPid, other})
+  {
+    std::filesystem::create_directories(path / "inside");
+  }
+  std::ofstream{oldFile} << "left";
+  const auto twoDays =
+    std::filesystem::file_time_type::clock::now() - std::chrono::hours{48};
+  for (const auto& path : {old, oldFile, notPid, other})
+  {
+    std::filesystem::last_write_time(path, twoDays);
+  }
+
+  const auto made = testTempPath("TbLitLibTest-vf10-sweep");
+  CHECK(made.filename().string().starts_with("TbLitLibTest-vf10-sweep-"));
+  CHECK_FALSE(std::filesystem::exists(old));
+  CHECK(std::filesystem::exists(oldFile));
+  CHECK(std::filesystem::exists(young));
+  CHECK(std::filesystem::exists(notPid));
+  CHECK(std::filesystem::exists(other));
+  // the .txt name's own sweep takes its old leftover
+  CHECK(testTempPath("TbLitLibTest-vf10-sweep.txt").extension() == ".txt");
+  CHECK_FALSE(std::filesystem::exists(oldFile));
+  for (const auto& path : {young, notPid, other})
+  {
+    std::filesystem::remove_all(path);
+  }
+}
 
 } // namespace tb::lit

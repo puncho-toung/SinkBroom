@@ -132,6 +132,10 @@ public:
       std::cout.flush();
       std::exit(3);
     }
+    // the pass verdict, so that a log shows it (the verifier's note, 2026-11-06)
+    std::cout << "F1.17: the user-data folder unchanged (" << litUserData().string()
+              << ", " << after.size() << " entries)\n";
+    std::cout.flush();
   }
 };
 

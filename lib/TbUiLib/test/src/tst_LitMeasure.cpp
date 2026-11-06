@@ -79,6 +79,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -3040,10 +3041,18 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
         parts += fmt::format(" ({})", listsPartsText(field));
       }
     }
+    // V-F.8 (2026-11-06): the draws' remainder after the six named terms, as the moving
+    // split prints it (FrameLog.h's draws: pass 3 and the tonemap passes)
+    const auto number = [&](const std::size_t c) {
+      const auto& text = start.at(c);
+      return text.empty() ? 0.0 : std::strtod(text.c_str(), nullptr);
+    };
     summary += fmt::format(
       "| Settled start view, split (first Start, frame {}) | cpu_record_ms {}: {}; draws "
-      "{} (prepass {}, ambient {}, interactions {}, stages {}, fog {}), shadow draws "
-      "{} | — | — |\n",
+      "{} (prepass {}, ambient {}, interactions {}, stages {}, fog {}, blend {}; the "
+      "rest "
+      "{:.0f}: pass 3 and the tonemap passes), shadow draws {} (not among the draws) | — "
+      "| — |\n",
       first.settledFrame,
       field(column::CpuRecordMs),
       parts,
@@ -3053,6 +3062,10 @@ TEST_CASE("LitPreviewPanel measured on a retail map", "[.][measure]")
       field(column::InteractionDraws),
       field(column::StageDraws),
       field(column::FogDraws),
+      field(column::BlendDraws),
+      number(column::Draws) - number(column::PrepassDraws) - number(column::AmbientDraws)
+        - number(column::InteractionDraws) - number(column::StageDraws)
+        - number(column::FogDraws) - number(column::BlendDraws),
       field(column::ShadowDraws));
     // LP6.1 (C64): the draw records the settled start view holds and resolves, the moving
     // frames' resolutions (0 while the textures are settled) and the first Start's
