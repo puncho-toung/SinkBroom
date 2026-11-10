@@ -1273,7 +1273,7 @@ void SceneGeometry::storePieces(const ChunkJobOutput& output)
   // in a rebuilt cell differ is evaluated again
   using Key = std::pair<CellRef, AdoptionGroup>;
   auto hashes = std::map<Key, std::array<std::uint64_t, 2>>{};
-  constexpr auto Basis = 0xCBF29CE484222325ull;
+  constexpr auto Basis = std::uint64_t{0xCBF29CE484222325ull};
   for (const auto& ref : output.cells)
   {
     const auto it = m_cellPieces.find(ref);

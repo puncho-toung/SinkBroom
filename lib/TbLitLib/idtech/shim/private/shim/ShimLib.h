@@ -192,6 +192,10 @@ dword PackColor(const idVec4& color);
 // misc
 class idRandom;
 class idSerializer;
+// the engine's Lib.h includes Parser.h before Dict.h, whose idDict::Parse names idParser.
+// Parser.h is not copied. MSVC finds the name through the friend declarations in Token.h
+// and Lexer.h; GCC and Clang do not, as the standard has it
+class idParser;
 #include "idlib/Dict.h"
 
 // idlib/LangDict.h's idStrId, which only Str.cpp's testStrId console command names; that

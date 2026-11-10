@@ -1439,7 +1439,14 @@ TEST_CASE("LitPasses: the LP2.2a fixture's lists without a tree (LP4.1, D94)")
   };
   for (const auto& expected : {
          Expected{fixtureCamera(-240, 0, 64), 17, 8, 0x80fa1976e119e7a7ull},
+#if defined(_WIN32)
          Expected{fixtureCamera(0, 0, 64), 11, 5, 0xe86f28e4f3cc3800ull},
+#else
+         // K48: lights 3 and 6 both fill this view, and glibc's qsort orders the tie its
+         // own way: 3 before 6, where the UCRT's has 6 before 3. The text is otherwise
+         // the same: with the two lights exchanged its hash is the one above
+         Expected{fixtureCamera(0, 0, 64), 11, 5, 0xa868383bac561ed8ull},
+#endif
          Expected{cameraAt({200, 0, 64}, {-1, 0, 0}), 19, 6, 0xf2e82e63883146bbull},
        })
   {

@@ -1244,8 +1244,7 @@ static_assert(EngineFrameOverrides{}.ssao == EngineFrame.useSsao);
 static_assert(EngineFrameOverrides{}.forceAmbient == EngineFrame.forceAmbient);
 static_assert(
   EngineFrameOverrides{}.maskedOcclusion == EngineFrame.useMaskedOcclusionCulling);
-static_assert(
-  SessionOptions{}.maskedOcclusionForTesting == EngineFrame.useMaskedOcclusionCulling);
+static_assert(DefaultMaskedOcclusionForTesting == EngineFrame.useMaskedOcclusionCulling);
 
 void RenderThread::setDebugView(const DebugView view)
 {

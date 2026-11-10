@@ -74,6 +74,11 @@ struct EngineFrameOverrides
   bool operator==(const EngineFrameOverrides&) const = default;
 };
 
+// SessionOptions::maskedOcclusionForTesting's default, named so that RenderThread.cpp
+// asserts it against EngineFrame at compile time: SessionOptions itself is not a literal
+// type under libstdc++, whose std::filesystem::path has no constexpr destructor
+constexpr auto DefaultMaskedOcclusionForTesting = true;
+
 struct SessionOptions
 {
   // the validation layer is on the instance; in Debug, NVRHI's validation layer as well
@@ -117,7 +122,7 @@ struct SessionOptions
   // world (on here, in sessions and in the measure); off in the parity case (the SWITCH
   // pins the engine's 0) and in the GPU cases before LP6.7, whose pictures and counts
   // stand
-  bool maskedOcclusionForTesting = true;
+  bool maskedOcclusionForTesting = DefaultMaskedOcclusionForTesting;
 };
 
 // LP6.6 (C74): a session's first overrides, its options' three switches
