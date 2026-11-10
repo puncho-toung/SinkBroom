@@ -377,7 +377,9 @@ TEST_CASE("EntityRotation")
     // clang-format off
     const auto
     [properties,                                  expectedTransformation] = GENERATE(values<T>({
-    {{},                                          vm::mat4x4d::identity()},
+    // the vector is spelled out: with libstdc++, {{}, x} for a two-element tuple is ambiguous
+    // with tuple(allocator_arg_t, const Alloc&)
+    {std::vector<EntityProperty>{},               vm::mat4x4d::identity()},
     {{{"rotation", ""}},                          vm::mat4x4d::identity()},
     // the columns of the rotation are the forward, left and up axes: yaw 90
     {{{"rotation", "0 1 0 -1 0 0 0 0 1"}},        vm::mat4x4d::rot_90_z_ccw()},
@@ -422,7 +424,7 @@ TEST_CASE("EntityRotation")
     // clang-format off
     const auto
     [properties,                                  expectedTransformation] = GENERATE_COPY(values<T>({
-    {{},                                          vm::mat4x4d::identity()},
+    {std::vector<EntityProperty>{},               vm::mat4x4d::identity()},
     {{{"angles", ""}},                            vm::mat4x4d::identity()},
     {{{"angles", "0 90 0"}},                      yaw90},
     // like idDict::GetAngles, fewer than three numbers are read over 0 0 0

@@ -1543,8 +1543,10 @@ textures/fixture/argument
   SECTION("Keyword arities")
   {
     using T = std::tuple<bool, std::string>;
-    constexpr auto Material = false;
-    constexpr auto Stage = true;
+    // static: GENERATE's lambda captures nothing, and GCC and Clang do not let it name a
+    // local with automatic storage
+    static constexpr auto Material = false;
+    static constexpr auto Stage = true;
 
     // clang-format off
     const auto [inStage, row] = GENERATE(values<T>({
