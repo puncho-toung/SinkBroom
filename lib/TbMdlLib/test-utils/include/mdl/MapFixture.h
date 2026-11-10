@@ -96,12 +96,14 @@ inline const MapFixtureConfig NamingFixtureConfig = makeNamingFixtureConfig();
 class MapFixture
 {
 private:
+  // Declared first, so destroyed last: the map refers to the config's GameInfo and still
+  // reads it while it is destroyed (EntityModelManager's destructor).
+  std::optional<MapFixtureConfig> m_config;
+
   std::unique_ptr<kdl::task_manager> m_taskManager;
   std::unique_ptr<gl::ResourceManager> m_resourceManager;
   std::unique_ptr<Logger> m_logger;
   std::unique_ptr<Map> m_map;
-
-  std::optional<MapFixtureConfig> m_config;
 
 public:
   explicit MapFixture();

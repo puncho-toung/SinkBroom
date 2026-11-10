@@ -58,11 +58,13 @@ Result<std::unique_ptr<MapDocument>> loadFixtureDocument(
 class MapDocumentFixture
 {
 private:
+  // Declared first, so destroyed last: the document's map refers to the config's GameInfo
+  // and still reads it while it is destroyed (EntityModelManager's destructor).
+  std::optional<mdl::MapFixtureConfig> m_config;
+
   std::unique_ptr<kdl::task_manager> m_taskManager;
   std::unique_ptr<gl::ResourceManager> m_resourceManager;
   std::unique_ptr<MapDocument> m_document;
-
-  std::optional<mdl::MapFixtureConfig> m_config;
 
 public:
   explicit MapDocumentFixture();

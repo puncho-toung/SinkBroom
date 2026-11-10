@@ -1122,7 +1122,7 @@ TEST_CASE("PrefabRefresh")
     deselectAll(map);
 
     selectNodes(map, {targetingNode, extraKeyNode, protectedNode, otherNode, brushNode});
-    const auto before = std::vector{
+    auto before = std::vector{
       targetingNode->entity(),
       extraKeyNode->entity(),
       protectedNode->entity(),
@@ -1220,6 +1220,9 @@ TEST_CASE("PrefabRefresh")
 
     SECTION("Reloaded definitions reach the snapshot before processPendingResults")
     {
+      // the copies refer to the definitions that the reload frees
+      before.clear();
+
       // R8-lib-7
       map.entityDefinitionsWillChangeNotifier();
       map.entityDefinitionsDidChangeNotifier();

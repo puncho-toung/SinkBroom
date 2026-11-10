@@ -1730,8 +1730,10 @@ TEST_CASE("PrefabPanel")
     const auto mapPath = mapEnv.dir() / "level.map";
     REQUIRE(map.saveTo(mapPath) | kdl::is_success());
 
-    const auto environmentConfig = map.environmentConfig();
-    const auto gameInfo = map.gameInfo();
+    // references to the fixture's own: the loaded map keeps them and outlives a copy
+    // made here, which is destroyed before the fixture
+    const auto& environmentConfig = map.environmentConfig();
+    const auto& gameInfo = map.gameInfo();
     const auto mapFormat = map.worldNode().mapFormat();
     const auto worldBounds = map.worldBounds();
     const auto load = [&]() {
