@@ -36,6 +36,7 @@
 #include "mdl/EntityDefinitionManager.h"
 #include "mdl/EntityNode.h"
 #include "mdl/EntityProperties.h"
+#include "mdl/EntityRotation.h"
 #include "mdl/GameConfig.h"
 #include "mdl/GameInfo.h"
 #include "mdl/Grid.h"
@@ -69,6 +70,7 @@
 #include "vm/distance.h"
 #include "vm/intersection.h"
 #include "vm/polygon.h"
+#include "vm/quat.h"
 #include "vm/segment.h"
 
 #include <algorithm>
@@ -95,9 +97,6 @@ constexpr auto MinDrawnHalfExtent = 1.0;
 // because the drag runs in the view plane
 constexpr auto MaxCosine2D = 0.9;
 
-// a Shift drag of the inner shell keeps a core inside the outer shell (D60)
-constexpr auto MaxInnerRadius = 0.98;
-
 // the highlight of a surface under the mouse (D60)
 constexpr auto SurfaceHighlightAlpha = 0.25f;
 
@@ -107,11 +106,6 @@ constexpr auto DegenerateEpsilon = 1e-6;
 // an element of a box this close to the box frame's origin lies on it (D64)
 constexpr auto OriginEpsilon = 1e-6;
 
-// a point of a cap this close outside the ring of its cone is still on the cap (D69)
-constexpr auto RingEpsilon = 1e-6;
-
-const auto FarCapSide = BBoxSide{vm::vec3d{0, 0, 1}};
-
 vm::mat3x3d beamMatrix(const mdl::BeamFrame& beam)
 {
   auto result = vm::mat3x3d{};
@@ -119,6 +113,41 @@ vm::mat3x3d beamMatrix(const mdl::BeamFrame& beam)
   result[1] = beam.u;
   result[2] = beam.n;
   return result;
+}
+
+/**
+ * Whether the given light is an emitter spot, whose box is in its own axes with the
+ * depth along x from its bulb, not in the beam frame.
+ */
+bool isEmitterSpot(const mdl::LightProperties& light)
+{
+  return light.type == mdl::LightType::Spot && mdl::lightUsesEmitter(light);
+}
+
+/**
+ * The axis of the box frame along which a spot light's box runs from its apex or bulb:
+ * x for an emitter, z for a texture spot light's beam frame.
+ */
+std::size_t depthAxis(const LightVolumeBox& volume)
+{
+  return isEmitterSpot(volume.light) ? 0 : 2;
+}
+
+/**
+ * The side of a spot light's box that its far cap, or an emitter's round cap, lies on.
+ */
+BBoxSide farCapSide(const LightVolumeBox& volume)
+{
+  return BBoxSide{vm::vec3d::axis(depthAxis(volume))};
+}
+
+/**
+ * The centre of a light's volume in its local space, about which its box is scaled and
+ * its shells are drawn: an emitter omni's bulb, else the origin.
+ */
+vm::vec3d volumeCentre(const mdl::LightProperties& light)
+{
+  return mdl::lightUsesEmitter(light) ? mdl::emitterBulb(light) : vm::vec3d{0, 0, 0};
 }
 
 mdl::EntityRotationPolicy rotationPolicy(const mdl::Map& map)
@@ -161,21 +190,28 @@ std::vector<BBoxSide> faceCenterSides(const LightVolumeBox& volume)
   {
     return allSides();
   }
-  return {
-    BBoxSide{vm::vec3d{1, 0, 0}},
-    BBoxSide{vm::vec3d{-1, 0, 0}},
-    BBoxSide{vm::vec3d{0, 1, 0}},
-    BBoxSide{vm::vec3d{0, -1, 0}},
-  };
+
+  const auto depth = depthAxis(volume);
+  auto result = std::vector<BBoxSide>{};
+  for (std::size_t axis = 0; axis < 3; ++axis)
+  {
+    if (axis != depth)
+    {
+      result.push_back(BBoxSide{vm::vec3d::axis(axis)});
+      result.push_back(BBoxSide{-vm::vec3d::axis(axis)});
+    }
+  }
+  return result;
 }
 
 /**
  * Whether the given side of the given volume is a spot light's apex face, which lies on
- * the light's position: it is not a handle (D64, D67).
+ * the light's position, an emitter's bulb: it is not a handle (D64, D67).
  */
 bool isApexSide(const LightVolumeBox& volume, const BBoxSide& side)
 {
-  return volume.light.type == mdl::LightType::Spot && side.normal == vm::vec3d{0, 0, -1};
+  return volume.light.type == mdl::LightType::Spot
+         && side.normal == -vm::vec3d::axis(depthAxis(volume));
 }
 
 /**
@@ -255,13 +291,14 @@ mdl::PickResult pickVolume(
 
   if (isFarCapSide(volume))
   {
-    const auto beam = volume.rotation * FarCapSide.normal;
+    const auto farSide = farCapSide(volume);
+    const auto beam = volume.rotation * farSide.normal;
     if (!twoD || std::abs(vm::dot(beam, pickRay.direction)) <= MaxCosine2D)
     {
       pickPoint(
-        volume.toWorld(centerForBBoxSide(volume.box, FarCapSide)),
+        volume.toWorld(centerForBBoxSide(volume.box, farSide)),
         LightVolumeTool::FarCapCenterHitType,
-        FarCapSide);
+        farSide);
     }
   }
 
@@ -378,7 +415,7 @@ std::optional<vm::bbox3d> moveBox(
 BBoxSide shellSide(const LightSurfaceHit& surface)
 {
   const auto radius = vm::abs(surface.light.radius);
-  const auto& point = surface.localPoint;
+  const auto point = surface.localPoint - volumeCentre(surface.light);
   const auto normal = vm::vec3d{
     point.x() / (radius.x() * radius.x()),
     point.y() / (radius.y() * radius.y()),
@@ -404,18 +441,33 @@ vm::vec3d surfacePointInBox(const LightVolumeBox& volume, const LightSurfaceHit&
 std::pair<std::size_t, double> funnelAxis(
   const LightVolumeBox& volume, const LightSurfaceHit& surface)
 {
+  // the two lateral axes, the ones that are not the box's depth
+  const auto depth = depthAxis(volume);
+  const auto first = depth == 0 ? std::size_t{1} : std::size_t{0};
+  const auto second = depth == 2 ? std::size_t{1} : std::size_t{2};
+
   const auto point = surfacePointInBox(volume, surface);
-  const auto halfExtents = volume.box.size() / 2.0;
-  const auto axis = std::size_t(
-    std::abs(point.x()) / halfExtents.x() >= std::abs(point.y()) / halfExtents.y() ? 0
-                                                                                   : 1);
+  // an emitter's box lies on its cone's widest ring, R sin, but its cone's lateral extent
+  // at a depth is in proportion to the tangents
+  const auto halfExtents =
+    isEmitterSpot(volume.light)
+      ? vm::vec3d{
+          1.0,
+          mdl::emitterTanHalf(volume.light.emitter.coneH),
+          mdl::emitterTanHalf(volume.light.emitter.coneV)}
+      : volume.box.size() / 2.0;
+  const auto axis = std::abs(point[first]) / halfExtents[first]
+                        >= std::abs(point[second]) / halfExtents[second]
+                      ? first
+                      : second;
   return {axis, point[axis]};
 }
 
 /**
  * Whether a Shift drag edits the given element of the given light (D60, D69): a point
  * light's outer shell and, if it is drawn, its inner shell; a spot light's funnel and
- * base and, if it is drawn, its inner cap.
+ * base and, if it is drawn, its inner cap. The inner shell and the inner cap are an
+ * emitter's emit_start.
  */
 bool isEditableElement(const mdl::LightElement element, const mdl::LightProperties& light)
 {
@@ -442,15 +494,17 @@ bool isEditableElement(const mdl::LightElement element, const mdl::LightProperti
 /**
  * The light that a Shift drag of the given surface by the given world delta makes of the
  * light at the start of the drag (D60), or nothing if the step is denied. Every box is
- * scaled about the origin of its frame, which does not move (D64):
+ * scaled about the centre of its volume, which does not move (D64):
  * - the outer shell moves the side of the full box (t = 1) along the axis of its normal
  *   at the hit point, so the shell follows the mouse and the opposite side mirrors it;
- * - the inner shell's radius becomes the falloff parameter of the moved hit point;
+ * - the inner shell of an emitter omni sets emit_start where the moved hit point lies on
+ *   the falloff;
  * - the funnel scales the lateral axis of the box that the hit point lies along by the
  *   factor of the hit point's moved coordinate, the depth unchanged (D67);
  * - the base moves the far cap along the beam like the far cap's centre;
- * - the inner cap's inner radius becomes the falloff parameter of the moved hit point's
- *   depth (D69).
+ * - the inner cap of an emitter spot sets emit_start to the moved hit point's distance
+ *   from the bulb (D69).
+ * After an emit_start edit, auto range sets the range.
  */
 std::optional<mdl::LightProperties> editSurface(
   const LightVolumeBox& start, const LightSurfaceHit& surface, const vm::vec3d& delta)
@@ -474,21 +528,40 @@ std::optional<mdl::LightProperties> editSurface(
     return *to == from ? std::optional{start.light} : std::nullopt;
   };
 
+  // no move is the light at the start exactly, so that a drag back to its start is no
+  // edit; the start is at most range - 1, and the range then follows it
+  const auto withStart = [&](const double distance) {
+    if (delta == vm::vec3d{0, 0, 0})
+    {
+      return start.light;
+    }
+    auto light = start.light;
+    light.emitter.start =
+      mdl::clampEmitterStart(distance, mdl::emitterRange(light.radius));
+    return mdl::applyEmitterAutoRange(light, mdl::EmitterEdit::Reach);
+  };
+
   switch (surface.element)
   {
   case mdl::LightElement::OuterShell: {
+    // the full box about the shells' centre, an emitter omni's bulb
+    const auto centre = volumeCentre(start.light);
     const auto box = mdl::pointLightLocalBox(start.light);
+    const auto scaled = scaleLightBoxAboutOrigin(
+      box, {sideCoordinate(box, shellSide(surface))}, toLocal * delta);
     return checked(
-      box,
-      scaleLightBoxAboutOrigin(
-        box, {sideCoordinate(box, shellSide(surface))}, toLocal * delta));
+      box.translate(centre),
+      scaled ? std::optional{scaled->translate(centre)} : std::nullopt);
   }
   case mdl::LightElement::InnerShell: {
     const auto point = surface.localPoint + toLocal * delta;
-    auto light = start.light;
-    light.math.innerRadius = std::clamp(
-      mdl::pointFalloffT(point, vm::abs(start.light.radius)), 0.0, MaxInnerRadius);
-    return light;
+    if (mdl::lightUsesEmitter(start.light))
+    {
+      return withStart(
+        mdl::emitterFalloffT(start.light, point) * mdl::emitterRange(start.light.radius));
+    }
+    // only an emitter has a core
+    return std::nullopt;
   }
   case mdl::LightElement::Funnel: {
     const auto coordinate = funnelAxis(start, surface);
@@ -496,26 +569,38 @@ std::optional<mdl::LightProperties> editSurface(
     {
       return std::nullopt;
     }
-    return checked(
-      start.box, scaleLightBoxAboutOrigin(start.box, {coordinate}, toBox * delta));
+    const auto scaled = scaleLightBoxAboutOrigin(start.box, {coordinate}, toBox * delta);
+    if (scaled && isEmitterSpot(start.light))
+    {
+      // the hit point lies on the cone, whose lateral extent is R tan, but the edit box's
+      // sides are at R sin (G0 section 9): the cone's tangent is scaled, so that the
+      // funnel follows the mouse, and the box side is set from it
+      const auto axis = coordinate.first;
+      const auto factor = scaled->max[axis] / start.box.max[axis];
+      const auto& emitter = start.light.emitter;
+      const auto tanHalf =
+        factor * mdl::emitterTanHalf(axis == 1 ? emitter.coneH : emitter.coneV);
+      const auto half =
+        mdl::emitterRange(start.light.radius) * std::sin(std::atan(tanHalf));
+      auto box = *scaled;
+      box.min[axis] = -half;
+      box.max[axis] = half;
+      return checked(start.box, box);
+    }
+    return checked(start.box, scaled);
   }
   case mdl::LightElement::Base:
     return checked(
       start.box,
       scaleLightBoxAboutOrigin(
-        start.box, {sideCoordinate(start.box, FarCapSide)}, toBox * delta));
+        start.box, {sideCoordinate(start.box, farCapSide(start))}, toBox * delta));
   case mdl::LightElement::InnerCap: {
-    const auto frustum = mdl::spotLightFrustum(start.light);
-    if (!frustum)
+    if (mdl::lightUsesEmitter(start.light))
     {
-      return std::nullopt;
+      return withStart(vm::length(surface.localPoint + toLocal * delta));
     }
-
-    const auto depth = vm::dot(surface.localPoint + toLocal * delta, frustum->n);
-    auto light = start.light;
-    light.math.innerRadius = std::clamp(
-      mdl::spotFalloffT(depth, frustum->zNear, frustum->zFar), 0.0, MaxInnerRadius);
-    return light;
+    // only an emitter has a core
+    return std::nullopt;
   }
   case mdl::LightElement::Penumbra:
   case mdl::LightElement::SunBox:
@@ -528,38 +613,57 @@ std::optional<mdl::LightProperties> editSurface(
 
 /**
  * The bounding sphere of a light's volume in the world, for the pre-test of the surface
- * picks (D57).
+ * picks (D57): mdl::lightBoundingSphere, which the renderer uses too, except for a
+ * texture spot, whose sphere about the box of its apex and far corners is tighter than
+ * the one about its apex that the renderer sorts by.
  */
 std::pair<vm::vec3d, double> boundingSphere(
   const mdl::LightProperties& light, const mdl::LightFrame& frame)
 {
-  switch (light.type)
+  if (light.type != mdl::LightType::Spot || mdl::lightUsesEmitter(light))
   {
-  case mdl::LightType::Point:
-    return {frame.origin, vm::get_max_component(vm::abs(light.radius))};
-  case mdl::LightType::Sun:
-    return {frame.origin, vm::length(light.radius)};
-  case mdl::LightType::Spot: {
-    // the near corners lie between the apex and the far corners
-    auto points = std::vector<vm::vec3d>{frame.origin};
-    if (const auto frustum = mdl::spotLightFrustum(light))
+    return mdl::lightBoundingSphere(light, frame);
+  }
+
+  // the near corners lie between the apex and the far corners; the points are placed by
+  // the frame, as the mesh that is picked places them
+  auto points = std::vector<vm::vec3d>{frame.origin};
+  if (const auto frustum = mdl::spotLightFrustum(light))
+  {
+    for (const auto& corner : frustum->farCorners)
     {
-      for (const auto& corner : frustum->farCorners)
+      points.push_back(frame.origin + frame.R * corner);
+    }
+  }
+
+  const auto centre = vm::bbox3d::build(points)->center();
+  auto radius = 0.0;
+  for (const auto& point : points)
+  {
+    radius = std::max(radius, vm::length(point - centre));
+  }
+  return {centre, radius};
+}
+
+/**
+ * The world triangles of the given element of the given light volume mesh.
+ */
+std::vector<vm::vec3d> elementTriangles(
+  const render::LightVolumeMesh& mesh, const mdl::LightElement element)
+{
+  auto result = std::vector<vm::vec3d>{};
+  for (const auto& range : mesh.ranges)
+  {
+    if (range.element == element)
+    {
+      for (std::size_t i = 0; i < range.count; ++i)
       {
-        points.push_back(frame.origin + frame.R * corner);
+        result.emplace_back(
+          gl::getVertexComponent<0>(mesh.triangles[range.firstTriangleVertex + i]));
       }
     }
-
-    const auto centre = vm::bbox3d::build(points)->center();
-    auto radius = 0.0;
-    for (const auto& point : points)
-    {
-      radius = std::max(radius, vm::length(point - centre));
-    }
-    return {centre, radius};
   }
-    switchDefault();
-  }
+  return result;
 }
 
 /**
@@ -576,22 +680,10 @@ std::vector<vm::vec3d> elementTriangles(
   const mdl::LightElement element,
   const bool outerShellOnly)
 {
-  const auto mesh = render::buildLightVolumeMesh(
-    light, frame, render::LightVolumeStyle{1.0, 1, false, outerShellOnly});
-
-  auto result = std::vector<vm::vec3d>{};
-  for (const auto& range : mesh.ranges)
-  {
-    if (range.element == element)
-    {
-      for (std::size_t i = 0; i < range.count; ++i)
-      {
-        result.emplace_back(
-          gl::getVertexComponent<0>(mesh.triangles[range.firstTriangleVertex + i]));
-      }
-    }
-  }
-  return result;
+  return elementTriangles(
+    render::buildLightVolumeMesh(
+      light, frame, render::LightVolumeStyle{1.0, 1, false, outerShellOnly}),
+    element);
 }
 
 /**
@@ -615,18 +707,30 @@ std::vector<vm::vec3d> pickedTriangles(
 }
 
 /**
- * Whether the given world point of a cap of the given spot light lies inside the ring of
- * its cone, the superellipse of its shape exponent, where the cap is drawn;
- * intersectRaySpotCap tests the parallelogram around it.
+ * The distance along the given world ray to an emitter spot's inner cap, the part of the
+ * sphere of its start about its bulb inside the cone, from either side: the nearer of the
+ * ray's two crossings of the sphere that lies in front of the bulb inside the ring.
  */
-bool insideSpotRing(
-  const mdl::LightProperties& light, const mdl::LightFrame& frame, const vm::vec3d& world)
+std::optional<double> intersectEmitterInnerCap(
+  const mdl::LightProperties& light, const mdl::LightFrame& frame, const vm::ray3d& ray)
 {
-  const auto uv =
-    mdl::spotProjectedUV(light, vm::transpose(frame.R) * (world - frame.origin));
-  return uv
-         && mdl::superellipseRadius(uv->x(), uv->y(), light.math.shapeExp)
-              <= 1.0 + RingEpsilon;
+  const auto radius =
+    mdl::emitterRange(light.radius) * mdl::emitterCurve(light).innerRadius;
+  return mdl::intersectRayEmitterCap(light, frame, radius, true, ray);
+}
+
+/**
+ * The distance along the given world ray to an emitter spot's round cap, the part of the
+ * sphere of its range about its bulb inside the cone, from outside only, like the mesh
+ * faces that draw it: the ray's entering crossing of the sphere, if it lies in front of
+ * the bulb inside the ring. The drawn cap lies inside the sphere by at most
+ * range * (1 - cos(pi / SpotSegments)).
+ */
+std::optional<double> intersectEmitterBase(
+  const mdl::LightProperties& light, const mdl::LightFrame& frame, const vm::ray3d& ray)
+{
+  return mdl::intersectRayEmitterCap(
+    light, frame, mdl::emitterRange(light.radius), false, ray);
 }
 
 /**
@@ -782,6 +886,41 @@ void removeRotationProperties(mdl::Entity& entity)
   }
 }
 
+/**
+ * Writes the rotation of a drawn volume: an emitter spot points down, every other light
+ * is aligned with the world, so its rotation properties are removed.
+ */
+void writeDrawnRotation(mdl::Entity& entity, const mdl::LightProperties& light)
+{
+  if (isEmitterSpot(light))
+  {
+    mdl::applyEntityRotationUpdate(
+      entity, mdl::idTech4AnglesUpdate(entity, mdl::EmitterSpotPitchYawRoll));
+  }
+  else
+  {
+    removeRotationProperties(entity);
+  }
+}
+
+/**
+ * The light that the given light becomes when it fills the given world box: an emitter
+ * by the emitter rules, a spot from the top face's centre and an omni or a sun centred in
+ * the box; any other light as before, a spot pointing down from the top face and a point
+ * light visible to the box at the given threshold.
+ */
+mdl::LightProperties drawnLight(
+  const vm::bbox3d& box, const mdl::LightProperties& base, const double threshold)
+{
+  if (mdl::lightUsesEmitter(base))
+  {
+    return base.type == mdl::LightType::Spot ? mdl::emitterSpotFromWorldBox(box, base)
+                                             : mdl::emitterOmniFromWorldBox(box, base);
+  }
+  return base.type == mdl::LightType::Spot ? mdl::spotFromWorldBox(box, base)
+                                           : mdl::pointFromWorldBox(box, base, threshold);
+}
+
 const mdl::EntityDefinition* lightDefinition(const mdl::Map& map)
 {
   const auto* definition = map.entityDefinitionManager().definition("light");
@@ -843,7 +982,8 @@ std::vector<vm::vec3f> handlePositions(const LightVolumeBox& volume, const bool 
   }
   if (isFarCapSide(volume))
   {
-    result.emplace_back(volume.toWorld(centerForBBoxSide(volume.box, FarCapSide)));
+    result.emplace_back(
+      volume.toWorld(centerForBBoxSide(volume.box, farCapSide(volume))));
   }
   return result;
 }
@@ -887,11 +1027,45 @@ void renderHighlight(
 }
 
 /**
- * The outline of a surface where it has one (D60, D69): the far rectangle of a spot
- * light's base, the ring of its inner cap, the edges of a sun's box.
+ * The segments of the closed polygon through the given points, as line vertices.
  */
-std::vector<vm::vec3f> surfaceOutline(const LightSurfaceHit& surface)
+std::vector<vm::vec3f> closedOutline(const std::vector<vm::vec3d>& points)
 {
+  auto result = std::vector<vm::vec3f>{};
+  result.reserve(points.size() * 2);
+  for (std::size_t i = 0; i < points.size(); ++i)
+  {
+    result.emplace_back(points[i]);
+    result.emplace_back(points[(i + 1) % points.size()]);
+  }
+  return result;
+}
+
+/**
+ * The outline of a surface where it has one (D60, D69): the far rectangle of a spot
+ * light's base, the ring of its inner cap, the rim of an emitter spot's round cap or of
+ * its core, the edges of a sun's box.
+ */
+std::vector<vm::vec3f> surfaceOutline(
+  const LightSurfaceHit& surface, const std::vector<vm::vec3d>& triangles)
+{
+  if (
+    isEmitterSpot(surface.light)
+    && (surface.element == mdl::LightElement::Base || surface.element == mdl::LightElement::InnerCap))
+  {
+    // a core whose cap is not drawn has no ring either (RV2-TL-01): its triangles are
+    // empty below an inner radius of 0.02 and from 0.999
+    if (surface.element == mdl::LightElement::InnerCap && triangles.empty())
+    {
+      return {};
+    }
+    const auto range = mdl::emitterRange(surface.light.radius);
+    const auto distance = surface.element == mdl::LightElement::Base
+                            ? range
+                            : range * mdl::emitterCurve(surface.light).innerRadius;
+    return closedOutline(render::emitterSpotRing(surface.light, surface.frame, distance));
+  }
+
   const auto toWorld = [&](const vm::vec3d& local) {
     return vm::vec3f{surface.frame.origin + surface.frame.R * local};
   };
@@ -912,8 +1086,6 @@ std::vector<vm::vec3f> surfaceOutline(const LightSurfaceHit& surface)
   {
     // the cap is a fan around its centre: the outer side of each triangle is a segment
     // of its ring
-    const auto triangles =
-      lightElementTriangles(surface.light, surface.frame, surface.element);
     for (std::size_t i = 0; i + 2 < triangles.size(); i += 3)
     {
       result.emplace_back(triangles[i + 1]);
@@ -937,13 +1109,15 @@ std::vector<vm::vec3f> surfaceOutline(const LightSurfaceHit& surface)
  * Whether the camera is inside the closed surface of the given element, so that its
  * highlight culls its front faces like the light volume renderer (D43).
  */
-bool containsCamera(const LightSurfaceHit& surface, const vm::vec3d& camera)
+bool containsCamera(
+  const LightVolumeTool::SurfaceGeometry& surface, const vm::vec3d& camera)
 {
   if (surface.element == mdl::LightElement::InnerShell)
   {
-    const auto local = vm::transpose(surface.frame.R) * (camera - surface.frame.origin);
+    const auto local = vm::transpose(surface.frame.R) * (camera - surface.frame.origin)
+                       - volumeCentre(surface.light);
     return mdl::pointFalloffT(local, vm::abs(surface.light.radius))
-           <= surface.light.math.innerRadius;
+           <= mdl::emitterCurve(surface.light).innerRadius;
   }
   return mdl::containsPoint(surface.light, surface.frame, camera);
 }
@@ -955,10 +1129,10 @@ bool containsCamera(const LightSurfaceHit& surface, const vm::vec3d& camera)
 void renderSurfaceOutline(
   render::RenderContext& renderContext,
   render::RenderBatch& renderBatch,
-  const LightSurfaceHit& surface,
+  const LightVolumeTool::SurfaceGeometry& surface,
   const bool bold)
 {
-  if (const auto outline = surfaceOutline(surface); !outline.empty())
+  if (const auto& outline = surface.outline; !outline.empty())
   {
     auto renderService = render::RenderService{renderContext, renderBatch};
     renderService.setForegroundColor(pref(Preferences::SelectedFaceColor));
@@ -975,11 +1149,10 @@ void renderSurfaceOutline(
 void renderSurfaceHighlight(
   render::RenderContext& renderContext,
   render::RenderBatch& renderBatch,
-  const LightSurfaceHit& surface,
+  const LightVolumeTool::SurfaceGeometry& surface,
   const bool bold)
 {
-  const auto triangles =
-    lightElementTriangles(surface.light, surface.frame, surface.element);
+  const auto& triangles = surface.triangles;
   if (triangles.empty())
   {
     return;
@@ -1023,9 +1196,11 @@ std::optional<LightVolumeBox> volumeOf(
     return std::nullopt;
   }
 
-  const auto frame = mdl::lightFrame(entity, policy);
+  // lightFrame(entity, policy) without parsing the entity a second time
+  const auto frame = mdl::LightFrame{light.origin, mdl::lightRotation(entity, policy)};
   auto rotation = frame.R;
-  if (light.type == mdl::LightType::Spot)
+  // an emitter's box is in its own axes, so its box frame is the light's rotation
+  if (light.type == mdl::LightType::Spot && !mdl::lightUsesEmitter(light))
   {
     const auto beam = mdl::beamFrame(light);
     if (!beam)
@@ -1042,9 +1217,13 @@ std::optional<LightVolumeBox> volumeOf(
 
 mdl::LightProperties newDrawnLight()
 {
-  auto light = mdl::defaultLight(mdl::LightType::Point, mdl::LightProperties{});
-  light.math = mdl::seededMathLightProperties();
-  return light;
+  return mdl::seededEmitterLight(mdl::LightType::Point, mdl::LightProperties{});
+}
+
+bool drawPreviewShowsBox(const mdl::LightProperties& light, const bool render2D)
+{
+  return !(
+    render2D && mdl::lightUsesEmitter(light) && light.type == mdl::LightType::Point);
 }
 
 std::vector<vm::vec3d> lightElementTriangles(
@@ -1132,7 +1311,8 @@ vm::line3d lightVolumeHandleLine(const LightVolumeBox& volume, const mdl::Hit& h
       case mdl::LightElement::OuterShell:
         return volume.frame.R * shellSide(surface).normal;
       case mdl::LightElement::InnerShell:
-        return vm::normalize(volume.frame.R * surface.localPoint);
+        return vm::normalize(
+          volume.frame.R * (surface.localPoint - volumeCentre(surface.light)));
       case mdl::LightElement::Funnel: {
         const auto [axis, coordinate] = funnelAxis(volume, surface);
         return volume.rotation * vm::vec3d::axis(axis) * (coordinate < 0.0 ? -1.0 : 1.0);
@@ -1143,7 +1323,7 @@ vm::line3d lightVolumeHandleLine(const LightVolumeBox& volume, const mdl::Hit& h
       case mdl::LightElement::SunBox:
       case mdl::LightElement::Band:
       case mdl::LightElement::NearCap:
-        return volume.rotation * FarCapSide.normal;
+        return volume.rotation * farCapSide(volume).normal;
         switchDefault();
       }
     }();
@@ -1161,11 +1341,13 @@ vm::line3d lightVolumeHandleLine(const LightVolumeBox& volume, const mdl::Hit& h
       volume.toWorld(centerForBBoxSide(box, side)), volume.rotation * side.normal};
   }
 
-  // an edge or a corner lies on the line from the box frame's origin, which stays (D66)
+  // an edge or a corner lies on the line from the volume's centre, which stays (D66):
+  // the box frame's origin, an emitter omni's bulb
+  const auto centre = volumeCentre(volume.light);
   if (hit.type() == LightVolumeTool::EdgeHitType)
   {
     const auto& edge = hit.target<BBoxEdge>();
-    const auto centre = pointsForBBoxEdge(box, edge).center();
+    const auto edgeCentre = pointsForBBoxEdge(box, edge).center();
 
     // the edge's two axes, where its end points agree
     auto direction = vm::vec3d{0, 0, 0};
@@ -1173,16 +1355,18 @@ vm::line3d lightVolumeHandleLine(const LightVolumeBox& volume, const mdl::Hit& h
     {
       if (edge.point0[axis] == edge.point1[axis])
       {
-        direction[axis] = centre[axis];
+        direction[axis] = edgeCentre[axis] - centre[axis];
       }
     }
-    return vm::line3d{volume.toWorld(centre), volume.rotation * vm::normalize(direction)};
+    return vm::line3d{
+      volume.toWorld(edgeCentre), volume.rotation * vm::normalize(direction)};
   }
 
   contract_assert(hit.type() == LightVolumeTool::CornerHitType);
 
   const auto corner = pointForBBoxCorner(box, hit.target<BBoxCorner>());
-  return vm::line3d{volume.toWorld(corner), volume.rotation * vm::normalize(corner)};
+  return vm::line3d{
+    volume.toWorld(corner), volume.rotation * vm::normalize(corner - centre)};
 }
 
 LightVolumeHandles::LightVolumeHandles(LightVolumeTool& tool)
@@ -1420,12 +1604,15 @@ void LightVolumeTool::pickSurfaces(
     switch (light.type)
     {
     case mdl::LightType::Point: {
-      // a shell is picked where the ray enters it, like a brush face
+      // a shell is picked where the ray enters it, like a brush face; an emitter omni's
+      // shells are centred on its bulb
       const auto radius = vm::abs(light.radius);
-      const auto origin = vm::transpose(frame.R) * (pickRay.origin - frame.origin);
+      const auto shells =
+        mdl::LightFrame{frame.origin + frame.R * volumeCentre(light), frame.R};
+      const auto origin = vm::transpose(shells.R) * (pickRay.origin - shells.origin);
       const auto entering = [&](const double t) {
         return mdl::pointFalloffT(origin, radius) > t
-                 ? mdl::intersectRayEllipsoid(frame, radius, t, pickRay)
+                 ? mdl::intersectRayEllipsoid(shells, radius, t, pickRay)
                  : std::nullopt;
       };
 
@@ -1437,7 +1624,8 @@ void LightVolumeTool::pickSurfaces(
       if (pickable.selected && render::lightVolumeHasInnerShell(light))
       {
         if (const auto inner = withElement(
-              entering(light.math.innerRadius), mdl::LightElement::InnerShell);
+              entering(render::lightVolumeCurve(light)->innerRadius),
+              mdl::LightElement::InnerShell);
             inner && (!nodeHit.isMatch() || inner->first < nodeHit.distance()))
         {
           hit = inner;
@@ -1446,6 +1634,30 @@ void LightVolumeTool::pickSurfaces(
       break;
     }
     case mdl::LightType::Spot: {
+      if (mdl::lightUsesEmitter(light))
+      {
+        // the funnel is picked on the mesh and the round cap on its sphere, both from
+        // outside, as a texture spot's funnel and base are
+        hit = nearer(
+          withElement(
+            intersectEmitterBase(light, frame, pickRay), mdl::LightElement::Base),
+          withElement(
+            intersectFrontTriangles(pickable.triangles, pickRay),
+            mdl::LightElement::Funnel));
+
+        // the inner cap, drawn for selected lights only, wins wherever the ray crosses
+        // it, from either side, unless a node lies in front of it
+        if (pickable.selected && render::lightVolumeHasInnerCap(light))
+        {
+          if (const auto distance = intersectEmitterInnerCap(light, frame, pickRay);
+              distance && (!nodeHit.isMatch() || *distance < nodeHit.distance()))
+          {
+            hit = std::pair{*distance, mdl::LightElement::InnerCap};
+          }
+        }
+        break;
+      }
+
       // the base faces along the beam
       const auto beam = mdl::spotLightFrustum(light);
       const auto base = beam && vm::dot(frame.R * beam->n, pickRay.direction) < 0.0
@@ -1456,21 +1668,6 @@ void LightVolumeTool::pickSurfaces(
         withElement(
           intersectFrontTriangles(pickable.triangles, pickRay),
           mdl::LightElement::Funnel));
-
-      // the inner cap, drawn for selected math lights only, wins wherever the ray crosses
-      // it, from either side, unless a node lies in front of it: then the funnel or the
-      // base keeps the light's place before the node (D69)
-      if (beam && pickable.selected && render::lightVolumeHasInnerCap(light))
-      {
-        const auto depth = beam->zNear + light.math.innerRadius * beam->zFar;
-        if (const auto distance = mdl::intersectRaySpotCap(light, frame, depth, pickRay);
-            distance
-            && insideSpotRing(light, frame, vm::point_at_distance(pickRay, *distance))
-            && (!nodeHit.isMatch() || *distance < nodeHit.distance()))
-        {
-          hit = std::pair{*distance, mdl::LightElement::InnerCap};
-        }
-      }
       break;
     }
     case mdl::LightType::Sun:
@@ -1597,6 +1794,50 @@ bool LightVolumeTool::nudgeClickedElement(const vm::vec3d& worldDelta)
   if (!volume || volume->light.type != mdl::LightType::Spot)
   {
     return false;
+  }
+
+  // an emitter is re-aimed, never sheared: one press turns its beam about the bulb by
+  // the grid's rotation angle towards the key's direction, so the beam can never flip; a
+  // key along the beam does nothing; the range and the cone are kept, and the roll
+  // follows the in-engine aim's world-up rule (G0 section 9)
+  if (mdl::lightUsesEmitter(volume->light))
+  {
+    const auto& rotation = volume->frame.R;
+    const auto forward = vm::normalize(rotation[0]);
+    const auto turnAxis = vm::length(worldDelta) < DegenerateEpsilon
+                            ? vm::vec3d{0, 0, 0}
+                            : vm::cross(forward, vm::normalize(worldDelta));
+    if (vm::length(turnAxis) < DegenerateEpsilon)
+    {
+      // the key's direction is parallel to the beam: nothing, and the key is the base's
+      return true;
+    }
+
+    const auto turn = vm::quatd{vm::normalize(turnAxis), grid().angle()};
+    const auto aimed = mdl::emitterAimRotation(turn * forward, rotation[1]);
+
+    auto& map = m_document.map();
+    const auto& entity = entityNode->entity();
+    auto changed = entity;
+    mdl::applyEntityRotationUpdate(changed, mdl::lightRotationUpdate(changed, aimed));
+    if (changed == entity)
+    {
+      return true;
+    }
+
+    auto transaction = mdl::Transaction{map, "Aim Light"};
+    if (!mdl::updateNodeContents(
+          map, "Aim Light", {{entityNode, mdl::NodeContents{std::move(changed)}}}))
+    {
+      transaction.cancel();
+      map.logger().error() << "Could not aim the light";
+      return true;
+    }
+    if (!transaction.commit())
+    {
+      map.logger().error() << "Could not aim the light";
+    }
+    return true;
   }
 
   // the far face's centre (cx, cy, L) moves by the delta in the box frame; the apex
@@ -1727,15 +1968,17 @@ bool LightVolumeTool::update(const vm::vec3d& delta)
   }
   else
   {
-    // the box scaled about its frame's origin, never the scale tool's moveBBoxForHit,
-    // which accepts only the scale tool's hits and anchors the opposite side
-    const auto moved =
-      moveBox(start.box, m_dragHit, vm::transpose(start.rotation) * dragDelta);
+    // the box scaled about its volume's centre (the frame's origin, an emitter omni's
+    // bulb), never the scale tool's moveBBoxForHit, which accepts only the scale tool's
+    // hits and anchors the opposite side
+    const auto centre = volumeCentre(start.light);
+    const auto moved = moveBox(
+      start.box.translate(-centre), m_dragHit, vm::transpose(start.rotation) * dragDelta);
     if (!moved)
     {
       return false;
     }
-    movedBox = *moved;
+    movedBox = moved->translate(centre);
 
     // the rotation is the light's, never the box frame's: the light composes the beam
     // frame
@@ -1875,11 +2118,19 @@ bool LightVolumeTool::updateDraw(const vm::bbox3d& worldBox)
     return false;
   }
 
-  // the drawn box of a point light is where it will be visible (D61)
+  // an emitter omni reaches at least 24 along its largest half extent; a sun's box is a
+  // box, not a reach, and may be any size
+  if (
+    mdl::lightUsesEmitter(base) && base.type == mdl::LightType::Point
+    && vm::get_max_component(halfExtents) < mdl::MinEmitterRange)
+  {
+    return false;
+  }
+
+  // the drawn box of a texture point light is where it will be visible (D61), of an
+  // emitter its volume
   m_drawBox = box;
-  m_drawLight = base.type == mdl::LightType::Spot
-                  ? mdl::spotFromWorldBox(box, base)
-                  : mdl::pointFromWorldBox(box, base, handleThreshold());
+  m_drawLight = drawnLight(box, base, handleThreshold());
   refreshViews();
   return true;
 }
@@ -1933,8 +2184,11 @@ void LightVolumeTool::render(
         renderContext.render2D(),
         false,
       };
-      // drawn volumes are aligned with the world
-      const auto frame = mdl::LightFrame{m_drawLight->origin, vm::mat3x3d::identity()};
+      // drawn volumes are aligned with the world, an emitter spot points down
+      const auto frame = mdl::LightFrame{
+        m_drawLight->origin,
+        isEmitterSpot(*m_drawLight) ? mdl::emitterSpotRotation()
+                                    : vm::mat3x3d::identity()};
       const auto cullFront =
         renderContext.render3D()
         && mdl::containsPoint(
@@ -1946,9 +2200,12 @@ void LightVolumeTool::render(
         std::move(mesh.lines),
         cullFront ? VolumeRenderable::Cull::Front : VolumeRenderable::Cull::Back});
 
-      auto renderService = render::RenderService{renderContext, renderBatch};
-      renderService.setForegroundColor(pref(Preferences::LightVolumeHandleColor));
-      renderService.renderBounds(vm::bbox3f{*m_drawBox});
+      if (drawPreviewShowsBox(*m_drawLight, renderContext.render2D()))
+      {
+        auto renderService = render::RenderService{renderContext, renderBatch};
+        renderService.setForegroundColor(pref(Preferences::LightVolumeHandleColor));
+        renderService.renderBounds(vm::bbox3f{*m_drawBox});
+      }
     }
     return;
   }
@@ -1994,8 +2251,8 @@ void LightVolumeTool::render(
       renderSurfaceOutline(
         renderContext,
         renderBatch,
-        LightSurfaceHit{
-          selectedLight(), *m_clickedElement, true, volume->light, volume->frame, {}},
+        surfaceGeometry(LightSurfaceHit{
+          selectedLight(), *m_clickedElement, true, volume->light, volume->frame, {}}),
         true);
     }
 
@@ -2011,7 +2268,8 @@ void LightVolumeTool::render(
       surface.frame = volume->frame;
       if (renderContext.render3D())
       {
-        renderSurfaceHighlight(renderContext, renderBatch, surface, true);
+        renderSurfaceHighlight(
+          renderContext, renderBatch, surfaceGeometry(surface), true);
       }
       return;
     }
@@ -2023,9 +2281,53 @@ void LightVolumeTool::render(
     renderSurfaceHighlight(
       renderContext,
       renderBatch,
-      highlight.target<LightSurfaceHit>(),
+      surfaceGeometry(highlight.target<LightSurfaceHit>()),
       isClickedSurface(highlight));
   }
+}
+
+const LightVolumeTool::SurfaceGeometry& LightVolumeTool::surfaceGeometry(
+  const LightSurfaceHit& surface) const
+{
+  for (const auto& entry : m_surfaceGeometry)
+  {
+    if (
+      entry && entry->element == surface.element && entry->light == surface.light
+      && entry->frame.origin == surface.frame.origin && entry->frame.R == surface.frame.R)
+    {
+      return *entry;
+    }
+  }
+
+  ++m_surfaceGeometryBuilds;
+  auto triangles = lightElementTriangles(surface.light, surface.frame, surface.element);
+  auto outline = surfaceOutline(surface, triangles);
+
+  // the older of the two entries makes way
+  auto& entry = m_surfaceGeometry[m_nextSurfaceGeometry];
+  m_nextSurfaceGeometry = (m_nextSurfaceGeometry + 1) % m_surfaceGeometry.size();
+  entry = SurfaceGeometry{
+    surface.element,
+    surface.light,
+    surface.frame,
+    std::move(triangles),
+    std::move(outline)};
+  return *entry;
+}
+
+std::size_t LightVolumeTool::surfaceGeometryBuildCount() const
+{
+  return m_surfaceGeometryBuilds;
+}
+
+std::size_t LightVolumeTool::pickableTriangleVertexCount() const
+{
+  auto count = std::size_t{0};
+  for (const auto& pickable : m_pickableLights)
+  {
+    count += pickable.triangles.size();
+  }
+  return count;
 }
 
 bool LightVolumeTool::doActivate()
@@ -2214,17 +2516,22 @@ LightVolumeTool::PickableLight LightVolumeTool::pickableLight(
     return PickableLight{.node = entityNode, .light = light};
   }
 
-  const auto frame = mdl::lightFrame(entity, policy);
+  // lightFrame(entity, policy) without parsing the entity a second time
+  const auto frame = mdl::LightFrame{light.origin, mdl::lightRotation(entity, policy)};
   const auto [centre, radius] = boundingSphere(light, frame);
-  return PickableLight{
+  auto pickable = PickableLight{
     .node = entityNode,
     .light = light,
     .frame = frame,
     .pickable = true,
     .centre = centre,
     .radius = radius,
-    .triangles = pickedTriangles(light, frame),
   };
+
+  // an emitter spot's funnel alone, from the outer-shell-only mesh like a texture spot's:
+  // its round cap is picked on its sphere, like its inner cap
+  pickable.triangles = pickedTriangles(light, frame);
+  return pickable;
 }
 
 void LightVolumeTool::resetDraw()
@@ -2246,7 +2553,7 @@ bool LightVolumeTool::applyDrawnLight()
 
   auto changed =
     mdl::applyLightPropertyUpdate(entity, mdl::lightKeyDiff(entity, *m_drawLight));
-  removeRotationProperties(changed);
+  writeDrawnRotation(changed, *m_drawLight);
   if (changed == entity)
   {
     return true;
@@ -2284,7 +2591,7 @@ bool LightVolumeTool::createDrawnLight()
   const auto& entity = entityNode->entity();
   auto changed =
     mdl::applyLightPropertyUpdate(entity, mdl::lightKeyDiff(entity, *m_drawLight));
-  removeRotationProperties(changed);
+  writeDrawnRotation(changed, *m_drawLight);
 
   // a light drawn around the world origin was moved by nothing, so it has no origin
   // property yet, and the diff writes none because it reads the same origin before and

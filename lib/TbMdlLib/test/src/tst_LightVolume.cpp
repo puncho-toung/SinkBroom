@@ -22,18 +22,23 @@
 #include "mdl/EntityProperties.h"
 #include "mdl/Light.h"
 #include "mdl/LightVolume.h"
+#include "mdl/TestFactory.h"
 
 #include "vm/approx.h"
 #include "vm/bbox.h"
 #include "vm/bbox_io.h" // IWYU pragma: keep
 #include "vm/mat.h"
+#include "vm/mat_ext.h"
 #include "vm/mat_io.h" // IWYU pragma: keep
 #include "vm/ray.h"
 #include "vm/vec.h"
 #include "vm/vec_io.h" // IWYU pragma: keep
 
+#include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
+#include <numbers>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -117,17 +122,6 @@ vm::bbox3d box(const vm::vec3d& min, const vm::vec3d& max)
 constexpr auto DefaultThreshold = 0.10;
 
 /**
- * A point light of radius 300 with the math block that the light editor seeds (D29):
- * linear, inner radius 0.1.
- */
-LightProperties seededPoint()
-{
-  auto light = defaultPoint;
-  light.math = seededMathLightProperties();
-  return light;
-}
-
-/**
  * The distance of a ray intersection, which must exist.
  */
 double distanceOf(const std::optional<double>& distance)
@@ -154,6 +148,21 @@ double legacyVisibleT(const double level)
   const auto y = 1.0 - level;
   return 0.5 - std::sin(std::asin(1.0 - 2.0 * y) / 3.0);
 }
+
+/**
+ * An emitter spot of range 256 along local +x, with a cone of 60 by 60 degrees and the
+ * size that auto range gives that range at intensity 1.
+ */
+LightProperties emitterSpot()
+{
+  auto light = makeEmitterSpot(256.0);
+  light.emitter.size = 256.0 / 3.0;
+  return light;
+}
+
+// the half width of emitterSpot()'s box across the beam: R sin(cone / 2), where its lit
+// cone is widest (G0 section 9)
+const auto emitterHalfWidth = 256.0 * std::sin(vm::to_radians(30.0));
 
 } // namespace
 
@@ -491,22 +500,20 @@ TEST_CASE("LightVolume")
 
     SECTION("With a threshold, a point light's box is where it fades out (D61)")
     {
-      // the seeded light is visible to t = 0.91 at 10 %
-      const auto seededBox = lightEditBox(seededPoint(), DefaultThreshold);
-      REQUIRE(seededBox);
-      CHECK(vm::approx{vm::bbox3d{273.0}, 1e-4} == *seededBox);
-
-      // a light without math, by the smooth stand-in
+      // a texture light, by the smooth stand-in
       const auto legacyT = legacyVisibleT(DefaultThreshold);
       const auto legacyBox = lightEditBox(defaultPoint, DefaultThreshold);
       REQUIRE(legacyBox);
       CHECK(vm::approx{vm::bbox3d{300.0 * legacyT}, 1e-4} == *legacyBox);
 
       // per axis
-      auto ellipsoid = seededPoint();
+      auto ellipsoid = defaultPoint;
       ellipsoid.radius = vm::vec3d{100, 200, 300};
       CHECK(
-        vm::approx{vm::bbox3d{vm::vec3d{-91, -182, -273}, vm::vec3d{91, 182, 273}}, 1e-4}
+        vm::approx{
+          vm::bbox3d{
+            vm::vec3d{-100, -200, -300} * legacyT, vm::vec3d{100, 200, 300} * legacyT},
+          1e-4}
         == *lightEditBox(ellipsoid, DefaultThreshold));
 
       // spot lights and suns keep their full box (Q15)
@@ -519,78 +526,21 @@ TEST_CASE("LightVolume")
 
   SECTION("visibleFalloffT")
   {
-    const auto withMath = [](const MathLightProperties& math) {
-      auto light = defaultPoint;
-      light.math = math;
-      return light;
-    };
-
-    const auto linear = MathLightProperties{
-      .enabled = true, .falloff = LightFalloff::Linear, .innerRadius = 0.0};
+    // every light by the smooth stand-in
     CHECK(
-      visibleFalloffT(withMath(linear), DefaultThreshold)
-      == Catch::Approx(0.9).margin(Exact));
-
-    // u = (t - 0.1) / 0.9 = 0.9
+      visibleFalloffT(defaultPoint, DefaultThreshold)
+      == Catch::Approx(legacyVisibleT(DefaultThreshold)).margin(Exact));
     CHECK(
-      visibleFalloffT(seededPoint(), DefaultThreshold)
-      == Catch::Approx(0.91).margin(Exact));
-
-    SECTION("The windowed inverse square, solved longhand")
-    {
-      // the default math block: invsquare_clamped, k = 2, inner radius 0, so u = t
-      const auto math = MathLightProperties{.enabled = true};
-      REQUIRE(math.falloff == LightFalloff::InvSquareClamped);
-      const auto falloff = [](const double u) {
-        const auto w = 1.0 - u * u * u * u;
-        const auto d = 2.0 * u + 1e-3;
-        return w * w / (d * d + 1.0);
-      };
-
-      // 60 bisection steps of the curve as written out here
-      auto lo = 0.0;
-      auto hi = 1.0;
-      for (auto i = 0; i < 60; ++i)
-      {
-        const auto mid = (lo + hi) / 2.0;
-        (falloff(mid) >= DefaultThreshold ? lo : hi) = mid;
-      }
-      REQUIRE(falloff(lo) == Catch::Approx(DefaultThreshold).margin(1e-9));
-      CHECK(
-        visibleFalloffT(withMath(math), DefaultThreshold)
-        == Catch::Approx(lo).margin(Exact));
-    }
-
-    SECTION("A light without math by the smooth stand-in")
-    {
-      CHECK(
-        visibleFalloffT(defaultPoint, DefaultThreshold)
-        == Catch::Approx(legacyVisibleT(DefaultThreshold)).margin(Exact));
-      CHECK(
-        visibleFalloffT(defaultPoint, DefaultThreshold)
-        == Catch::Approx(0.8042).margin(1e-4));
-      CHECK(visibleFalloffT(defaultPoint, 0.5) == Catch::Approx(0.5).margin(Exact));
-
-      // a disabled math block is not read
-      auto disabled = seededPoint();
-      disabled.math.enabled = false;
-      CHECK(
-        visibleFalloffT(disabled, DefaultThreshold)
-        == Catch::Approx(legacyVisibleT(DefaultThreshold)).margin(Exact));
-    }
-
-    SECTION("An inner radius of 0.999 is visible to its edge")
-    {
-      auto sharp = linear;
-      sharp.innerRadius = 0.999;
-      CHECK(visibleFalloffT(withMath(sharp), DefaultThreshold) == 1.0);
-    }
+      visibleFalloffT(defaultPoint, DefaultThreshold)
+      == Catch::Approx(0.8042).margin(1e-4));
+    CHECK(visibleFalloffT(defaultPoint, 0.5) == Catch::Approx(0.5).margin(Exact));
 
     SECTION("The threshold is clamped to [0.01, 0.5]")
     {
-      CHECK(visibleFalloffT(withMath(linear), 0.9) == Catch::Approx(0.5).margin(Exact));
+      CHECK(visibleFalloffT(defaultPoint, 0.9) == Catch::Approx(0.5).margin(Exact));
       CHECK(
-        visibleFalloffT(withMath(linear), 0.001) == Catch::Approx(0.99).margin(Exact));
+        visibleFalloffT(defaultPoint, 0.001)
+        == Catch::Approx(legacyVisibleT(0.01)).margin(Exact));
     }
   }
 
@@ -776,7 +726,7 @@ TEST_CASE("LightVolume")
     {
       SECTION("Round trips")
       {
-        for (const auto& light : {defaultPoint, seededPoint()})
+        for (const auto& light : {defaultPoint})
         {
           const auto handleBox = lightEditBox(light, DefaultThreshold);
           REQUIRE(handleBox);
@@ -798,18 +748,16 @@ TEST_CASE("LightVolume")
           == lightFromEditBox(sun, identity, *lightEditBox(sun)));
       }
 
-      SECTION("The seeded light's +x face dragged by 32")
+      SECTION("A point light's +x face dragged by 32")
       {
-        const auto t = 0.91;
+        const auto t = legacyVisibleT(DefaultThreshold);
+        const auto h = 300.0 * t;
 
         // the scale tool's face drag: the +x face follows the handle by 32, the -x face
         // stays, so the half extent grows by 16 and the radius by 16 / t; the centre
         // follows by 16
         const auto light = editedLight(lightFromEditBox(
-          seededPoint(),
-          identity,
-          box({-273, -273, -273}, {273 + 32, 273, 273}),
-          DefaultThreshold));
+          defaultPoint, identity, box({-h, -h, -h}, {h + 32, h, h}), DefaultThreshold));
         CHECK(light.radius.x() == Catch::Approx(300.0 + 16.0 / t).margin(Tolerance));
         CHECK(light.radius.y() == Catch::Approx(300.0).margin(Tolerance));
         CHECK(light.radius.z() == Catch::Approx(300.0).margin(Tolerance));
@@ -819,24 +767,21 @@ TEST_CASE("LightVolume")
         // both x faces by 32 (anchored at the centre): the radius grows by 32 / t, the
         // centre stays
         const auto centred = editedLight(lightFromEditBox(
-          seededPoint(),
+          defaultPoint,
           identity,
-          box({-273 - 32, -273, -273}, {273 + 32, 273, 273}),
+          box({-h - 32, -h, -h}, {h + 32, h, h}),
           DefaultThreshold));
         CHECK(centred.radius.x() == Catch::Approx(300.0 + 32.0 / t).margin(Tolerance));
-        CHECK(centred.radius.x() == Catch::Approx(335.165).margin(Tolerance));
         CHECK(centred.radius.y() == Catch::Approx(300.0).margin(Tolerance));
         CHECK(centred.origin == vm::approx{vm::vec3d{0, 0, 0}, Exact});
       }
 
       SECTION("A half extent below 1 is denied")
       {
+        const auto h = 300.0 * legacyVisibleT(DefaultThreshold);
         CHECK(
           lightFromEditBox(
-            seededPoint(),
-            identity,
-            box({-273, -273, -0.5}, {273, 273, 0.5}),
-            DefaultThreshold)
+            defaultPoint, identity, box({-h, -h, -0.5}, {h, h, 0.5}), DefaultThreshold)
           == std::nullopt);
       }
     }
@@ -943,17 +888,235 @@ TEST_CASE("LightVolume")
     }
   }
 
+  SECTION("lightBoundingSphere")
+  {
+    // The renderer skips the exact test of a light whose sphere the camera is outside,
+    // so every point that containsPoint accepts must lie within the radius of the
+    // centre (RV-C-TP-04), also in a frame that is orthonormal only to the two decimals
+    // that the engine writes a matrix key with, and in worse ones (RV2-TP-01).
+    auto texturePoint = defaultPoint;
+    texturePoint.radius = vm::vec3d{300, 200, 100};
+    texturePoint.equalRadius = false;
+    auto texturePointWithCentre = defaultPoint;
+    texturePointWithCentre.hasCenter = true;
+    texturePointWithCentre.center = vm::vec3d{100, 0, 0};
+    auto textureSun = sun;
+    textureSun.radius = vm::vec3d{300, 200, 100};
+    auto omni = makeEmitterOmni();
+    omni.radius = vm::vec3d{300, 200, 100};
+    omni.equalRadius = false;
+    omni.hasCenter = true;
+    omni.center = vm::vec3d{150, -80, 60};
+    auto spot = makeEmitterSpot(288.0);
+    spot.emitter.coneH = 100.0;
+    spot.emitter.coneV = 40.0;
+    spot.emitter.squareness = 8.0;
+    auto emitterSun = makeEmitterOmni();
+    emitterSun.type = LightType::Sun;
+    emitterSun.radius = vm::vec3d{300, 200, 100};
+    emitterSun.equalRadius = false;
+    emitterSun.hasCenter = true;
+    emitterSun.center = vm::vec3d{0, 0, 1};
+
+    const auto lights = std::vector<std::pair<std::string, LightProperties>>{
+      {"texture point", texturePoint},
+      {"texture point with a centre", texturePointWithCentre},
+      {"texture spot", explicitSpot},
+      {"texture sun", textureSun},
+      {"emitter omni about its bulb", omni},
+      {"emitter spot", spot},
+      {"emitter sun", emitterSun},
+    };
+
+    // local points on and inside each volume's boundary, its farthest points among them
+    const auto candidates = [](const LightProperties& light) {
+      auto points = std::vector<vm::vec3d>{};
+      const auto radius = vm::abs(light.radius);
+      const auto bulb = light.emitter.enabled ? emitterBulb(light) : vm::vec3d{0, 0, 0};
+      constexpr auto Directions = 60;
+      for (auto i = 0; i < Directions; ++i)
+      {
+        // a Fibonacci sphere
+        const auto z = 1.0 - 2.0 * (double(i) + 0.5) / double(Directions);
+        const auto r = std::sqrt(1.0 - z * z);
+        const auto phi = 2.399963229728653 * double(i);
+        const auto d = vm::vec3d{r * std::cos(phi), r * std::sin(phi), z};
+        const auto onBox = d / vm::get_max_component(vm::abs(d));
+        for (const auto s : {0.9, 0.999999, 1.0})
+        {
+          points.push_back(bulb + s * radius * d);
+          points.push_back(s * radius * onBox);
+          points.push_back(s * emitterRange(light.radius) * d);
+        }
+      }
+      if (light.emitter.enabled && light.type == LightType::Spot)
+      {
+        // the rim of the cone on the sphere of the range
+        const auto tanH = emitterTanHalf(light.emitter.coneH);
+        const auto tanV = emitterTanHalf(light.emitter.coneV);
+        for (auto i = 0; i < 64; ++i)
+        {
+          const auto a = 2.0 * std::numbers::pi * double(i) / 64.0;
+          const auto k = superellipseRadius(std::cos(a), std::sin(a), 8.0);
+          const auto u = 0.999 * std::cos(a) / k;
+          const auto v = 0.999 * std::sin(a) / k;
+          const auto d = vm::normalize(vm::vec3d{1.0, u * tanH, v * tanV});
+          for (const auto s : {0.5, 0.999999, 1.0})
+          {
+            points.push_back(s * emitterRange(light.radius) * d);
+          }
+        }
+      }
+      if (!light.emitter.enabled && light.type == LightType::Spot)
+      {
+        if (const auto frustum = spotLightFrustum(light))
+        {
+          for (const auto u : {-0.999999, -0.5, 0.0, 0.5, 0.999999})
+          {
+            for (const auto v : {-0.999999, -0.5, 0.0, 0.5, 0.999999})
+            {
+              for (const auto t : {0.0, 0.25, 0.5, 0.75, 1.0})
+              {
+                const auto d = frustum->zNear + t * frustum->zFar;
+                points.push_back(spotPoint(light, u, v, d));
+              }
+            }
+          }
+        }
+      }
+      return points;
+    };
+
+    const auto rounded = [](const vm::mat3x3d& R, const double scale) {
+      auto result = R;
+      for (std::size_t c = 0; c < 3; ++c)
+      {
+        for (std::size_t r = 0; r < 3; ++r)
+        {
+          result[c][r] = std::round(R[c][r] * scale) / scale;
+        }
+      }
+      return result;
+    };
+    const auto perturbed = [](const vm::mat3x3d& R) {
+      auto result = R;
+      for (std::size_t c = 0; c < 3; ++c)
+      {
+        for (std::size_t r = 0; r < 3; ++r)
+        {
+          result[c][r] += 0.02 * std::sin(double(3 * c + r) * 1.7 + R[c][r]);
+        }
+      }
+      return result;
+    };
+
+    const auto origin = vm::vec3d{16, -32, 8};
+    auto boundedRounded = 0;
+    for (const auto& [name, light] : lights)
+    {
+      const auto points = candidates(light);
+      auto inside = 0;
+      for (auto yaw = 0.0; yaw < 360.0; yaw += 45.0)
+      {
+        for (const auto pitch : {-90.0, -50.0, 0.0, 35.0, 90.0})
+        {
+          for (const auto roll : {0.0, 40.0})
+          {
+            const auto exact = vm::slice<3, 3>(
+              vm::rotation_matrix(
+                vm::to_radians(roll), vm::to_radians(pitch), vm::to_radians(yaw)),
+              0,
+              0);
+            const auto frames = std::vector<std::pair<std::string, vm::mat3x3d>>{
+              {"exact", exact},
+              {"two decimals", rounded(exact, 100.0)},
+              {"one decimal", rounded(exact, 10.0)},
+              {"perturbed by 0.02", perturbed(exact)},
+              {"scaled by 1.04", exact * 1.04},
+            };
+            for (const auto& [frameName, R] : frames)
+            {
+              CAPTURE(name, yaw, pitch, roll, frameName);
+              const auto frame = LightFrame{origin, R};
+              const auto [centre, reach] = lightBoundingSphere(light, frame);
+
+              // an emitter omni's centre is its bulb in the world
+              CHECK(
+                centre
+                == (light.emitter.enabled ? origin + R * emitterBulb(light) : origin));
+              if (!std::isfinite(reach))
+              {
+                continue;
+              }
+              if (frameName == "two decimals")
+              {
+                ++boundedRounded;
+              }
+
+              // the world point whose local point (R^T (world - origin)) is the given one
+              const auto inverse = vm::invert(vm::transpose(R));
+              REQUIRE(inverse);
+              for (const auto& local : points)
+              {
+                const auto world = origin + *inverse * local;
+                if (containsPoint(light, frame, world))
+                {
+                  ++inside;
+                  if (vm::squared_distance(centre, world) > reach * reach)
+                  {
+                    FAIL_CHECK("outside the reach: " << local);
+                  }
+                }
+                // and the mesh's placing of it, origin + R * local
+                if (containsPoint(light, LightFrame{{0, 0, 0}, identity}, local))
+                {
+                  const auto placed = origin + R * local;
+                  if (vm::squared_distance(centre, placed) > reach * reach)
+                  {
+                    FAIL_CHECK("placed outside the reach: " << local);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      CAPTURE(name);
+      CHECK(inside > 0);
+    }
+    // a two-decimal frame keeps its bound, so the renderer keeps its shortcut
+    CHECK(boundedRounded == 7 * 8 * 5 * 2);
+
+    SECTION("a frame that is not near a rotation has no bound")
+    {
+      const auto [centre, reach] = lightBoundingSphere(
+        texturePoint, LightFrame{vm::vec3d{0, 0, 0}, vm::mat3x3d::identity() * 0.5});
+      CHECK(reach == std::numeric_limits<double>::infinity());
+    }
+
+    SECTION("a rotation's sphere is the volume's, a rounded one's slightly wider")
+    {
+      const auto R = rotationOf({{"classname", "light"}, {"angles", "20 35 10"}});
+      CHECK(
+        lightBoundingSphere(texturePoint, LightFrame{origin, R}).second
+        == Catch::Approx(300.0).margin(1e-3));
+      const auto [centre, reach] =
+        lightBoundingSphere(texturePoint, LightFrame{origin, rounded(R, 100.0)});
+      CHECK(reach > 300.0);
+      CHECK(reach < 310.0);
+    }
+  }
+
   SECTION("lightFalloff")
   {
     const auto ts = std::vector<double>{0.0, 0.25, 0.5, 0.75, 1.0};
     const auto k = 2.0;
 
-    const auto mathLight = [&](const LightFalloff falloff, const double inner = 0.0) {
-      return MathLightProperties{
-        .enabled = true, .falloff = falloff, .falloffExp = k, .innerRadius = inner};
+    const auto curveOf = [&](const LightFalloff falloff, const double inner = 0.0) {
+      return LightCurve{.falloff = falloff, .falloffExp = k, .innerRadius = inner};
     };
 
-    // the curves of MLFalloffCurve, written out for inner = 0, where u = t
+    // the falloff curves of emitter.inc.hlsl, written out for inner = 0, where u = t
     const auto window = [](const double u) { return 1.0 - u * u * u * u; };
     const auto expected = [&](const LightFalloff falloff, const double u) {
       switch (falloff)
@@ -988,7 +1151,7 @@ TEST_CASE("LightVolume")
         const auto t = ts[i];
         CAPTURE(falloff, t);
 
-        const auto actual = lightFalloff(t, mathLight(falloff));
+        const auto actual = lightFalloff(t, curveOf(falloff));
         CHECK(actual == Catch::Approx(expected(falloff, t)).margin(Exact).epsilon(0));
 
         const auto atEnd = i == 0 || i == ts.size() - 1;
@@ -999,26 +1162,26 @@ TEST_CASE("LightVolume")
     }
 
     // inner shifts the curve: u = (t - inner) / (1 - inner)
-    CHECK(lightFalloff(0.25, mathLight(LightFalloff::Linear, 0.5)) == 1.0);
-    CHECK(lightFalloff(0.5, mathLight(LightFalloff::Linear, 0.5)) == 1.0);
+    CHECK(lightFalloff(0.25, curveOf(LightFalloff::Linear, 0.5)) == 1.0);
+    CHECK(lightFalloff(0.5, curveOf(LightFalloff::Linear, 0.5)) == 1.0);
     CHECK(
-      lightFalloff(0.75, mathLight(LightFalloff::Linear, 0.5))
+      lightFalloff(0.75, curveOf(LightFalloff::Linear, 0.5))
       == Catch::Approx(0.5).margin(Exact));
     CHECK(
-      lightFalloff(0.75, mathLight(LightFalloff::Smooth, 0.5))
+      lightFalloff(0.75, curveOf(LightFalloff::Smooth, 0.5))
       == Catch::Approx(0.5).margin(Exact));
     CHECK(
-      lightFalloff(0.875, mathLight(LightFalloff::InvSquareClamped, 0.5))
+      lightFalloff(0.875, curveOf(LightFalloff::InvSquareClamped, 0.5))
       == Catch::Approx(expected(LightFalloff::InvSquareClamped, 0.75)).margin(Exact));
-    CHECK(lightFalloff(1.0, mathLight(LightFalloff::Exponential, 0.5)) == 0.0);
+    CHECK(lightFalloff(1.0, curveOf(LightFalloff::Exponential, 0.5)) == 0.0);
 
     // an inner radius of 1 is a hard edge
-    CHECK(lightFalloff(0.999, mathLight(LightFalloff::Linear, 1.0)) == 1.0);
-    CHECK(lightFalloff(1.0, mathLight(LightFalloff::Linear, 1.0)) == 1.0);
+    CHECK(lightFalloff(0.999, curveOf(LightFalloff::Linear, 1.0)) == 1.0);
+    CHECK(lightFalloff(1.0, curveOf(LightFalloff::Linear, 1.0)) == 1.0);
 
     // t outside 0..1 is saturated
-    CHECK(lightFalloff(-1.0, mathLight(LightFalloff::Linear)) == 1.0);
-    CHECK(lightFalloff(2.0, mathLight(LightFalloff::Linear)) == 0.0);
+    CHECK(lightFalloff(-1.0, curveOf(LightFalloff::Linear)) == 1.0);
+    CHECK(lightFalloff(2.0, curveOf(LightFalloff::Linear)) == 0.0);
   }
 
   SECTION("legacyFalloff")
@@ -1034,7 +1197,7 @@ TEST_CASE("LightVolume")
   SECTION("spotMask")
   {
     const auto mask = [](const double shapeExp, const double penumbra) {
-      return MathLightProperties{.shapeExp = shapeExp, .penumbra = penumbra};
+      return LightCurve{.shapeExp = shapeExp, .penumbra = penumbra};
     };
 
     CHECK(spotMask(0.0, 0.0, mask(2.0, 0.15)) == 1.0);
@@ -1142,14 +1305,11 @@ TEST_CASE("LightVolume")
 
     SECTION("With a threshold, the drawn box is where the light is visible (D61)")
     {
-      const auto seeded = pointFromWorldBox(W, seededPoint(), DefaultThreshold);
-      CHECK(seeded.origin == vm::approx{vm::vec3d{64, 64, 32}, Exact});
-      CHECK(seeded.radius == vm::approx{vm::vec3d{64, 64, 32} / 0.91, Tolerance});
-      CHECK(
-        vm::approx{box({0, 0, 0}, {128, 128, 64}).translate(-seeded.origin), 1e-4}
-        == *lightEditBox(seeded, DefaultThreshold));
-
       const auto legacy = pointFromWorldBox(W, defaultPoint, DefaultThreshold);
+      CHECK(legacy.origin == vm::approx{vm::vec3d{64, 64, 32}, Exact});
+      CHECK(
+        vm::approx{box({0, 0, 0}, {128, 128, 64}).translate(-legacy.origin), 1e-4}
+        == *lightEditBox(legacy, DefaultThreshold));
       CHECK(
         legacy.radius
         == vm::approx{
@@ -1161,8 +1321,8 @@ TEST_CASE("LightVolume")
         == vm::approx{vm::vec3d{64, 64, 32}, Exact});
 
       CHECK(
-        pointFromWorldBox(box({0, 0, 0}, {128, 128, 1}), seededPoint(), DefaultThreshold)
-        == seededPoint());
+        pointFromWorldBox(box({0, 0, 0}, {128, 128, 1}), defaultPoint, DefaultThreshold)
+        == defaultPoint);
     }
   }
 
@@ -1245,7 +1405,7 @@ TEST_CASE("LightVolume")
   {
     const auto atOrigin = LightFrame{vm::vec3d{0, 0, 0}, identity};
 
-    // the cap of a math spot light's core with inner radius 0.3 (D69): at depth
+    // the cap at 0.3 of the default spot light's depth (D69): at depth
     // zNear + 0.3 zFar = 8 + 0.3 * 256, where the default spot light's cap is the square
     // of half extent d / 2
     const auto depth = 8.0 + 0.3 * 256.0;
@@ -1346,6 +1506,921 @@ TEST_CASE("LightVolume")
       intersectRaySpotBase(
         withRight(defaultSpot, {0, 0, 0}), atOrigin, vm::ray3d{{0, 0, -1000}, {0, 0, 1}})
       == std::nullopt);
+  }
+
+  SECTION("emitterBulb")
+  {
+    auto omni = makeEmitterOmni();
+    CHECK(emitterBulb(omni) == vm::vec3d{0, 0, 0});
+    omni.hasCenter = true;
+    omni.center = vm::vec3d{0, 0, 16};
+    CHECK(emitterBulb(omni) == vm::vec3d{0, 0, 16});
+
+    // a spot is lit from its origin
+    auto spot = emitterSpot();
+    spot.hasCenter = true;
+    spot.center = vm::vec3d{0, 0, 16};
+    CHECK(emitterBulb(spot) == vm::vec3d{0, 0, 0});
+  }
+
+  SECTION("intersectRayEmitterCap")
+  {
+    // range 288 along local +x, cone 60 by 60, squareness 2
+    const auto spot = makeEmitterSpot(288.0);
+    const auto atOrigin = LightFrame{vm::vec3d{0, 0, 0}, identity};
+
+    // the round cap at the range, entered from outside on the beam
+    CHECK(
+      distanceOf(intersectRayEmitterCap(
+        spot, atOrigin, 288.0, false, vm::ray3d{{1000, 3, 2}, {-1, 0, 0}}))
+      == Catch::Approx(1000.0 - std::sqrt(288.0 * 288.0 - 13.0)));
+
+    // from inside the sphere only with fromInside: the crossing where the ray leaves it
+    const auto fromBulb = vm::ray3d{{50, 0, 0}, {1, 0, 0}};
+    CHECK(intersectRayEmitterCap(spot, atOrigin, 96.0, false, fromBulb) == std::nullopt);
+    CHECK(
+      distanceOf(intersectRayEmitterCap(spot, atOrigin, 96.0, true, fromBulb))
+      == Catch::Approx(46.0));
+
+    // outside the ring of the cone nothing; a crossing behind the bulb is not on the cap,
+    // so a ray from behind meets the cap only where it leaves the sphere
+    CHECK(
+      intersectRayEmitterCap(
+        spot, atOrigin, 288.0, true, vm::ray3d{{0, 1000, 0}, {0, -1, 0}})
+      == std::nullopt);
+    CHECK(
+      distanceOf(intersectRayEmitterCap(
+        spot, atOrigin, 288.0, true, vm::ray3d{{-1000, 0, 0}, {1, 0, 0}}))
+      == Catch::Approx(1288.0));
+    CHECK(
+      intersectRayEmitterCap(
+        spot, atOrigin, 288.0, false, vm::ray3d{{-1000, 0, 0}, {1, 0, 0}})
+      == std::nullopt);
+    // just inside and just outside the ring at 30 degrees off the beam, along y
+    const auto rim = [&](const double degrees) {
+      const auto a = vm::to_radians(degrees);
+      const auto point = 288.0 * vm::vec3d{std::cos(a), std::sin(a), 0};
+      return intersectRayEmitterCap(
+        spot, atOrigin, 288.0, false, vm::ray3d{point + vm::vec3d{1, 0, 0}, {-1, 0, 0}});
+    };
+    CHECK(rim(29.9));
+    CHECK_FALSE(rim(30.1));
+
+    // in a turned frame: a spot pointing down, its core picked from below
+    const auto down = LightFrame{vm::vec3d{0, 0, 0}, emitterSpotRotation()};
+    CHECK(
+      distanceOf(intersectRayEmitterCap(
+        spot, down, 96.0, true, vm::ray3d{{3, 2, -1000}, {0, 0, 1}}))
+      == Catch::Approx(1000.0 - std::sqrt(96.0 * 96.0 - 13.0)));
+  }
+
+  SECTION("emitterEditBox")
+  {
+    const auto h = emitterHalfWidth;
+    const auto spot = emitterSpot();
+    const auto spotBox = emitterEditBox(spot);
+    REQUIRE(spotBox);
+    CHECK(vm::approx{box({0, -h, -h}, {256, h, h}), Exact} == *spotBox);
+
+    // the bounding box of the lit cone: a 60 degree spot of range 100 is 50 to each side
+    auto hundred = spot;
+    hundred.radius = vm::vec3d{100, 100, 100};
+    CHECK(
+      vm::approx{box({0, -50, -50}, {100, 50, 50}), Exact} == *emitterEditBox(hundred));
+
+    // cone v pairs with local z
+    auto oval = spot;
+    oval.emitter.coneV = 40.0;
+    const auto v = 256.0 * std::sin(vm::to_radians(20.0));
+    CHECK(vm::approx{box({0, -h, -v}, {256, h, v}), Exact} == *emitterEditBox(oval));
+
+    // the widest cone: sin 60 of the range
+    auto wide = spot;
+    wide.emitter.coneH = 120.0;
+    const auto w = 256.0 * std::sin(vm::to_radians(60.0));
+    CHECK(vm::approx{box({0, -w, -h}, {256, w, h}), Exact} == *emitterEditBox(wide));
+
+    // an omni's box is +-light_radius about its bulb
+    auto omni = makeEmitterOmni();
+    omni.hasCenter = true;
+    omni.center = vm::vec3d{0, 0, 16};
+    CHECK(
+      vm::approx{box({-288, -288, -272}, {288, 288, 304}), Exact}
+      == *emitterEditBox(omni));
+
+    // the tool's functions give the same boxes, at any threshold
+    CHECK(lightEditBox(spot) == spotBox);
+    CHECK(lightEditBox(spot, DefaultThreshold) == spotBox);
+    CHECK(lightEditBox(omni, DefaultThreshold) == emitterEditBox(omni));
+
+    auto flat = makeEmitterOmni();
+    flat.radius = vm::vec3d{288, 288, 0};
+    CHECK(emitterEditBox(flat) == std::nullopt);
+  }
+
+  SECTION("emitterFromEditBox")
+  {
+    const auto h = emitterHalfWidth;
+    const auto spot = emitterSpot();
+
+    SECTION("The far face sets the range and keeps both cone angles")
+    {
+      const auto light =
+        editedLight(emitterFromEditBox(spot, identity, box({0, -h, -h}, {320, h, h})));
+      CHECK(light.radius == vm::approx{vm::vec3d{320, 320, 320}, Exact});
+      CHECK(light.emitter.coneH == spot.emitter.coneH);
+      CHECK(light.emitter.coneV == spot.emitter.coneV);
+      CHECK(light.origin == vm::approx{spot.origin, Exact});
+
+      // so the sides moved with the far face
+      const auto h320 = 320.0 * std::sin(vm::to_radians(30.0));
+      CHECK(
+        vm::approx{box({0, -h320, -h320}, {320, h320, h320}), Exact}
+        == *emitterEditBox(light));
+
+      // auto range: the size follows the range
+      CHECK(light.emitter.size == Catch::Approx(320.0 / 3.0));
+    }
+
+    SECTION("A side face sets its cone angle and keeps the range")
+    {
+      // a face at e from the axis sets 2 asin(e / R): at R sin 45, 90 degrees
+      const auto e = 256.0 * std::sin(vm::to_radians(45.0));
+      const auto light =
+        editedLight(emitterFromEditBox(spot, identity, box({0, -h, -h}, {256, e, h})));
+      CHECK(light.radius == vm::approx{vm::vec3d{256, 256, 256}, Exact});
+      CHECK(light.emitter.coneH == Catch::Approx(90.0));
+      CHECK(light.emitter.coneV == spot.emitter.coneV);
+      CHECK(light.emitter.size == spot.emitter.size);
+
+      // a face on the other side and the other axis
+      const auto other =
+        editedLight(emitterFromEditBox(spot, identity, box({0, -h, -e}, {256, h, h})));
+      CHECK(other.emitter.coneV == Catch::Approx(90.0));
+      CHECK(other.emitter.coneH == spot.emitter.coneH);
+    }
+
+    SECTION("Box to light to box changes nothing")
+    {
+      // the face moved to e is where it stays, and the cone is symmetric
+      for (const auto e : {20.0, 64.0, 150.0, 200.0})
+      {
+        CAPTURE(e);
+        const auto edited = box({0, -h, -h}, {256, e, h});
+        const auto light = editedLight(emitterFromEditBox(spot, identity, edited));
+        CHECK(vm::approx{box({0, -e, -h}, {256, e, h}), Exact} == *emitterEditBox(light));
+
+        const auto symmetric = box({0, -e, -h}, {256, e, h});
+        CHECK(
+          vm::approx{symmetric, Exact}
+          == *emitterEditBox(editedLight(emitterFromEditBox(spot, identity, symmetric))));
+      }
+    }
+
+    SECTION("An edge applies both rules")
+    {
+      const auto e = 320.0 * std::sin(vm::to_radians(45.0));
+      const auto light =
+        editedLight(emitterFromEditBox(spot, identity, box({0, -h, -h}, {320, e, h})));
+      CHECK(light.radius == vm::approx{vm::vec3d{320, 320, 320}, Exact});
+      CHECK(light.emitter.coneH == Catch::Approx(90.0));
+      CHECK(light.emitter.coneV == spot.emitter.coneV);
+    }
+
+    SECTION("Moving the box moves the origin and nothing else")
+    {
+      // angles 0 90 0 turn local +X to world +Y and local +Y to world -X
+      const auto R = rotationOf({{"classname", "light"}, {"angles", "0 90 0"}});
+      const auto moved = editedLight(emitterFromEditBox(
+        spot, R, emitterEditBox(spot)->translate(vm::vec3d{10, 20, 30})));
+      CHECK(moved.origin == vm::approx{vm::vec3d{-20, 10, 30}, Exact});
+      CHECK(moved.radius == spot.radius);
+      CHECK(moved.emitter == spot.emitter);
+    }
+
+    SECTION("Limits")
+    {
+      // a range below 24 ends on 24, the cone kept (F-T-09)
+      const auto floored =
+        editedLight(emitterFromEditBox(spot, identity, box({0, -h, -h}, {23, h, h})));
+      CHECK(floored.radius == vm::approx{vm::vec3d{24, 24, 24}, Exact});
+      CHECK(floored.emitter.coneH == spot.emitter.coneH);
+      CHECK(floored.emitter.coneV == spot.emitter.coneV);
+      CHECK(floored.origin == vm::approx{spot.origin, Exact});
+      // a half extent below 1
+      CHECK(
+        emitterFromEditBox(spot, identity, box({0, -0.4, -h}, {256, 0.4, h}))
+        == std::nullopt);
+      // a cone angle is clamped to 120 degrees, a face past the range counting as the
+      // range
+      const auto wide =
+        editedLight(emitterFromEditBox(spot, identity, box({0, -h, -h}, {256, 1000, h})));
+      CHECK(wide.emitter.coneH == 120.0);
+      const auto past120 =
+        editedLight(emitterFromEditBox(spot, identity, box({0, -h, -h}, {256, 240, h})));
+      CHECK(past120.emitter.coneH == 120.0);
+      // and to 1 degree: 2 asin(1 / 256) is below it
+      const auto narrow =
+        editedLight(emitterFromEditBox(spot, identity, box({0, -1, -h}, {256, 1, h})));
+      CHECK(narrow.emitter.coneH == 1.0);
+      const auto oneDegree = 256.0 * std::sin(vm::to_radians(0.5));
+      CHECK(oneDegree > 1.0);
+      const auto atOne = editedLight(emitterFromEditBox(
+        spot, identity, box({0, -oneDegree, -h}, {256, oneDegree, h})));
+      CHECK(atOne.emitter.coneH == Catch::Approx(1.0));
+    }
+
+    SECTION("An omni keeps its light_center")
+    {
+      auto omni = makeEmitterOmni();
+      omni.hasCenter = true;
+      omni.center = vm::vec3d{0, 0, 16};
+
+      // the +x face by 32
+      const auto light = editedLight(
+        emitterFromEditBox(omni, identity, box({-288, -288, -272}, {320, 288, 304})));
+      CHECK(light.origin == vm::approx{vm::vec3d{16, 0, 0}, Exact});
+      CHECK(light.center == vm::vec3d{0, 0, 16});
+      CHECK(light.radius == vm::approx{vm::vec3d{304, 288, 288}, Exact});
+      CHECK_FALSE(light.equalRadius);
+      CHECK(light.emitter.size == Catch::Approx(304.0 / 3.0));
+
+      // a range below 24 ends on 24: the dragged radii are held so that the largest is
+      // 24, here all three about the bulb, which stays (F-T-09)
+      const auto floored = editedLight(
+        emitterFromEditBox(omni, identity, box({-20, -20, -4}, {20, 20, 36})));
+      CHECK(floored.radius == vm::approx{vm::vec3d{24, 24, 24}, Exact});
+      CHECK(floored.origin == vm::approx{vm::vec3d{0, 0, 0}, Exact});
+
+      // one face of an omni that is at the floor: the face that stayed stays, the
+      // dragged one ends where the largest radius is 24
+      auto small = makeEmitterOmni();
+      small.radius = vm::vec3d{24, 10, 10};
+      small.equalRadius = false;
+      const auto held = editedLight(
+        emitterFromEditBox(small, identity, box({-24, -10, -10}, {10, 10, 10})));
+      CHECK(held.radius == vm::approx{vm::vec3d{24, 10, 10}, Exact});
+      CHECK(held.origin == vm::approx{vm::vec3d{0, 0, 0}, Exact});
+      // a radius that is not the largest is not held
+      const auto narrow = editedLight(
+        emitterFromEditBox(small, identity, box({-24, -10, -10}, {24, 5, 10})));
+      CHECK(narrow.radius == vm::approx{vm::vec3d{24, 7.5, 10}, Exact});
+    }
+
+    SECTION("lightFromEditBox gives the same light")
+    {
+      const auto b = box({0, -h, -h}, {320, h, h});
+      CHECK(lightFromEditBox(spot, identity, b) == emitterFromEditBox(spot, identity, b));
+      CHECK(
+        lightFromEditBox(spot, identity, b, DefaultThreshold)
+        == emitterFromEditBox(spot, identity, b));
+
+      const auto omniBox = box({-288, -288, -288}, {320, 288, 288});
+      CHECK(
+        lightFromEditBox(makeEmitterOmni(), identity, omniBox, DefaultThreshold)
+        == emitterFromEditBox(makeEmitterOmni(), identity, omniBox));
+    }
+  }
+
+  SECTION("emitterSpotRotation")
+  {
+    const auto R = emitterSpotRotation();
+    CHECK(R * vm::vec3d{1, 0, 0} == vm::approx{vm::vec3d{0, 0, -1}, Exact});
+    CHECK(det(R) == Catch::Approx(1.0));
+    // what entityRotation reads from angles "90 0 0"
+    CHECK(
+      vm::is_equal(R, rotationOf({{"classname", "light"}, {"angles", "90 0 0"}}), Exact));
+  }
+
+  SECTION("emitterSpotFromWorldBox")
+  {
+    auto base = LightProperties{};
+    base.emitter = seededEmitterProperties();
+    const auto W = box({0, 0, 0}, {128, 64, 96});
+
+    const auto light = emitterSpotFromWorldBox(W, base);
+    CHECK(light.type == LightType::Spot);
+    CHECK(light.emitter.enabled);
+    CHECK(light.origin == vm::approx{vm::vec3d{64, 32, 96}, Exact});
+    CHECK(light.radius == vm::approx{vm::vec3d{96, 96, 96}, Exact});
+    // pointing down, axis[1] is world +Y and axis[2] world +X; each cone angle is
+    // 2 asin(half extent / height)
+    CHECK(
+      light.emitter.coneH == Catch::Approx(2.0 * vm::to_degrees(std::asin(32.0 / 96.0))));
+    CHECK(
+      light.emitter.coneV == Catch::Approx(2.0 * vm::to_degrees(std::asin(64.0 / 96.0))));
+    CHECK(light.emitter.size == Catch::Approx(32.0));
+
+    // the edit box, turned by the new spot's rotation, is the drawn box
+    const auto R = emitterSpotRotation();
+    const auto editBox = emitterEditBox(light);
+    REQUIRE(editBox);
+    const auto a = light.origin + R * editBox->min;
+    const auto b = light.origin + R * editBox->max;
+    CHECK(vm::approx{vm::bbox3d{vm::min(a, b), vm::max(a, b)}, Exact} == W);
+
+    // a box 100 wide and 100 high makes a 60 degree spot whose edit box is the drawn box
+    const auto cube = box({0, 0, 0}, {100, 100, 100});
+    const auto sixty = emitterSpotFromWorldBox(cube, base);
+    CHECK(sixty.emitter.coneH == Catch::Approx(60.0));
+    CHECK(sixty.emitter.coneV == Catch::Approx(60.0));
+    const auto sixtyBox = emitterEditBox(sixty);
+    REQUIRE(sixtyBox);
+    const auto c0 = sixty.origin + R * sixtyBox->min;
+    const auto c1 = sixty.origin + R * sixtyBox->max;
+    CHECK(vm::approx{vm::bbox3d{vm::min(c0, c1), vm::max(c0, c1)}, Exact} == cube);
+
+    // a side wider than sin 60 of the height is clamped to 120 degrees, and the edit box
+    // is then narrower than the drawn box
+    const auto flat = emitterSpotFromWorldBox(box({0, 0, 0}, {100, 200, 100}), base);
+    CHECK(flat.emitter.coneH == 120.0);
+    CHECK(
+      emitterEditBox(flat)->max.y()
+      == Catch::Approx(100.0 * std::sin(vm::to_radians(60.0))));
+
+    // a half extent below 1 is denied
+    CHECK(emitterSpotFromWorldBox(box({0, 0, 0}, {1, 64, 96}), base) == base);
+  }
+
+  SECTION("emitterOmniFromWorldBox")
+  {
+    auto base = LightProperties{};
+    base.emitter = seededEmitterProperties();
+    const auto W = box({0, 0, 0}, {128, 128, 64});
+
+    const auto light = emitterOmniFromWorldBox(W, base);
+    CHECK(light.type == LightType::Point);
+    CHECK(light.emitter.enabled);
+    CHECK(light.origin == vm::approx{vm::vec3d{64, 64, 32}, Exact});
+    CHECK(light.radius == vm::approx{vm::vec3d{64, 64, 32}, Exact});
+    CHECK_FALSE(light.equalRadius);
+    CHECK(light.emitter.size == Catch::Approx(64.0 / 3.0));
+
+    // the bulb, not the origin, is the box's centre
+    auto centred = base;
+    centred.hasCenter = true;
+    centred.center = vm::vec3d{0, 0, 16};
+    CHECK(
+      emitterOmniFromWorldBox(W, centred).origin
+      == vm::approx{vm::vec3d{64, 64, 16}, Exact});
+
+    // a sun stays a sun; an omni's largest half extent below 24 is denied, a sun's box
+    // may be any size (F-T-10)
+    auto sunBase = base;
+    sunBase.type = LightType::Sun;
+    CHECK(emitterOmniFromWorldBox(W, sunBase).type == LightType::Sun);
+    CHECK(emitterOmniFromWorldBox(box({0, 0, 0}, {40, 40, 40}), base) == base);
+    const auto smallSun = emitterOmniFromWorldBox(box({0, 0, 0}, {40, 40, 40}), sunBase);
+    CHECK(smallSun.type == LightType::Sun);
+    CHECK(smallSun.radius == vm::approx{vm::vec3d{20, 20, 20}, Exact});
+  }
+
+  SECTION("emitterSpotFromTextureSpot")
+  {
+    SECTION("The default spot light")
+    {
+      const auto result = emitterSpotFromTextureSpot(defaultSpot, identity);
+      REQUIRE(result);
+      const auto& light = result->light;
+
+      // forward along the beam, axis[1] = -right, axis[2] = axis[0] x axis[1]
+      CHECK(vm::is_equal(
+        result->rotation, columns({0, 0, -1}, {1, 0, 0}, {0, -1, 0}), Exact));
+      CHECK(det(result->rotation) == Catch::Approx(1.0));
+
+      CHECK(light.type == LightType::Spot);
+      CHECK(light.emitter.enabled);
+      CHECK(light.emitter.coneH == Catch::Approx(2.0 * vm::to_degrees(std::atan(0.5))));
+      CHECK(light.emitter.coneV == Catch::Approx(53.1301).margin(1e-4));
+      // zNear + zFar = 8 + 256
+      CHECK(light.radius == vm::approx{vm::vec3d{264, 264, 264}, Exact});
+      CHECK(light.origin == defaultSpot.origin);
+      CHECK(light.target == vm::vec3d{0, 0, 0});
+      CHECK(light.right == vm::vec3d{0, 0, 0});
+      CHECK(light.up == vm::vec3d{0, 0, 0});
+      // the size follows the new range; without light_start a new block starts at 0
+      CHECK(light.emitter.size == Catch::Approx(88.0));
+      CHECK(light.emitter.start == 0.0);
+    }
+
+    SECTION("Without light_start a kept block keeps its start")
+    {
+      auto kept = defaultSpot;
+      kept.emitter.hasBlock = true;
+      kept.emitter.start = 50.0;
+      const auto result = emitterSpotFromTextureSpot(kept, identity);
+      REQUIRE(result);
+      CHECK(result->light.emitter.start == 50.0);
+      CHECK(result->light.emitter.size == Catch::Approx((264.0 - 50.0) / 3.0));
+    }
+
+    SECTION("A kept linear block keeps its auto range flag")
+    {
+      // the kind switch is no range edit (G0 section 5)
+      auto texture = defaultSpot;
+      texture.emitter = seededEmitterProperties();
+      texture.emitter.enabled = false;
+      texture.emitter.falloff = LightFalloff::Linear;
+      REQUIRE(texture.emitter.autoRange);
+
+      const auto emitter = emitterSpotFromTextureSpot(texture, identity);
+      REQUIRE(emitter);
+      CHECK(emitter->light.emitter.autoRange);
+      CHECK(emitter->light.radius == vm::vec3d{264, 264, 264});
+    }
+
+    SECTION("Explicit start and end points, in a turned light")
+    {
+      const auto R = rotationOf({{"classname", "light"}, {"angles", "0 90 0"}});
+      const auto result = emitterSpotFromTextureSpot(explicitSpot, R);
+      REQUIRE(result);
+      // zNear + zFar = 32 + 200
+      CHECK(result->light.radius == vm::approx{vm::vec3d{232, 232, 232}, Exact});
+      // the emitter starts where the explicit light_start was (F-T-03), and the size
+      // follows the range from there
+      CHECK(result->light.emitter.start == Catch::Approx(32.0));
+      CHECK(result->light.emitter.size == Catch::Approx(200.0 / 3.0));
+      CHECK(vm::is_equal(
+        result->rotation, R * columns({0, 0, -1}, {1, 0, 0}, {0, -1, 0}), Exact));
+      // the beam still points down in the world
+      CHECK(
+        result->rotation * vm::vec3d{1, 0, 0} == vm::approx{vm::vec3d{0, 0, -1}, Exact});
+    }
+
+    SECTION("Nothing for a degenerate spot, a point light or an emitter")
+    {
+      auto noTarget = defaultSpot;
+      noTarget.target = vm::vec3d{0, 0, 0};
+      CHECK_FALSE(emitterSpotFromTextureSpot(noTarget, identity).has_value());
+      CHECK_FALSE(emitterSpotFromTextureSpot(defaultPoint, identity).has_value());
+      CHECK_FALSE(emitterSpotFromTextureSpot(emitterSpot(), identity).has_value());
+    }
+  }
+
+  SECTION("textureSpotFromEmitterSpot")
+  {
+    auto spot = emitterSpot();
+    spot.radius = vm::vec3d{512, 512, 512};
+    spot.emitter.coneV = 40.0;
+
+    // T = R - 8
+    const auto light = textureSpotFromEmitterSpot(spot);
+    CHECK(light.type == LightType::Spot);
+    CHECK_FALSE(light.emitter.enabled);
+    CHECK(light.target == vm::approx{vm::vec3d{504, 0, 0}, Exact});
+    CHECK(
+      light.right
+      == vm::approx{vm::vec3d{0, -504 * std::tan(vm::to_radians(30.0)), 0}, Exact});
+    CHECK(
+      light.up
+      == vm::approx{vm::vec3d{0, 0, 504 * std::tan(vm::to_radians(20.0))}, Exact});
+    CHECK_FALSE(light.explicitStartEnd);
+    // the engine lights it from 8 to 8 + T = R
+    const auto frustum = spotLightFrustum(light);
+    REQUIRE(frustum);
+    CHECK(frustum->zNear + frustum->zFar == Catch::Approx(512.0));
+    // the emitter keeps its values while it is switched off
+    CHECK(light.emitter.coneV == 40.0);
+    CHECK(light.emitter.size == spot.emitter.size);
+
+    // T is at least 16
+    auto shortSpot = emitterSpot();
+    shortSpot.radius = vm::vec3d{20, 20, 20};
+    CHECK(
+      textureSpotFromEmitterSpot(shortSpot).target
+      == vm::approx{vm::vec3d{16, 0, 0}, Exact});
+  }
+
+  SECTION("asTextureLight")
+  {
+    // a spot through textureSpotFromEmitterSpot (F-T-02)
+    auto spot = emitterSpot();
+    spot.emitter.coneV = 40.0;
+    CHECK(asTextureLight(spot) == textureSpotFromEmitterSpot(spot));
+    CHECK_FALSE(asTextureLight(spot).emitter.enabled);
+
+    // an omni and a sun only clear the flag
+    auto omni = makeEmitterOmni();
+    omni.hasCenter = true;
+    omni.center = vm::vec3d{0, 0, 16};
+    auto expected = omni;
+    expected.emitter.enabled = false;
+    CHECK(asTextureLight(omni) == expected);
+
+    auto emitterSun = sun;
+    emitterSun.emitter = seededEmitterProperties();
+    auto expectedSun = emitterSun;
+    expectedSun.emitter.enabled = false;
+    CHECK(asTextureLight(emitterSun) == expectedSun);
+
+    // a texture light is unchanged
+    CHECK(asTextureLight(defaultSpot) == defaultSpot);
+    CHECK(asTextureLight(defaultPoint) == defaultPoint);
+  }
+
+  SECTION("asEmitterLight")
+  {
+    const auto policy = EntityRotationPolicy::IdTech4;
+    const auto entityOf = [](std::vector<EntityProperty> more) {
+      auto properties = std::vector<EntityProperty>{
+        {"classname", "light"}, {"origin", "0 0 0"}, {"light_radius", "300 300 300"}};
+      properties.insert(properties.end(), more.begin(), more.end());
+      return Entity{std::move(properties)};
+    };
+
+    SECTION("A point light without a block gets a new one, its effect its style's")
+    {
+      const auto entity = entityOf({{"style", "3"}});
+      const auto light = parseLightProperties(entity);
+      const auto [emitter, rotation] = asEmitterLight(entity, light, policy);
+
+      auto expected = light;
+      expected.emitter = seededEmitterProperties();
+      expected.emitter.effect = 3;
+      // the size follows the kept range of 300: 300 / 3 at intensity 1
+      expected.emitter.size = 100.0;
+      CHECK(emitter == expected);
+      CHECK(rotation == std::nullopt);
+    }
+
+    SECTION("A kept block comes back, a range out of step with auto range off")
+    {
+      const auto entity = entityOf({{"emitter", "0"}, {"emit_size", "50"}});
+      const auto light = parseLightProperties(entity);
+      REQUIRE(light.emitter.hasBlock);
+      const auto [emitter, rotation] = asEmitterLight(entity, light, policy);
+
+      CHECK(emitter.emitter.enabled);
+      CHECK(emitter.emitter.hasBlock);
+      CHECK(emitter.emitter.size == 50.0);
+      CHECK(emitter.radius == vm::vec3d{300, 300, 300});
+      // its auto range would be 150 (G0 section 5, a hand-set range wins)
+      CHECK_FALSE(emitter.emitter.autoRange);
+      CHECK(rotation == std::nullopt);
+    }
+
+    SECTION("A kept effect is not taken from the style")
+    {
+      const auto entity = entityOf({{"style", "3"}, {"emit_effect", "pulse"}});
+      const auto [emitter, rotation] =
+        asEmitterLight(entity, parseLightProperties(entity), policy);
+      CHECK(emitter.emitter.effect == 13);
+    }
+
+    SECTION("A texture spot's frustum becomes its axis, cone and range")
+    {
+      const auto entity = Entity{{
+        {"classname", "light"},
+        {"origin", "0 0 0"},
+        {"light_target", "0 0 -256"},
+        {"light_up", "0 -128 0"},
+        {"light_right", "-128 0 0"},
+      }};
+      const auto [emitter, rotation] =
+        asEmitterLight(entity, parseLightProperties(entity), policy);
+
+      CHECK(emitter.type == LightType::Spot);
+      CHECK(emitter.emitter.enabled);
+      CHECK(emitter.radius == vm::approx{vm::vec3d{264, 264, 264}, Exact});
+      CHECK(emitter.emitter.size == Catch::Approx(88.0));
+      REQUIRE(rotation);
+      CHECK(vm::is_equal(*rotation, columns({0, 0, -1}, {1, 0, 0}, {0, -1, 0}), Exact));
+    }
+
+    SECTION("A spot without a frustum becomes a new spot pointing down")
+    {
+      const auto entity = Entity{{
+        {"classname", "light"},
+        {"origin", "0 0 0"},
+        {"light_target", "0 0 0"},
+        {"light_up", "0 -128 0"},
+        {"light_right", "-128 0 0"},
+      }};
+      const auto light = parseLightProperties(entity);
+      REQUIRE(light.type == LightType::Spot);
+      const auto [emitter, rotation] = asEmitterLight(entity, light, policy);
+
+      CHECK(emitter == seededEmitterLight(LightType::Spot, light));
+      CHECK(rotation == emitterSpotRotation());
+    }
+  }
+
+  SECTION("withEmitterRange")
+  {
+    // a spot's three radii are its range
+    auto spot = emitterSpot();
+    spot.radius = vm::vec3d{100, 200, 300};
+    spot.equalRadius = false;
+    const auto ranged = withEmitterRange(spot, 400.0);
+    CHECK(ranged.radius == vm::vec3d{400, 400, 400});
+    CHECK(ranged.equalRadius);
+
+    // an omni's box scales as a whole (G0 section 5)
+    auto omni = makeEmitterOmni();
+    omni.radius = vm::vec3d{100, 50, 200};
+    omni.equalRadius = false;
+    CHECK(withEmitterRange(omni, 400.0).radius == vm::vec3d{200, 100, 400});
+    CHECK_FALSE(withEmitterRange(omni, 400.0).equalRadius);
+    omni.radius = vm::vec3d{0, 0, 0};
+    CHECK(withEmitterRange(omni, 400.0).radius == vm::vec3d{400, 400, 400});
+
+    // a sun has no range
+    auto emitterSun = sun;
+    emitterSun.emitter = seededEmitterProperties();
+    CHECK(withEmitterRange(emitterSun, 400.0) == emitterSun);
+  }
+
+  SECTION("The writer never writes a texture spot whose target is 0")
+  {
+    // an emitter spot whose flag alone was cleared (F-T-02)
+    auto cleared = emitterSpot();
+    cleared.emitter.enabled = false;
+    CHECK(
+      lightPropertyUpdate(cleared)
+      == lightPropertyUpdate(textureSpotFromEmitterSpot(emitterSpot())));
+
+    const auto entity = applyLightPropertyUpdate(
+      Entity{std::vector<EntityProperty>{{"classname", "light"}}},
+      lightPropertyUpdate(cleared));
+    CHECK(*entity.property("light_target") == "248 0 0");
+    CHECK(*entity.property("emitter") == "0");
+
+    // a texture spot without an emitter block is written as it is
+    auto bare = defaultSpot;
+    bare.target = vm::vec3d{0, 0, 0};
+    const auto bareEntity = applyLightPropertyUpdate(
+      Entity{std::vector<EntityProperty>{{"classname", "light"}}},
+      lightPropertyUpdate(bare));
+    CHECK(*bareEntity.property("light_target") == "0 0 0");
+  }
+
+  SECTION("emitterAimRotation")
+  {
+    // a level beam: axis[1] = worldUp x axis[0] (F-T-08)
+    const auto level = emitterAimRotation(vm::vec3d{2, 0, 0}, vm::vec3d{0, 0, 1});
+    CHECK(vm::is_equal(level, columns({1, 0, 0}, {0, 1, 0}, {0, 0, 1}), Exact));
+
+    // a tilted beam keeps axis[1] level, whatever the previous one was
+    const auto forward = vm::normalize(vm::vec3d{1, 1, -1});
+    const auto tilted = emitterAimRotation(forward, vm::vec3d{0, 0, 1});
+    CHECK(tilted[0] == vm::approx{forward, Exact});
+    CHECK(tilted[1].z() == Catch::Approx(0.0).margin(Exact));
+    CHECK(det(tilted) == Catch::Approx(1.0));
+
+    // straight down: the previous axis[1], made perpendicular to the beam
+    const auto down = emitterAimRotation(vm::vec3d{0, 0, -1}, vm::vec3d{0.1, 1, 0.5});
+    CHECK(down[0] == vm::approx{vm::vec3d{0, 0, -1}, Exact});
+    CHECK(down[1] == vm::approx{vm::normalize(vm::vec3d{0.1, 1, 0}), Exact});
+    CHECK(det(down) == Catch::Approx(1.0));
+  }
+
+  SECTION("A kind switch there and back changes nothing")
+  {
+    const auto turned = rotationOf({{"classname", "light"}, {"angles", "30 45 60"}});
+
+    SECTION("Emitter to texture and back")
+    {
+      for (const auto range : {24.0, 256.0, 4096.0})
+      {
+        CAPTURE(range);
+        auto spot = emitterSpot();
+        spot.radius = vm::vec3d{range, range, range};
+        spot.emitter.coneV = 40.0;
+        spot.emitter.autoRange = false;
+
+        // the rotation is unchanged on the way there
+        const auto back =
+          emitterSpotFromTextureSpot(textureSpotFromEmitterSpot(spot), turned);
+        REQUIRE(back);
+        CHECK(vm::is_equal(back->rotation, turned, Exact));
+        CHECK(back->light.emitter.coneH == Catch::Approx(60.0));
+        CHECK(back->light.emitter.coneV == Catch::Approx(40.0));
+        CHECK(back->light.radius == vm::approx{spot.radius, Exact});
+      }
+    }
+
+    SECTION("A centred, unmirrored texture spot comes back with the same world vectors")
+    {
+      // a sheared spot comes back centred, a mirrored one with its up flipped (G0 section
+      // 9)
+      const auto emitter = emitterSpotFromTextureSpot(defaultSpot, turned);
+      REQUIRE(emitter);
+      const auto back = textureSpotFromEmitterSpot(emitter->light);
+
+      // the texture spot's vectors, in the world, before and after
+      CHECK(
+        emitter->rotation * back.target
+        == vm::approx{turned * defaultSpot.target, Tolerance});
+      CHECK(
+        emitter->rotation * back.right
+        == vm::approx{turned * defaultSpot.right, Tolerance});
+      CHECK(
+        emitter->rotation * back.up == vm::approx{turned * defaultSpot.up, Tolerance});
+    }
+  }
+
+  SECTION("A texture spot switched to an emitter on an entity")
+  {
+    auto entity = Entity{std::vector<EntityProperty>{
+      {"classname", "light"},
+      {"origin", "0 0 0"},
+      {"light_target", "0 0 -256"},
+      {"light_up", "0 -128 0"},
+      {"light_right", "-128 0 0"},
+    }};
+    const auto frame = lightFrame(entity, EntityRotationPolicy::IdTech4);
+    const auto result = emitterSpotFromTextureSpot(parseLightProperties(entity), frame.R);
+    REQUIRE(result);
+
+    entity = applyLightPropertyUpdate(entity, lightKeyDiff(entity, result->light));
+    applyEntityRotationUpdate(entity, lightRotationUpdate(entity, result->rotation));
+
+    // the five vectors are deleted, the range is written R R R
+    CHECK_FALSE(entity.hasProperty("light_target"));
+    CHECK_FALSE(entity.hasProperty("light_up"));
+    CHECK_FALSE(entity.hasProperty("light_right"));
+    CHECK(*entity.property("light_radius") == "264 264 264");
+    CHECK(*entity.property("emitter") == "1");
+
+    const auto light = parseLightProperties(entity);
+    CHECK(light.type == LightType::Spot);
+    CHECK(light.emitter.coneH == Catch::Approx(53.1301).margin(1e-4));
+    CHECK(vm::is_equal(
+      lightFrame(entity, EntityRotationPolicy::IdTech4).R, result->rotation, Tolerance));
+
+    SECTION("and back to Texture, which keeps every emit_ key")
+    {
+      const auto diff = lightKeyDiff(entity, textureSpotFromEmitterSpot(light));
+      CHECK(std::ranges::none_of(
+        diff.remove, [](const auto& key) { return key.starts_with("emit"); }));
+
+      const auto changed = applyLightPropertyUpdate(entity, diff);
+      for (const auto& key : emitterPropertyKeys())
+      {
+        CAPTURE(key);
+        CHECK(changed.hasProperty(key));
+      }
+      CHECK(*changed.property("emitter") == "0");
+      CHECK(*changed.property("light_target") == "256 0 0");
+      CHECK_FALSE(changed.hasProperty("light_radius"));
+    }
+  }
+
+  SECTION("An emitter spot pointing straight down")
+  {
+    const auto entity = Entity{std::vector<EntityProperty>{
+      {"classname", "light"},
+      {"origin", "0 0 256"},
+      {"emitter", "1"},
+      {"emit_shape", "spot"},
+      {"light_radius", "256 256 256"},
+      {"emit_cone", "60 30"},
+      {"angles", "90 0 0"},
+    }};
+    const auto light = parseLightProperties(entity);
+    const auto frame = lightFrame(entity, EntityRotationPolicy::IdTech4);
+    CHECK(frame.R * vm::vec3d{1, 0, 0} == vm::approx{vm::vec3d{0, 0, -1}, Exact});
+    CHECK(vm::is_equal(frame.R, emitterSpotRotation(), Exact));
+
+    // lit below the bulb, not above it
+    CHECK(containsPoint(light, frame, vm::vec3d{0, 0, 100}));
+    CHECK_FALSE(containsPoint(light, frame, vm::vec3d{0, 0, 300}));
+    // cone h (60) runs along axis[1], world +Y; cone v (30) along axis[2], world +X
+    CHECK(containsPoint(light, frame, vm::vec3d{0, 80, 100}));
+    CHECK_FALSE(containsPoint(light, frame, vm::vec3d{80, 0, 100}));
+
+    SECTION("Its rotation is written and read back as a matrix")
+    {
+      // at pitch 90 the angles fold roll into yaw; the matrix survives
+      auto turned = Entity{std::vector<EntityProperty>{
+        {"classname", "light"},
+        {"angles", "90 0 30"},
+      }};
+      const auto R = lightFrame(turned, EntityRotationPolicy::IdTech4).R;
+      // the same matrix is no edit, so the angles stay as written (F-T-04)
+      const auto same = lightRotationUpdate(turned, R);
+      CHECK(same == EntityRotationUpdate{});
+      applyEntityRotationUpdate(turned, same);
+      CHECK(*turned.property("angles") == "90 0 30");
+
+      // a different matrix is written and read back
+      const auto other = rotationOf({{"classname", "light"}, {"angles", "45 10 20"}});
+      applyEntityRotationUpdate(turned, lightRotationUpdate(turned, other));
+      CHECK(vm::is_equal(
+        lightFrame(turned, EntityRotationPolicy::IdTech4).R, other, Tolerance));
+
+      // light_rotation that holds the given matrix already stays
+      const auto kept = Entity{std::vector<EntityProperty>{
+        {"classname", "light"},
+        {"light_rotation", "0 1 0 -1 0 0 0 0 1"},
+      }};
+      CHECK(
+        lightRotationUpdate(kept, lightFrame(kept, EntityRotationPolicy::IdTech4).R)
+        == EntityRotationUpdate{});
+
+      // light_rotation is replaced by angles, as the editors write rotation today
+      auto matrix = Entity{std::vector<EntityProperty>{
+        {"classname", "light"},
+        {"light_rotation", "0 1 0 -1 0 0 0 0 1"},
+      }};
+      const auto update = lightRotationUpdate(matrix, emitterSpotRotation());
+      REQUIRE(update.set);
+      CHECK(update.set->key() == "angles");
+      CHECK(update.remove == std::vector<std::string>{"light_rotation"});
+      applyEntityRotationUpdate(matrix, update);
+      CHECK(vm::is_equal(
+        lightFrame(matrix, EntityRotationPolicy::IdTech4).R,
+        emitterSpotRotation(),
+        Tolerance));
+    }
+  }
+
+  SECTION("emitterCurve")
+  {
+    const auto curve = emitterCurve(makeEmitterOmni());
+    CHECK(curve.falloff == LightFalloff::InvSquareClamped);
+    CHECK(curve.falloffExp == Catch::Approx(3.0));
+    CHECK(curve.innerRadius == 0.0);
+    CHECK(curve.shapeExp == 2.0);
+    CHECK(curve.penumbra == 0.2);
+
+    // inner = start / R, k = (R - start) / size
+    auto started = makeEmitterOmni();
+    started.emitter.start = 48.0;
+    CHECK(emitterCurve(started).innerRadius == Catch::Approx(48.0 / 288.0));
+    CHECK(emitterCurve(started).falloffExp == Catch::Approx(2.5));
+
+    // the start is clamped to R - 1
+    started.emitter.start = 500.0;
+    CHECK(emitterCurve(started).innerRadius == Catch::Approx(287.0 / 288.0));
+    CHECK(emitterCurve(started).falloffExp == Catch::Approx(1.0 / 96.0));
+  }
+
+  SECTION("emitterFalloffT")
+  {
+    auto omni = makeEmitterOmni();
+    omni.hasCenter = true;
+    omni.center = vm::vec3d{0, 0, 16};
+    CHECK(emitterFalloffT(omni, vm::vec3d{0, 0, 16}) == 0.0);
+    CHECK(emitterFalloffT(omni, vm::vec3d{0, 0, 16 + 144}) == Catch::Approx(0.5));
+
+    // a spot's t runs along its range from the bulb in every direction
+    CHECK(emitterFalloffT(emitterSpot(), vm::vec3d{128, 0, 0}) == Catch::Approx(0.5));
+    CHECK(emitterFalloffT(emitterSpot(), vm::vec3d{0, 128, 0}) == Catch::Approx(0.5));
+  }
+
+  SECTION("emitterSpotMask")
+  {
+    const auto spot = emitterSpot();
+    const auto tanHalf = std::tan(vm::to_radians(30.0));
+    CHECK(emitterSpotMask(spot, vm::vec3d{100, 0, 0}) == 1.0);
+    // on the cone, and half way through the penumbra ring from 0.8 to 1
+    CHECK(
+      emitterSpotMask(spot, vm::vec3d{100, 100 * tanHalf, 0})
+      == Catch::Approx(0.0).margin(Exact));
+    CHECK(
+      emitterSpotMask(spot, vm::vec3d{100, 0, 90 * tanHalf})
+      == Catch::Approx(0.5).margin(Exact));
+    // behind the bulb
+    CHECK(emitterSpotMask(spot, vm::vec3d{-10, 0, 0}) == 0.0);
+    // an omni has no mask
+    CHECK(emitterSpotMask(makeEmitterOmni(), vm::vec3d{-10, 0, 0}) == 1.0);
+  }
+
+  SECTION("emitterFalloff")
+  {
+    // the windowed inverse square written out at u = t = 96 / 288 and k = 3
+    const auto u = 1.0 / 3.0;
+    const auto w = 1.0 - u * u * u * u;
+    const auto d = u * 3.0 + 1e-3;
+    CHECK(
+      emitterFalloff(makeEmitterOmni(), vm::vec3d{96, 0, 0})
+      == Catch::Approx(w * w / (d * d + 1.0)).margin(Exact));
+    CHECK(emitterFalloff(makeEmitterOmni(), vm::vec3d{288, 0, 0}) == 0.0);
+
+    // nothing behind a spot's bulb
+    CHECK(emitterFalloff(emitterSpot(), vm::vec3d{-10, 0, 0}) == 0.0);
+    CHECK(emitterFalloff(emitterSpot(), vm::vec3d{128, 0, 0}) > 0.0);
+  }
+
+  SECTION("containsPoint of an emitter")
+  {
+    const auto atOrigin = LightFrame{vm::vec3d{0, 0, 0}, identity};
+    const auto spot = emitterSpot();
+    const auto tanHalf = std::tan(vm::to_radians(30.0));
+    CHECK(containsPoint(spot, atOrigin, vm::vec3d{100, 0, 0}));
+    CHECK(containsPoint(spot, atOrigin, vm::vec3d{250, 0, 0}));
+    // behind the bulb, beyond the range, outside the cone
+    CHECK_FALSE(containsPoint(spot, atOrigin, vm::vec3d{-10, 0, 0}));
+    CHECK_FALSE(containsPoint(spot, atOrigin, vm::vec3d{260, 0, 0}));
+    CHECK_FALSE(containsPoint(spot, atOrigin, vm::vec3d{100, 101 * tanHalf, 0}));
+
+    // an omni's ellipsoid is centred on its bulb
+    auto omni = makeEmitterOmni();
+    omni.hasCenter = true;
+    omni.center = vm::vec3d{0, 0, 100};
+    CHECK(containsPoint(omni, atOrigin, vm::vec3d{0, 0, 380}));
+    CHECK_FALSE(containsPoint(omni, atOrigin, vm::vec3d{0, 0, -200}));
   }
 }
 

@@ -32,6 +32,8 @@
 #include "mdl/GameInfo.h"
 #include "mdl/GroupNode.h"
 #include "mdl/LayerNode.h"
+#include "mdl/Light.h"
+#include "mdl/LightVolume.h"
 #include "mdl/Map.h"
 #include "mdl/PatchNode.h"
 #include "mdl/Selection.h"
@@ -45,6 +47,7 @@
 #include "vm/vec.h"
 
 #include <algorithm>
+#include <tuple>
 #include <utility>
 
 namespace tb::render
@@ -84,6 +87,8 @@ std::pair<LightVolumeMesh, std::vector<LightRange>> buildLights(
       range.props.origin,
       mdl::lightRotation(entity, policy),
     };
+    std::tie(range.centre, range.reach) =
+      mdl::lightBoundingSphere(range.props, range.frame);
     range.selected = selected;
 
     const auto lightSize = lightVolumeMeshSize(range.props, style, entity.origin());
@@ -341,13 +346,16 @@ void LightVolumeRenderer::prepareLines(gl::Gl& gl, gl::VboManager& vboManager)
 void LightVolumeRenderer::renderFills(RenderContext& renderContext)
 {
   const auto cameraPosition = vm::vec3d{renderContext.camera().position()};
-  // the 2D camera is always outside
+  // the 2D camera is always outside; a camera beyond the reach of a light's centre is
+  // outside its volume without a test that reads the light
   const auto containsCamera = [&](const LightRange& range) {
     return renderContext.render3D()
+           && vm::squared_distance(range.centre, cameraPosition)
+                <= range.reach * range.reach
            && mdl::containsPoint(range.props, range.frame, cameraPosition);
   };
   const auto distance = [&](const LightRange& range) {
-    return vm::squared_distance(range.frame.origin, cameraPosition);
+    return vm::squared_distance(range.centre, cameraPosition);
   };
 
   m_fillDraws.clear();

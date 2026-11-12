@@ -58,31 +58,39 @@ inline const std::string Style = "style";
 inline const std::string NoShadows = "noshadows";
 inline const std::string NoSpecular = "nospecular";
 
-inline const std::string MathEnabled = "math_enabled";
-inline const std::string MathType = "math_type";
-inline const std::string MathFalloff = "math_falloff";
-inline const std::string MathFalloffExp = "math_falloff_exp";
-inline const std::string MathInnerRadius = "math_inner_radius";
-inline const std::string MathShapeExp = "math_shape_exp";
-inline const std::string MathPenumbra = "math_penumbra";
-inline const std::string MathPattern = "math_pattern";
-inline const std::string MathPatternStrength = "math_pattern_strength";
-inline const std::string MathPatternScale = "math_pattern_scale";
-inline const std::string MathPatternPhase = "math_pattern_phase";
-inline const std::string MathEnergyClamp = "math_energy_clamp";
-inline const std::string MathStyle = "math_style";
+// the emitter block; light_radius, light_center and parallel are shared with the other
+// lights
+inline const std::string Emitter = "emitter";
+inline const std::string EmitShape = "emit_shape";
+inline const std::string EmitAutoRange = "emit_auto_range";
+inline const std::string EmitFalloff = "emit_falloff";
+inline const std::string EmitSize = "emit_size";
+inline const std::string EmitStart = "emit_start";
+inline const std::string EmitClamp = "emit_clamp";
+inline const std::string EmitCone = "emit_cone";
+inline const std::string EmitPenumbra = "emit_penumbra";
+inline const std::string EmitSquare = "emit_square";
+inline const std::string EmitPattern = "emit_pattern";
+inline const std::string EmitPatternStrength = "emit_pattern_strength";
+inline const std::string EmitPatternScale = "emit_pattern_scale";
+inline const std::string EmitPatternPhase = "emit_pattern_phase";
+inline const std::string EmitEffect = "emit_effect";
+inline const std::string EmitEffectSpeed = "emit_effect_speed";
+inline const std::string EmitEffectAmount = "emit_effect_amount";
+inline const std::string EmitEffectPhase = "emit_effect_phase";
 } // namespace LightPropertyKeys
 
 /**
- * The thirteen keys of a math light: the twelve that the engine's ML_WriteToDict writes,
- * in its order, and math_style, which is written only for a style.
+ * The eighteen keys of an emitter block in the order in which they are written: "emitter"
+ * and the seventeen "emit_*" keys. light_radius, light_center and parallel are shared
+ * with the other lights and are not among them.
  */
-const std::vector<std::string>& mathLightPropertyKeys();
+const std::vector<std::string>& emitterPropertyKeys();
 
 /**
  * The number of the engine's predefined light styles (predef_lightstyles in
- * renderer/Material.h), which "style" and "math_style" select by their index; -1 is no
- * style.
+ * renderer/Material.h), which "style" selects by its index (-1 is no style) and emitter
+ * effects 1 to 11 play.
  */
 inline constexpr auto LightStyleCount = 12;
 
@@ -125,49 +133,84 @@ enum class LightPattern
 std::ostream& operator<<(std::ostream& lhs, LightPattern rhs);
 
 /**
- * The value of "math_type" for the given light type: point, spot or sun.
- */
-std::string_view mathTypeName(LightType type);
-
-/**
- * Parses a "math_type" value without regard to case; "parallel" is a sun. Returns
- * nothing for an unknown name.
- */
-std::optional<LightType> parseMathTypeName(std::string_view name);
-
-/**
- * The value of "math_falloff" for the given curve: invsquare, linear, smooth, exponential
+ * The value of "emit_falloff" for the given curve: invsquare, linear, smooth, exponential
  * or invsquare_clamped.
  */
 std::string_view lightFalloffName(LightFalloff falloff);
 
 /**
- * Parses a "math_falloff" value without regard to case. Returns nothing for an unknown
+ * Parses an "emit_falloff" value without regard to case. Returns nothing for an unknown
  * name, which the engine reads as invsquare_clamped.
  */
 std::optional<LightFalloff> parseLightFalloffName(std::string_view name);
 
 /**
- * The value of "math_pattern" for the given pattern: none, subsurface, ice, caustic,
+ * The value of "emit_pattern" for the given pattern: none, subsurface, ice, caustic,
  * banded or granular.
  */
 std::string_view lightPatternName(LightPattern pattern);
 
 /**
- * Parses a "math_pattern" value without regard to case. Returns nothing for an unknown
+ * Parses an "emit_pattern" value without regard to case. Returns nothing for an unknown
  * name, which the engine reads as none.
  */
 std::optional<LightPattern> parseLightPatternName(std::string_view name);
 
 /**
- * The math light block of a light (the engine's mathLightData_t) with the defaults of
- * LightInfo::Defaults. It has no type: "math_type" is derived from the light's type. A
- * disabled block keeps its values, as the entity keeps its keys: the light is a texture
- * light until the block is enabled again.
+ * The value of "emit_shape" for the given light type: omni, spot or sun.
  */
-struct MathLightProperties
+std::string_view emitterShapeName(LightType type);
+
+/**
+ * Parses an "emit_shape" value without regard to case. Returns nothing for an unknown
+ * name, which is read as if the key were absent.
+ */
+std::optional<LightType> parseEmitterShapeName(std::string_view name);
+
+/**
+ * The number of emitter effects: 0 is none, 1 to 11 are the engine's predefined light
+ * styles 1 to 11, and 12, 13 and 14 are strobe, pulse and flicker.
+ */
+inline constexpr auto EmitterEffectCount = 15;
+
+/**
+ * The value of "emit_effect" for the given effect (none, flicker_a, ..., flicker), and an
+ * empty name for a number out of range.
+ */
+std::string_view emitterEffectName(int effect);
+
+/**
+ * Parses an "emit_effect" value without regard to case. Returns nothing for an unknown
+ * name, which the engine reads as none.
+ */
+std::optional<int> parseEmitterEffectName(std::string_view name);
+
+/**
+ * The name the editors show for the given effect: "None", the engine's
+ * predef_lightstylesinfo for 1 to 11, then "Strobe", "Pulse" and "Flicker"; an empty name
+ * for a number out of range.
+ */
+std::string_view emitterEffectDisplayName(int effect);
+
+// the limits that every edit of an emitter keeps
+inline constexpr auto MinEmitterRange = 24.0;
+inline constexpr auto MinEmitterCone = 1.0;
+inline constexpr auto MaxEmitterCone = 120.0;
+inline constexpr auto MinEmitterSquareness = 1.5;
+inline constexpr auto MaxEmitterSquareness = 32.0;
+
+/**
+ * The rotation of a new emitter spot as id Tech 4 "angles" (pitch, yaw, roll in degrees):
+ * a pitch of 90 points its axis[0] straight down.
+ */
+inline const auto EmitterSpotPitchYawRoll = vm::vec3d{90, 0, 0};
+
+/**
+ * The falloff curve and beam mask inputs that lightFalloff and spotMask read, the
+ * shader's falloff curve and spot mask (emitter.inc.hlsl): an emitter's are emitterCurve.
+ */
+struct LightCurve
 {
-  bool enabled = false;
   LightFalloff falloff = LightFalloff::InvSquareClamped;
   double falloffExp = 2.0;
   double innerRadius = 0.0;
@@ -178,12 +221,9 @@ struct MathLightProperties
   double patternScale = 1.0;
   double patternPhase = 0.0;
   bool energyClamp = true;
-  // a predefined light style that the engine applies to the light's colour; -1 is none
-  int style = -1;
 
   kdl_reflect_decl(
-    MathLightProperties,
-    enabled,
+    LightCurve,
     falloff,
     falloffExp,
     innerRadius,
@@ -193,8 +233,67 @@ struct MathLightProperties
     patternStrength,
     patternScale,
     patternPhase,
+    energyClamp);
+};
+
+/**
+ * The emitter block of a light (the engine's emitterData_t) with the defaults of its
+ * keys. It has no shape: "emit_shape" is the light's type. A disabled block keeps its
+ * values, as the entity keeps its keys. While it is enabled it wins over the target keys.
+ */
+struct EmitterProperties
+{
+  // the doubles first, then the enumerations, then the flags: no padding between them
+  // (RV2-TP-05), so every light's record carries 112 bytes of block, not 128
+
+  // world units
+  double size = 96.0;
+  double start = 0.0;
+  // full angles in degrees; coneH pairs with axis[1], coneV with axis[2]
+  double coneH = 60.0;
+  double coneV = 60.0;
+  double penumbra = 0.2;
+  double squareness = 2.0;
+  double patternStrength = 0.0;
+  double patternScale = 1.0;
+  double patternPhase = 0.0;
+  double effectSpeed = 1.0;
+  double effectAmount = 1.0;
+  double effectPhase = 0.0;
+  LightFalloff falloff = LightFalloff::InvSquareClamped;
+  LightPattern pattern = LightPattern::None;
+  // 0 to EmitterEffectCount - 1, see emitterEffectName
+  int effect = 0;
+  bool enabled = false;
+  // the light carries an emitter block: "emitter" or any "emit_*" key; only such a light
+  // is written with emitter "0" while the block is disabled
+  bool hasBlock = false;
+  // editor only: the range follows intensity, size, start and falloff; read as false for
+  // an omni or a spot whose range was set by hand (parseLightProperties)
+  bool autoRange = true;
+  bool energyClamp = true;
+
+  kdl_reflect_decl(
+    EmitterProperties,
+    enabled,
+    hasBlock,
+    autoRange,
+    falloff,
+    size,
+    start,
     energyClamp,
-    style);
+    coneH,
+    coneV,
+    penumbra,
+    squareness,
+    pattern,
+    patternStrength,
+    patternScale,
+    patternPhase,
+    effect,
+    effectSpeed,
+    effectAmount,
+    effectPhase);
 };
 
 /**
@@ -228,10 +327,12 @@ struct LightProperties
   int style = -1;
   bool castShadows = true;
   bool skipSpecular = false;
-  MathLightProperties math;
   // some, but not all, of light_target, light_right and light_up are present; the engine
   // prints "bad target info" and this light is read as a point light
   bool badTargetInfo = false;
+  // While enabled: type is the emitter's shape, radius its reach (a spot's three
+  // components are its range), and the target vectors stay 0.
+  EmitterProperties emitter;
 
   kdl_reflect_decl(
     LightProperties,
@@ -253,8 +354,8 @@ struct LightProperties
     style,
     castShadows,
     skipSpecular,
-    math,
-    badTargetInfo);
+    badTargetInfo,
+    emitter);
 };
 
 /**
@@ -270,10 +371,31 @@ bool isLightEntity(const Entity& entity);
  * and light_up, and some but not all of them is bad target info, read as a point light;
  * "parallel" makes a sun even with all three; light "0" is a radius of 0). Vectors are
  * read like the engine's sscanf reads them, so a value with one number reads (v, 0, 0).
- * "math_type" is ignored. The math keys are read whether "math_enabled" is set or not;
- * it decides only whether the block is enabled.
+ *
+ * The emitter keys are read whether "emitter" is set or not; it decides only whether the
+ * block is enabled. With "emitter" set, the light is an emitter: its type is "emit_shape"
+ * (absent or unknown: a sun with parallel 1, else an omni), the target keys and "light"
+ * are not read, light_radius defaults to 300 300 300 with each component at least 1, a
+ * spot's radius is its range three times and has no centre. The emitter keys are looked
+ * up only when the entity has a key that starts with "emit"; without one the block has
+ * its defaults.
+ *
+ * A hand-set range wins (G0 section 5): an enabled emitter omni or spot whose
+ * emit_auto_range is 1 or absent and whose curve has a reach factor, but whose range is
+ * not in step with its auto range (emitterRangeInStep), is read with autoRange false, so
+ * that no edit moves its range and its next write writes emit_auto_range "0". A sun and
+ * a curve without a reach factor keep the stored flag. See emitterRangeSetByHand.
  */
 LightProperties parseLightProperties(const Entity& entity);
+
+/**
+ * The test of "a hand-set range wins" (G0 section 5): whether the given light is an
+ * enabled emitter omni or spot with autoRange on and a curve with a reach factor whose
+ * range is out of step with its auto range. Such a light is taken with autoRange off;
+ * the test is made where an editor reads a light (parseLightProperties) and where it
+ * brings a kept emitter block back (Texture to Emitter on a light that was an emitter).
+ */
+bool emitterRangeSetByHand(const LightProperties& light);
 
 /**
  * Property changes: the properties to add or update, and the properties to remove.
@@ -289,11 +411,18 @@ struct LightPropertyUpdate
 /**
  * Returns the properties that the engine's LightInfo::ToDict writes for the given light,
  * and the properties it deletes. Vector components are written with two decimals, _color
- * and the math floats with four, all without trailing zeros, and every vector with three
- * components. The rotation properties are never touched; a light with light_origin gets
- * neither origin nor light_origin. A disabled math block is written as math_enabled "0"
- * alone and none of its keys is deleted, so that the entity keeps them and enabling the
- * block again restores them.
+ * and the emitter floats with four, all without trailing zeros, and every vector with
+ * three components. The rotation properties are never touched; a light with light_origin
+ * gets neither origin nor light_origin.
+ *
+ * An enabled emitter writes "emitter" "1" and every "emit_*" key, defaults included;
+ * light_radius (a spot's range three times); light_center and parallel like a point
+ * light or a sun; and deletes the five target vectors. A disabled emitter block that the
+ * light carries (hasBlock) is written as emitter "0" alone and none of its keys is
+ * deleted; a light without one gets no emitter key at all. A texture spot that carries an
+ * emitter block and whose target is 0, an emitter spot whose flag alone was cleared, is
+ * written as textureSpotFromEmitterSpot converts it, so that no texture spot is written
+ * with a target of 0; asTextureLight is the conversion to call.
  */
 LightPropertyUpdate lightPropertyUpdate(const LightProperties& light);
 
@@ -303,9 +432,15 @@ LightPropertyUpdate lightPropertyUpdate(const LightProperties& light);
  * and from the entity's own value, and the properties to remove that the entity has and
  * that the edit does not leave unread. The changes are checked by reading the changed
  * entity again, so that a property the entity lacks but whose engine default differs from
- * the edited value is written too. Enabling a disabled math block that the entity has
- * (see hasMathLightBlock) writes only math_enabled and what else the edit changes, so
- * that its kept keys stay as they are written.
+ * the edited value is written too.
+ *
+ * Enabling a kept emitter block writes only the keys it lacks and what the edit changes;
+ * switching an emitter to a texture light writes emitter "0" and keeps every "emit_*"
+ * key. An edit of an emitter that changes anything also writes the "emit_*"
+ * keys the entity lacks, so that the block describes itself, and emit_auto_range where
+ * the entity's own value differs from the edited light's: a light whose range was set by
+ * hand is read with auto range off (parseLightProperties), and its first write writes
+ * emit_auto_range "0" over a stored "1".
  */
 LightPropertyUpdate lightKeyDiff(const Entity& entity, const LightProperties& edited);
 
@@ -317,23 +452,197 @@ Entity applyLightPropertyUpdate(Entity entity, const LightPropertyUpdate& update
 /**
  * Returns the engine's default light of the given type (LightInfo::DefaultPoint,
  * DefaultProjected and DefaultSun), which keeps the colour, the origin, light_origin and
- * the math block of the given light and resets everything else.
+ * the emitter block of the given light and resets everything else.
+ *
+ * For an enabled emitter, a spot has no target vectors and the cone, penumbra and
+ * squareness of a new spot; an omni and a spot then take their range from
+ * applyEmitterAutoRange(EmitterEdit::Reach), from 300 when the curve has no reach; a sun
+ * is today's sun. The caller writes a spot's rotation, EmitterSpotPitchYawRoll.
  */
 LightProperties defaultLight(LightType type, const LightProperties& keep);
 
 /**
- * The math block that a light without one gets when the light editor enables it or when
- * the light volume tool draws a new light: the in-game editor's auto-seed of a light
- * without "math_enabled" (LightEditor.cpp), a soft linear falloff. It differs from both
- * the defaults of MathLightProperties and the in-game "Seed from legacy light" button.
+ * Whether the given entity has an emitter block of its own: any of the emitter keys other
+ * than "emitter". It is not the "carries a block" test of the emitter "0" rule; that test
+ * is EmitterProperties::hasBlock, which also counts the "emitter" key.
  */
-MathLightProperties seededMathLightProperties();
+bool hasEmitterBlock(const Entity& entity);
 
 /**
- * Whether the given entity has a math block of its own: any of the math keys other than
- * math_enabled. A light without one gets seededMathLightProperties() when it becomes a
- * math light, as the in-game editor's Math tab seeds it.
+ * Whether the given entity has a key that starts with "emit", found in one pass over its
+ * properties that stops at the first: every emitter key does. parseLightProperties reads
+ * the emitter keys only when the entity has one; without one the block keeps its
+ * defaults, which are what reading its absent keys gives.
  */
-bool hasMathLightBlock(const Entity& entity);
+bool hasEmitPrefixedKey(const Entity& entity);
+
+/**
+ * An enabled emitter block with the defaults of its keys: the block of a new emitter.
+ */
+EmitterProperties seededEmitterProperties();
+
+/**
+ * defaultLight(type, keep) with a new emitter block (seededEmitterProperties): an omni or
+ * a spot whose range follows from auto range (288 at intensity 1), or today's sun. A spot
+ * also needs the rotation EmitterSpotPitchYawRoll, which the caller writes. The block's
+ * effect is emitterEffectForStyle of the kept light's style, and the style is kept.
+ */
+LightProperties seededEmitterLight(LightType type, const LightProperties& keep);
+
+/**
+ * The light that the type radio makes of the given light (G0 section 9, shape switch):
+ * defaultLight(type, before), and for an enabled emitter that becomes an omni or a spot:
+ * with auto range in force on the given light (emitterAutoRangeInForce) the range is the
+ * auto range, as defaultLight gives it; otherwise the range is kept, the new shape's
+ * range being the old one's largest radius (an omni gets it on every axis), at least 24,
+ * so that a linear or smooth light or a hand-set range does not jump. From a sun, which
+ * has no range: the auto range when the flag is on and the curve has a reach factor,
+ * else 300. The start then stays below the range. An emitter keeps noshadows and
+ * nospecular (castShadows, skipSpecular); a texture light resets them, as today.
+ * The rotation is the caller's to write: unchanged, except that a light without a
+ * rotation that becomes a spot points down (EmitterSpotPitchYawRoll).
+ */
+LightProperties emitterShapeSwitch(LightType type, const LightProperties& before);
+
+/**
+ * The effect that a light's first emitter block (the light has no "emit_effect" key yet)
+ * takes from the light's texture-light style (G0 section 9, kind switch): style 1 to 11
+ * seeds the effect of the same number, the same predef_lightstyles entry; style 0, -1 or
+ * any other number seeds none. The style key stays on the light.
+ */
+int emitterEffectForStyle(int style);
+
+/**
+ * G0 section 5, the range floor on an omni: an enabled emitter omni whose largest radius
+ * is below 24 is scaled as a whole so that its largest component is 24, so 10 5 20
+ * becomes 12 6 24. A sun, a spot and a texture light are returned unchanged. The light
+ * editor's radius fields apply it; the volume tool clamps instead (emitterFromEditBox).
+ */
+LightProperties applyEmitterOmniRangeFloor(const LightProperties& light);
+
+/**
+ * The range of an emitter, EM_Range: the largest component of light_radius.
+ */
+double emitterRange(const vm::vec3d& radius);
+
+/**
+ * The intensity of a light: the largest component of _color.
+ */
+double lightIntensity(const LightProperties& light);
+
+/**
+ * The intensity of a light colour: its largest component.
+ */
+double lightIntensity(const vm::vec3d& color);
+
+/**
+ * An emitter's start within its range (G0 section 5, 0 <= start <= range - 1): the given
+ * start clamped to [0, max(range - 1, 0)].
+ */
+double clampEmitterStart(double start, double range);
+
+/**
+ * tan(cone / 2) of a full cone angle in degrees, after clamping it to 1 to 120.
+ */
+double emitterTanHalf(double coneDegrees);
+
+/**
+ * The full cone angle in degrees whose half angle has the given tangent, clamped to 1 to
+ * 120.
+ */
+double emitterConeFromTanHalf(double tanHalf);
+
+/**
+ * sin(cone / 2) of a full cone angle in degrees, after clamping it to 1 to 120: the half
+ * width of a spot's lit cone where it is widest, on the sphere of its range, over the
+ * range (G0 section 9, the volume tool's edit box).
+ */
+double emitterSinHalf(double coneDegrees);
+
+/**
+ * The full cone angle in degrees whose half angle has the given sine, 2 asin(sinHalf),
+ * clamped to 1 to 120; a sine above 1 counts as 1.
+ */
+double emitterConeFromSinHalf(double sinHalf);
+
+/**
+ * EM_ReachFactor: how many sizes past its start the given curve reaches at the given
+ * intensity; 0 for linear and smooth, which have no auto range.
+ */
+double emitterReachFactor(LightFalloff falloff, double intensity);
+
+/**
+ * Whether the given curve has a reach factor, and so an auto range: every curve but
+ * linear and smooth. emitterReachFactor is above 0 for it at any intensity.
+ */
+bool emitterCurveHasReach(LightFalloff falloff);
+
+/**
+ * EM_AutoRange: max(24, start + size * reach factor), or 0 for a curve without one.
+ */
+double emitterAutoRange(const EmitterProperties& emitter, double intensity);
+
+/**
+ * EM_AutoSize: max(1, (range - start) / reach factor), or the emitter's size for a curve
+ * without one.
+ */
+double emitterAutoSize(const EmitterProperties& emitter, double intensity, double range);
+
+/**
+ * EM_RangeInStep (G0 section 3), the last condition of "auto range in force": false for a
+ * curve without a reach factor, else whether the given range is within max(1, 5 %) of
+ * emitterAutoRange. It looks at neither autoRange nor the shape.
+ */
+bool emitterRangeInStep(const EmitterProperties& emitter, double intensity, double range);
+
+/**
+ * Whether auto range is in force on the given light (G0 section 5): an enabled emitter
+ * omni or spot with autoRange on, a curve with a reach factor at its intensity, and its
+ * range in step with its auto range.
+ */
+bool emitterAutoRangeInForce(const LightProperties& light);
+
+enum class EmitterEdit
+{
+  // intensity, size, start or falloff changed: the range follows
+  Reach,
+  // the range changed: the size follows
+  Range,
+};
+
+/**
+ * Applies the auto range rule after an edit of the given kind and returns the light.
+ * Nothing changes unless the light is an enabled emitter with auto range on, an omni or a
+ * spot, and a curve with a reach factor at its intensity. After a Reach edit the range is
+ * emitterAutoRange: a spot gets it three times, an omni with an equal radius likewise,
+ * and an omni with unequal radii is scaled as a whole. After a Range edit the size is
+ * emitterAutoSize for the light's range. Either way the start is clamped to range - 1.
+ *
+ * A Range edit of an enabled emitter omni or spot whose curve has no reach factor
+ * (linear, smooth) turns autoRange off: the mapper has taken the range in hand (G0
+ * section 5). Every other light and edit leaves the flag.
+ *
+ * It does not test whether the range is in step: the edit it follows has just moved the
+ * light out of step. That test is made where an editor reads a light
+ * (parseLightProperties) and where it brings a kept emitter block back
+ * (emitterRangeSetByHand); a light read with its range out of step has autoRange false.
+ */
+LightProperties applyEmitterAutoRange(const LightProperties& light, EmitterEdit edit);
+
+/**
+ * Sets the falloff of an emitter and follows it as a reach edit (G0 section 5, a falloff
+ * edit that gives the curve a reach factor applies the flag as it stands): with autoRange
+ * on the range becomes the auto range of the new curve, with it off the range is kept;
+ * to a curve without a reach factor the range is kept and the flag stays as it is. So
+ * trying each curve and coming back changes nothing. A light that is not an enabled
+ * emitter gets the falloff and nothing else.
+ */
+LightProperties applyEmitterFalloff(const LightProperties& light, LightFalloff falloff);
+
+/**
+ * Whether the light takes the emitter path: its emitter block is enabled. Code decides
+ * the path through this, never by reading the flag.
+ */
+bool lightUsesEmitter(const LightProperties& light);
 
 } // namespace tb::mdl

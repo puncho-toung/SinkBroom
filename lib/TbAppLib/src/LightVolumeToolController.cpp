@@ -29,6 +29,7 @@
 #include "mdl/Hit.h"
 #include "mdl/HitAdapter.h"
 #include "mdl/HitFilter.h"
+#include "mdl/Light.h"
 #include "mdl/Map.h"
 #include "mdl/Map_Selection.h"
 #include "mdl/ModelUtils.h"
@@ -48,6 +49,7 @@
 #include "vm/line.h"
 #include "vm/plane.h"
 
+#include <algorithm>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -56,10 +58,6 @@ namespace tb::ui
 {
 namespace
 {
-
-// the radius of a light drawn in a 2D view with nothing selected along the view axis, a
-// default point light's
-constexpr auto DrawRadius2D = 300.0;
 
 bool startsOnSelectedNode(const InputState& inputState)
 {
@@ -426,7 +424,9 @@ private:
 /**
  * The draw shape tool's 2D delegate (DrawShapeToolController2D.cpp), drawing the light
  * volume tool's box instead of brushes. The extent along the view axis is the reference
- * bounds' extent.
+ * bounds' extent, except for a new light, a new emitter omni, which is a sphere: the cube
+ * whose half extent is half the longer side of the drawn rectangle, at least 24, centred
+ * on the rectangle and on the reference bounds along the view axis (F-T-11).
  */
 class LightVolumeDrawDragDelegate2D : public HandleDragTrackerDelegate
 {
@@ -434,15 +434,19 @@ private:
   LightVolumeTool& m_tool;
   vm::bbox3d m_worldBounds;
   vm::bbox3d m_referenceBounds;
+  // nothing was selected when the drag began, so the drag draws a new light
+  bool m_newLight;
 
 public:
   LightVolumeDrawDragDelegate2D(
     LightVolumeTool& tool,
     const vm::bbox3d& worldBounds,
-    const vm::bbox3d& referenceBounds)
+    const vm::bbox3d& referenceBounds,
+    const bool newLight)
     : m_tool{tool}
     , m_worldBounds{worldBounds}
     , m_referenceBounds{referenceBounds}
+    , m_newLight{newLight}
   {
   }
 
@@ -549,6 +553,19 @@ private:
       }
     }
 
+    if (m_newLight)
+    {
+      // a sphere: an emitter's curve runs along its largest radius, so a needle would
+      // set its size by an extent that the drawn rectangle does not show
+      const auto viewAxis = vm::abs(
+        vm::vec3d{vm::get_abs_max_component_axis(inputState.camera().direction())});
+      const auto orthoAxes = vm::vec3d{1, 1, 1} - viewAxis;
+      const auto radius = std::max(
+        vm::get_max_component(bounds.size() * orthoAxes) / 2.0, mdl::MinEmitterRange);
+      const auto extent = vm::vec3d{radius, radius, radius};
+      bounds = vm::bbox3d{bounds.center() - extent, bounds.center() + extent};
+    }
+
     return vm::intersect(bounds, m_worldBounds);
   }
 
@@ -569,10 +586,10 @@ private:
 
 /**
  * The bounds whose extent along the view axis a 2D drag in draw mode takes: the world
- * bounds of the selected light's handle box, or the handle box of a new light of radius
- * 300 around the map's reference bounds, +-300 t, 273 at the default threshold, so that
- * the drawn light's radius along the view axis is 300 (D61). The draw shape tool's
- * reference bounds would give the selected light's own small box, a flat light.
+ * bounds of the selected light's handle box, or the box of a new light around the map's
+ * reference bounds, +-288, the range of the new emitter, so that the drawn light's radius
+ * along the view axis is its range. The draw shape tool's reference bounds would give the
+ * selected light's own small box, a flat light.
  */
 vm::bbox3d drawReferenceBounds(const LightVolumeTool& tool, const mdl::Map& map)
 {
@@ -585,8 +602,8 @@ vm::bbox3d drawReferenceBounds(const LightVolumeTool& tool, const mdl::Map& map)
   }
 
   const auto center = map.referenceBounds().center();
-  const auto halfExtent =
-    DrawRadius2D * mdl::visibleFalloffT(newDrawnLight(), tool.handleThreshold());
+  // a new light is an emitter, whose box is its radius
+  const auto halfExtent = mdl::emitterRange(newDrawnLight().radius);
   const auto extent = vm::vec3d{halfExtent, halfExtent, halfExtent};
   return vm::bbox3d{center - extent, center + extent};
 }
@@ -896,7 +913,8 @@ std::unique_ptr<GestureTracker> LightVolumeToolController2D::acceptDrawDrag(
     const auto initialHandlePosition =
       vm::point_at_distance(inputState.pickRay(), *distance);
     return createHandleDragTracker(
-      LightVolumeDrawDragDelegate2D{m_tool, map.worldBounds(), referenceBounds},
+      LightVolumeDrawDragDelegate2D{
+        m_tool, map.worldBounds(), referenceBounds, !m_tool.volumeBox().has_value()},
       inputState,
       initialHandlePosition,
       initialHandlePosition);

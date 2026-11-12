@@ -34,7 +34,7 @@ namespace mdl
 enum class LightElement;
 struct LightFrame;
 struct LightProperties;
-struct MathLightProperties;
+struct LightCurve;
 } // namespace mdl
 
 namespace render
@@ -45,8 +45,8 @@ namespace render
  */
 struct LightVolumeStyle
 {
-  // the alpha of a clamped or legacy light at full brightness; an unclamped math light
-  // reaches 1
+  // the alpha of a clamped emitter or a texture light at full brightness; an unclamped
+  // emitter omni or spot reaches 1
   double alphaCap = 0.45;
   // the number of nested shells of a point light, and the number of rings minus one of
   // a spot light's cone
@@ -55,7 +55,8 @@ struct LightVolumeStyle
   bool twoD = false;
   // only the outermost surface: one shell of a point light whose alpha is the composite
   // of all shells through the centre, the outer cone of a spot light without its
-  // penumbra surface and caps (unselected lights)
+  // penumbra surface and caps (unselected lights); an emitter spot's round cap is then
+  // drawn as lines, its rim and the two arcs through its axis, as it is in a 2D view
   bool outerShellOnly = false;
 };
 
@@ -85,15 +86,21 @@ struct LightVolumeMesh
 };
 
 /**
- * The visible falloff Fvis(t) = min(F(t), 1) of a light at the falloff parameter t: its
- * math falloff curve, or the legacy stand-in for a light without math. A math light with
- * an inner radius of at least 0.999 is 1 everywhere.
+ * The visible falloff Fvis(t) = min(F(t), 1) of a light at the falloff parameter t: the
+ * given curve, or the legacy stand-in without one (a texture light). A curve with an
+ * inner radius of at least 0.999 is 1 everywhere.
  */
-double lightVolumeFalloff(double t, const mdl::MathLightProperties& math);
+double lightVolumeFalloff(double t, const std::optional<mdl::LightCurve>& curve);
 
 /**
- * The alpha cap of a light: the given cap for a clamped or legacy light and for every
- * sun, 1 for an unclamped math point or spot light.
+ * The curve that a light's volume is drawn with: mdl::emitterCurve for an emitter, and
+ * nothing for a texture light, which is drawn with the stand-in curve.
+ */
+std::optional<mdl::LightCurve> lightVolumeCurve(const mdl::LightProperties& light);
+
+/**
+ * The alpha cap of a light: the given cap for a clamped emitter, a texture light and
+ * every sun, 1 for an unclamped emitter omni or spot.
  */
 double lightVolumeAlphaCap(const mdl::LightProperties& light, double alphaCap);
 
@@ -125,15 +132,15 @@ std::vector<double> lightVolumeShellAlphas(
 
 /**
  * Whether a point light drawn with its translucency bands (not outer shell only) has the
- * shell of its core at t = math_inner_radius: a math light with an inner radius in
- * [0.02, 0.999).
+ * shell of its core at the inner radius of lightVolumeCurve: an emitter (whose inner
+ * radius is its start over its range) with an inner radius in [0.02, 0.999).
  */
 bool lightVolumeHasInnerShell(const mdl::LightProperties& light);
 
 /**
- * Whether a spot light has the cap of its core at depth zNear + math_inner_radius zFar
- * when it is drawn with its translucency bands (not outer shell only): a math spot light
- * with an inner radius in [0.02, 0.999) (D69).
+ * Whether a spot light has the cap of its core when it is drawn with its translucency
+ * bands (not outer shell only): an emitter spot on the sphere of its start about the
+ * bulb, with an inner radius in [0.02, 0.999).
  */
 bool lightVolumeHasInnerCap(const mdl::LightProperties& light);
 
@@ -160,18 +167,22 @@ LightVolumeMeshSize lightVolumeMeshSize(
 
 /**
  * Appends the volume of the given light in the given frame to the given mesh: the
- * nested ellipsoid shells, the inner shell of a math light's core, the clip box and the
- * centre cross of a point light; the cone, penumbra surface, caps, the inner cap of a
- * math light's core, frustum edges and outlines of a spot light; the box and the
+ * nested ellipsoid shells, the clip box and the centre cross of a point light; the cone,
+ * penumbra surface, caps, frustum edges and outlines of a spot light; the box and the
  * direction arrow of a sun. If the light has light_origin and the entity's origin is
  * given, a line links the entity's origin to the volume's origin.
  *
- * A spot light without math draws the stand-in cone (D69): the ellipse (shape exponent
- * 2) with its penumbra surface and outline at 0.15, the values that the light editor
- * seeds; the math keys that such a light keeps are not read (D63). The far cap and the
- * inner cap of a spot light and the inner shell of a math point light are appended even
- * when their alpha is 0, so that their ranges can be picked and highlighted; an
- * outer-shell-only volume has none of them.
+ * A texture spot draws the stand-in cone (D69): the ellipse (shape exponent 2) with its
+ * penumbra surface and outline at 0.15. The far cap of a spot light, and the inner cap of
+ * an emitter spot and the inner shell of an emitter omni, are appended even when their
+ * alpha is 0, so that their ranges can be picked and highlighted; an outer-shell-only
+ * volume has none of them.
+ *
+ * An emitter omni's shells and box are centred on its bulb. An emitter spot is its lit
+ * shape: a cone from the bulb to the sphere of its range, with the superellipse of its
+ * squareness, its penumbra surface, a round cap on that sphere (the base), the round cap
+ * of its core at its start, four edges from the bulb to the rim and the outlines of the
+ * rim, the penumbra and the core. It has no near cap.
  */
 void appendLightVolumeMesh(
   LightVolumeMesh& mesh,
@@ -188,6 +199,18 @@ LightVolumeMesh buildLightVolumeMesh(
   const mdl::LightFrame& frame,
   const LightVolumeStyle& style,
   const std::optional<vm::vec3d>& entityOrigin = std::nullopt);
+
+/**
+ * The world points where an emitter spot's cone, scaled by the given factor (1 is its
+ * edge), meets the sphere of the given distance about its bulb: one per segment of the
+ * superellipse of its squareness. At its range this is the rim of its base, at its start
+ * the rim of its core. Nothing for a light that is not an emitter spot.
+ */
+std::vector<vm::vec3d> emitterSpotRing(
+  const mdl::LightProperties& light,
+  const mdl::LightFrame& frame,
+  double distance,
+  double scale = 1.0);
 
 } // namespace render
 } // namespace tb

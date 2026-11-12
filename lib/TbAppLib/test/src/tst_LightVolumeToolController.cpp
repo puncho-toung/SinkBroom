@@ -827,11 +827,12 @@ TEST_CASE("LightVolumeToolController")
           CHECK(*map.undoCommandName() == "Edit Light Volume");
         }
 
-        SECTION("the inner shell writes math_inner_radius")
+        SECTION("the inner shell of an emitter writes emit_start")
         {
-          REQUIRE(mdl::setEntityProperty(map, "math_enabled", "1"));
-          REQUIRE(mdl::setEntityProperty(map, "math_falloff", "linear"));
-          REQUIRE(mdl::setEntityProperty(map, "math_inner_radius", "0.1"));
+          // an omni of radius 300 whose core ends at 30, auto range off
+          REQUIRE(mdl::setEntityProperty(map, "emitter", "1"));
+          REQUIRE(mdl::setEntityProperty(map, "emit_auto_range", "0"));
+          REQUIRE(mdl::setEntityProperty(map, "emit_start", "30"));
 
           const auto hit = pickSurface(tool, pickRay);
           REQUIRE(hit.target<LightSurfaceHit>().element == mdl::LightElement::InnerShell);
@@ -847,7 +848,7 @@ TEST_CASE("LightVolumeToolController")
           CHECK(tracker->update(dragInputState));
           tracker->end(dragInputState);
 
-          CHECK(valueOf(*lightNode, "math_inner_radius") == "0.2");
+          CHECK(valueOf(*lightNode, "emit_start") == "60");
           CHECK(lightNode->entity().property("light_radius") == nullptr);
         }
 
@@ -912,6 +913,43 @@ TEST_CASE("LightVolumeToolController")
           checkVector(*spotNode, "light_right", {-192, 0, 0});
           checkVector(*spotNode, "light_up", {0, -128, 0});
           checkVector(*spotNode, "origin", {0, 0, 0});
+        }
+
+        SECTION("the round cap of an emitter spot sets its range, the cone kept")
+        {
+          auto* spotNode = createLight(
+            map,
+            "0 0 0",
+            {{"angles", "90 0 0"},
+             {"light_radius", "288 288 288"},
+             {"emitter", "1"},
+             {"emit_shape", "spot"},
+             {"emit_auto_range", "0"}});
+          // off the axis, so that the ray meets the cap inside a facet
+          const auto hit = pickSurface(tool, vm::ray3d{{5, 3, -1000}, {0, 0, 1}});
+          REQUIRE(hit.target<LightSurfaceHit>().element == mdl::LightElement::Base);
+
+          // rays across the beam, along which the drag runs
+          const auto start = hit.hitPoint();
+          const auto startRay = vm::ray3d{start + vm::vec3d{0, -100, 0}, {0, 1, 0}};
+          const auto startCamera = perspectiveCameraFor(startRay);
+          auto tracker = controller.acceptMouseDrag(
+            inputStateFor(startRay, startCamera, {hit}, ModifierKeys::Shift));
+          REQUIRE(tracker != nullptr);
+
+          const auto dragInputState = inputStateFor(
+            vm::ray3d{start + vm::vec3d{0, -100, -64}, {0, 1, 0}},
+            startCamera,
+            {},
+            ModifierKeys::Shift);
+          CHECK(tracker->update(dragInputState));
+          tracker->end(dragInputState);
+
+          checkVector(*spotNode, "light_radius", {352, 352, 352});
+          checkVector(*spotNode, "origin", {0, 0, 0});
+          const auto light = mdl::parseLightProperties(spotNode->entity());
+          CHECK(light.emitter.coneH == 60.0);
+          CHECK(light.emitter.coneV == 60.0);
         }
       }
 
@@ -1537,21 +1575,48 @@ TEST_CASE("LightVolumeToolController")
       CHECK(tracker->update(endInputState));
       tracker->end(endInputState);
 
-      // the z extent is +-300 t around the reference bounds' centre, 273 for the seeded
-      // light, so that the new light's radius along the view axis is 300
+      // a new emitter omni is a sphere (F-T-11): its radius half the longer side of the
+      // snapped rectangle [304, 336] x [0, 56], centred on the rectangle and on the
+      // reference bounds' centre along the view axis
       REQUIRE(map.selection().entities.size() == 1);
       const auto* createdNode = map.selection().entities.front();
       CHECK(createdNode != lightNode);
       const auto origin = vm::parse<double, 3>(valueOf(*createdNode, "origin"));
       REQUIRE(origin);
       CHECK(vm::is_equal(*origin, vm::vec3d{320, 28, referenceZ}, 0.005));
-      checkVector(
-        *createdNode,
-        "light_radius",
-        {16.0 / SeededVisibleT, 28.0 / SeededVisibleT, 300.0});
+      checkVector(*createdNode, "light_radius", {28, 28, 28});
+      CHECK(valueOf(*createdNode, "emitter") == "1");
+      CHECK(valueOf(*createdNode, "emit_shape") == "omni");
       REQUIRE(map.undoCommandName() != nullptr);
       CHECK(*map.undoCommandName() == "Create Light");
       CHECK(tool.mode() == LightVolumeTool::Mode::Handles);
+    }
+
+    SECTION("a small rectangle with nothing selected draws a sphere of radius 24")
+    {
+      map.grid().setSize(3); // 8 units
+      REQUIRE(tool.activate());
+      tool.setMode(LightVolumeTool::Mode::Draw);
+      mdl::deselectAll(map);
+      const auto referenceZ = map.referenceBounds().center().z();
+
+      const auto startRay = vm::ray3d{{305, 1, 1000}, {0, 0, -1}};
+      const auto drawCamera = orthographicCameraFor(startRay);
+      auto tracker = controller.acceptMouseDrag(inputStateFor(startRay, drawCamera, {}));
+      REQUIRE(tracker != nullptr);
+
+      // the snapped rectangle [304, 312] x [0, 8]
+      const auto endRay = vm::ray3d{{310, 6, 1000}, {0, 0, -1}};
+      const auto endInputState = inputStateFor(endRay, drawCamera, {});
+      CHECK(tracker->update(endInputState));
+      tracker->end(endInputState);
+
+      REQUIRE(map.selection().entities.size() == 1);
+      const auto* createdNode = map.selection().entities.front();
+      const auto origin = vm::parse<double, 3>(valueOf(*createdNode, "origin"));
+      REQUIRE(origin);
+      CHECK(vm::is_equal(*origin, vm::vec3d{308, 4, referenceZ}, 0.005));
+      checkVector(*createdNode, "light_radius", {24, 24, 24});
     }
   }
 }

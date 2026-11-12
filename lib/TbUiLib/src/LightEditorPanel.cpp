@@ -203,14 +203,26 @@ constexpr auto RadiusRange = SpinRange{0.0, 131072.0, 2, 1.0, 8.0, 64.0};
 constexpr auto AngleRange = SpinRange{-360.0, 360.0, 2, 1.0, 15.0, 45.0};
 // the in-game editor's le_maxIntensity; written with four decimals
 constexpr auto IntensityRange = SpinRange{0.0, 8.0, 4, 0.1, 0.5, 1.0};
-// the slider ranges of the in-game editor (LightEditor.cpp); written with four decimals
-constexpr auto FalloffExpRange = SpinRange{0.1, 16.0, 4, 0.1, 1.0, 2.0};
-constexpr auto InnerRadiusRange = SpinRange{0.0, 1.0, 4, 0.01, 0.1, 0.25};
-constexpr auto ShapeExpRange = SpinRange{1.5, 32.0, 4, 0.1, 1.0, 4.0};
+// the emitter's floats, written with four decimals
 constexpr auto PenumbraRange = SpinRange{0.0, 1.0, 4, 0.01, 0.1, 0.25};
+constexpr auto SquarenessRange =
+  SpinRange{mdl::MinEmitterSquareness, mdl::MaxEmitterSquareness, 4, 0.1, 1.0, 4.0};
 constexpr auto PatternStrengthRange = SpinRange{0.0, 1.0, 4, 0.01, 0.1, 0.25};
-constexpr auto PatternScaleRange = SpinRange{0.1, 64.0, 4, 0.1, 1.0, 4.0};
+// in world units since choice 5 (G0 section 5, pattern position): 1 is the reference size
+constexpr auto PatternScaleRange = SpinRange{0.01, 64.0, 4, 0.1, 1.0, 4.0};
 constexpr auto PatternPhaseRange = SpinRange{0.0, 100.0, 4, 0.1, 1.0, 10.0};
+constexpr auto EffectSpeedRange = SpinRange{0.0, 100.0, 4, 0.1, 1.0, 10.0};
+constexpr auto EffectAmountRange = SpinRange{0.0, 1.0, 4, 0.01, 0.1, 0.25};
+// the effect's phase is used modulo 1
+constexpr auto EffectPhaseRange = SpinRange{0.0, 1.0, 4, 0.01, 0.1, 0.25};
+// the emitter's lengths in world units: a size of at least 1, a range of at least 24
+constexpr auto EmitterSizeRange = SpinRange{1.0, 131072.0, 2, 1.0, 8.0, 64.0};
+constexpr auto EmitterStartRange = SpinRange{0.0, 131072.0, 2, 1.0, 8.0, 64.0};
+constexpr auto EmitterRangeRange =
+  SpinRange{mdl::MinEmitterRange, 131072.0, 2, 1.0, 8.0, 64.0};
+// a spot emitter's full cone angles in degrees
+constexpr auto ConeRange =
+  SpinRange{mdl::MinEmitterCone, mdl::MaxEmitterCone, 2, 1.0, 5.0, 15.0};
 // the light volume handle threshold in percent, 0.01 to 0.5 (D53)
 constexpr auto HandleThresholdRange = SpinRange{1.0, 50.0, 0, 1.0, 5.0, 10.0};
 // how long the threshold's steps must pause before it is written
@@ -218,11 +230,14 @@ constexpr auto HandleThresholdWriteDelay = std::chrono::milliseconds{200};
 
 constexpr auto SliderSteps = 1000;
 
-// the pages of the two kinds of light (D50)
-constexpr auto MathPageIndex = 0;
+// the pages of the two kinds of light
+constexpr auto EmitterPageIndex = 0;
 constexpr auto TexturePageIndex = 1;
 
 const auto Multi = QString{"multi"};
+
+// a rotation whose entries are this close to the identity's is no rotation
+constexpr auto NoRotationEpsilon = 1e-6;
 
 /**
  * A spin box that shows "multi" where the selected lights differ. Like in the face
@@ -511,6 +526,20 @@ int addRow(FormWithSectionsLayout& form, const QString& label, QLayout* field)
   return row;
 }
 
+int addRow(FormWithSectionsLayout& form, QWidget* label, QWidget* field)
+{
+  const auto row = form.rowCount();
+  form.addRow(label, field);
+  return row;
+}
+
+int addRow(FormWithSectionsLayout& form, QWidget* label, QLayout* field)
+{
+  const auto row = form.rowCount();
+  form.addRow(label, field);
+  return row;
+}
+
 int addRow(FormWithSectionsLayout& form, QWidget* field)
 {
   const auto row = form.rowCount();
@@ -535,10 +564,11 @@ int sliderPosition(const MultiSpinControl& spin, const double value)
   return int(std::lround(t * SliderSteps));
 }
 
-// the colour of a light is its hue times its intensity (D41)
+// the colour of a light is its hue times its intensity (D41); the panel shows no
+// intensity below 0, which every reach factor reads as 0 too
 double intensityOf(const vm::vec3d& color)
 {
-  return std::max(vm::get_max_component(color), 0.0);
+  return std::max(mdl::lightIntensity(color), 0.0);
 }
 
 vm::vec3d hueOf(const vm::vec3d& color)
@@ -556,7 +586,8 @@ QColor toQColor(const vm::vec3d& hue)
 }
 
 /**
- * Resets the light's volume to the engine's default for its type and keeps everything
+ * Resets the light's volume to the engine's default for its type, an emitter's to its
+ * shape's defaults (a spot's cone too, its range from auto range), and keeps everything
  * else.
  */
 void resetLightVolume(mdl::LightProperties& light)
@@ -572,16 +603,20 @@ void resetLightVolume(mdl::LightProperties& light)
   light.explicitStartEnd = defaults.explicitStartEnd;
   light.start = defaults.start;
   light.end = defaults.end;
+  // an emitter spot's cone is part of its volume; for any other light it is unchanged
+  light.emitter.coneH = defaults.emitter.coneH;
+  light.emitter.coneV = defaults.emitter.coneV;
 }
 
 /**
  * Whether the given sun still has all three spot vectors. With them, the engine reads
  * neither light_radius nor light_center (d3xp/Light.cpp), so the sun has a radius of 0
  * in the game until they are removed.
+ * Never for an emitter, which ignores the target keys.
  */
 bool hasStaleSpotKeys(const mdl::Entity& entity, const mdl::LightProperties& light)
 {
-  return light.type == mdl::LightType::Sun
+  return !mdl::lightUsesEmitter(light) && light.type == mdl::LightType::Sun
          && entity.hasProperty(mdl::LightPropertyKeys::LightTarget)
          && entity.hasProperty(mdl::LightPropertyKeys::LightRight)
          && entity.hasProperty(mdl::LightPropertyKeys::LightUp);
@@ -592,10 +627,13 @@ bool hasStaleSpotKeys(const mdl::Entity& entity, const mdl::LightProperties& lig
  * recentres it: the largest distance between one of its far corners and the same corner
  * of the light that its own edit box gives. Nothing for a centred or degenerate spot,
  * or for one whose own edit box is refused.
+ * Never for an emitter, which ignores the target keys.
  */
 std::optional<double> recentreDistance(const mdl::LightProperties& light)
 {
-  if (light.type != mdl::LightType::Spot || mdl::isCentredSpot(light))
+  if (
+    light.type != mdl::LightType::Spot || mdl::lightUsesEmitter(light)
+    || mdl::isCentredSpot(light))
   {
     return std::nullopt;
   }
@@ -732,6 +770,19 @@ void setComboBox(
   comboBox->setCurrentIndex(multi ? -1 : int(index));
 }
 
+/**
+ * Like setComboBox, for a combo box whose items hold their values as their data, in an
+ * order of their own.
+ */
+template <typename Get>
+void setComboBoxData(
+  QComboBox* comboBox, const std::vector<mdl::LightProperties>& lights, const Get& get)
+{
+  const auto [value, multi] = firstValue(lights, get);
+  comboBox->setPlaceholderText(Multi);
+  comboBox->setCurrentIndex(multi ? -1 : comboBox->findData(int(value)));
+}
+
 void updateTextureItems(QComboBox& comboBox, const mdl::Map& map)
 {
   // the pointer is replaced by every reload of the shaders, so the names are copied
@@ -811,6 +862,74 @@ void toggleLightVolumeDrawing(MapViewToolBox& toolBox)
   }
 }
 
+/**
+ * Fills the effect combo box with the display names of the emitter effects, each with
+ * its value as its data: "None" first, then the three waveforms (Strobe, Pulse,
+ * Flicker), a separator, and the eleven named styles of the engine.
+ */
+void setEffectItems(QComboBox& comboBox)
+{
+  const auto addEffect = [&](const int effect) {
+    comboBox.addItem(
+      QString::fromStdString(std::string{mdl::emitterEffectDisplayName(effect)}), effect);
+  };
+
+  addEffect(0);
+  for (int effect = mdl::LightStyleCount; effect < mdl::EmitterEffectCount; ++effect)
+  {
+    addEffect(effect);
+  }
+  comboBox.insertSeparator(comboBox.count());
+  for (int effect = 1; effect < mdl::LightStyleCount; ++effect)
+  {
+    addEffect(effect);
+  }
+}
+
+/**
+ * Fills the falloff combo box with the curves, each with its value as its data: the
+ * default, the clamped inverse square, first, the others in the order of their values.
+ */
+void setFalloffItems(QComboBox& comboBox)
+{
+  comboBox.addItem(
+    QObject::tr("Inverse Square (clamped) - PBR safe"),
+    int(mdl::LightFalloff::InvSquareClamped));
+  comboBox.addItem(
+    QObject::tr("Inverse Square (unbounded)"), int(mdl::LightFalloff::InvSquare));
+  comboBox.addItem(QObject::tr("Linear"), int(mdl::LightFalloff::Linear));
+  comboBox.addItem(QObject::tr("Smooth"), int(mdl::LightFalloff::Smooth));
+  comboBox.addItem(QObject::tr("Exponential"), int(mdl::LightFalloff::Exponential));
+}
+
+/**
+ * The given entity with only the properties that the given edit of its light changes
+ * (lightKeyDiff), so that the light keeps its other values and a value that is written
+ * unchanged is not rounded (D42), and with the given rotation written as the panel writes
+ * angles. Nothing when the edit changes nothing.
+ */
+std::optional<mdl::Entity> editedLightEntity(
+  const mdl::Entity& entity,
+  const mdl::LightProperties& light,
+  const std::optional<vm::mat3x3d>& rotation)
+{
+  // nothing to write is no copy of the entity; the light diff never touches the rotation
+  // keys, so the rotation is compared with the entity's own
+  const auto diff = mdl::lightKeyDiff(entity, light);
+  const auto rotationUpdate =
+    rotation ? mdl::lightRotationUpdate(entity, *rotation) : mdl::EntityRotationUpdate{};
+  if (
+    diff.set.empty() && diff.remove.empty() && !rotationUpdate.set
+    && rotationUpdate.remove.empty())
+  {
+    return std::nullopt;
+  }
+
+  auto changed = mdl::applyLightPropertyUpdate(entity, diff);
+  mdl::applyEntityRotationUpdate(changed, rotationUpdate);
+  return changed == entity ? std::nullopt : std::optional{std::move(changed)};
+}
+
 } // namespace
 
 struct LightEditorPanel::Controls
@@ -825,15 +944,18 @@ struct LightEditorPanel::Controls
   QWidget* lightOriginNotice = nullptr;
   QToolButton* convertLightOrigin = nullptr;
   QWidget* styledNotice = nullptr;
+  // the label of the centre row, "Bulb offset" for emitter omnis
+  QLabel* centerLabel = nullptr;
 
   QWidget* editor = nullptr;
   // the light's geometry and colour
   FormWithSectionsLayout* form = nullptr;
-  // the pages of math lights and texture lights, each with its own form (D50)
+  // the pages of emitters and texture lights, each with its own form
   TabBook* tabs = nullptr;
-  TabBookPage* mathPage = nullptr;
+  TabBookPage* emitterPage = nullptr;
   TabBookPage* texturePage = nullptr;
-  FormWithSectionsLayout* mathForm = nullptr;
+  FormWithSectionsLayout* emitterForm = nullptr;
+  FormWithSectionsLayout* textureForm = nullptr;
 
   // every control that the user changes, blocked while the controls are set
   std::vector<QObject*> inputs;
@@ -845,6 +967,11 @@ struct LightEditorPanel::Controls
   // the session's choice of one radius for lights whose three radii are equal, off at
   // first, so that a light shows its three radii (D52)
   bool equilateral = false;
+  // an emitter omni shows one Range, its three radii behind Equilateral, which shows
+  // ticked while they are equal; the session's choice to show them while they are equal
+  bool emitterRadiiShown = false;
+  // the selection is emitter omnis only, whose Equilateral box follows the rule above
+  bool emitterOmnis = false;
   MultiSpinControl* radius = nullptr;
   std::array<MultiSpinControl*, 3> radiusXyz = {};
   QCheckBox* center = nullptr;
@@ -870,17 +997,20 @@ struct LightEditorPanel::Controls
   // predefined styles, copied
   StyleOptions styleOptions;
 
-  QLabel* mathType = nullptr;
-  QComboBox* mathStyle = nullptr;
+  // the emitter block
   QComboBox* falloff = nullptr;
-  QSlider* falloffExpSlider = nullptr;
-  MultiSpinControl* falloffExp = nullptr;
-  QSlider* innerRadiusSlider = nullptr;
-  MultiSpinControl* innerRadius = nullptr;
-  QSlider* shapeExpSlider = nullptr;
-  MultiSpinControl* shapeExp = nullptr;
+  MultiSpinControl* emitSize = nullptr;
+  MultiSpinControl* emitStart = nullptr;
+  QCheckBox* autoRange = nullptr;
+  MultiSpinControl* range = nullptr;
+  // "Range", or "Range (auto)" while auto range is in force on every selected light
+  QLabel* rangeLabel = nullptr;
+  MultiSpinControl* coneH = nullptr;
+  MultiSpinControl* coneV = nullptr;
   QSlider* penumbraSlider = nullptr;
   MultiSpinControl* penumbra = nullptr;
+  QSlider* squarenessSlider = nullptr;
+  MultiSpinControl* squareness = nullptr;
   QComboBox* pattern = nullptr;
   QSlider* patternStrengthSlider = nullptr;
   MultiSpinControl* patternStrength = nullptr;
@@ -889,6 +1019,11 @@ struct LightEditorPanel::Controls
   QSlider* patternPhaseSlider = nullptr;
   MultiSpinControl* patternPhase = nullptr;
   QCheckBox* energyClamp = nullptr;
+  QComboBox* effect = nullptr;
+  MultiSpinControl* effectSpeed = nullptr;
+  QSlider* effectAmountSlider = nullptr;
+  MultiSpinControl* effectAmount = nullptr;
+  MultiSpinControl* effectPhase = nullptr;
 
   QCheckBox* castShadows = nullptr;
   QCheckBox* skipSpecular = nullptr;
@@ -913,20 +1048,29 @@ struct LightEditorPanel::Controls
   int explicitStartEndRow = -1;
   int startRow = -1;
   int endRow = -1;
-  // the rows of mathForm
-  int mixedMathRow = -1;
-  int mathTypeRow = -1;
-  int mathStyleRow = -1;
+  // an emitter omni's or spot's range and what follows it, together; an emitter spot's
+  // cone, in the place of the spot vectors
+  int rangeRow = -1;
+  int autoRangeRow = -1;
+  int emitSizeRow = -1;
+  int emitStartRow = -1;
+  int autoRangeNoteRow = -1;
+  int coneHRow = -1;
+  int coneVRow = -1;
+  // the rows of emitterForm
+  int mixedEmitterRow = -1;
   int falloffRow = -1;
-  int falloffExpRow = -1;
-  int innerRadiusRow = -1;
-  int shapeExpRow = -1;
   int penumbraRow = -1;
+  int squarenessRow = -1;
   int patternRow = -1;
   int patternStrengthRow = -1;
   int patternScaleRow = -1;
   int patternPhaseRow = -1;
   int energyClampRow = -1;
+  int effectRow = -1;
+  int effectSpeedRow = -1;
+  int effectAmountRow = -1;
+  int effectPhaseRow = -1;
 };
 
 LightEditorPanel::LightEditorPanel(const SidebarContext& context, QWidget* parent)
@@ -1105,10 +1249,40 @@ QWidget* LightEditorPanel::createEditorPage()
   c.radiusRow = addRow(*form, tr("Radius"), c.radius);
   c.radiusXyzRow =
     addRow(*form, tr("Radius"), createVec3Layout(c.radiusXyz, "Radius", RadiusRange));
+  // the rows that set an emitter omni's or spot's extent, together and in this order
+  // (G0 section 9, range and reach in the panel): its range, the largest radius, and what
+  // the range follows under auto range
+  c.range = createSpin("Range", EmitterRangeRange);
+  c.range->setToolTip(tr("How far the light reaches from the bulb: its largest radius"));
+  c.rangeLabel = new QLabel{tr("Range")};
+  c.rangeLabel->setObjectName(controlName("RangeLabel"));
+  c.rangeRow = addRow(*form, c.rangeLabel, c.range);
+  c.autoRange = createCheckBox("AutoRange", tr("Auto range"));
+  c.autoRange->setToolTip(
+    tr("The range follows the intensity, the size, the start and the falloff"));
+  c.autoRangeRow = addRow(*form, c.autoRange);
+  c.emitSize = createSpin("EmitSize", EmitterSizeRange);
+  c.emitSize->setToolTip(
+    tr("The length of the falloff in world units: one size past the start, the clamped "
+       "inverse square is at about half its brightness and the exponential at about "
+       "37 %"));
+  c.emitSizeRow = addRow(*form, tr("Size"), c.emitSize);
+  c.emitStart = createSpin("EmitStart", EmitterStartRange);
+  c.emitStart->setToolTip(tr("Where the falloff starts, in world units from the bulb"));
+  c.emitStartRow = addRow(*form, tr("Start"), c.emitStart);
+  auto* autoRangeNote = createNoticeLabel(
+    "AutoRangeNote",
+    tr("With auto range on, Range follows Intensity, Size, Start and Falloff, and "
+       "editing Range sets Size."));
+  autoRangeNote->setWordWrap(true);
+  setInfoStyle(autoRangeNote);
+  c.autoRangeNoteRow = addRow(*form, autoRangeNote);
   c.center = createCheckBox("Center", tr("Center"));
   c.centerRow = addRow(*form, c.center);
+  c.centerLabel = new QLabel{tr("Center")};
+  c.centerLabel->setObjectName(controlName("CenterLabel"));
   c.centerXyzRow =
-    addRow(*form, tr("Center"), createVec3Layout(c.centerXyz, "Center", PositionRange));
+    addRow(*form, c.centerLabel, createVec3Layout(c.centerXyz, "Center", PositionRange));
   c.targetRow =
     addRow(*form, tr("Target"), createVec3Layout(c.target, "Target", PositionRange));
   c.rightRow =
@@ -1120,6 +1294,13 @@ QWidget* LightEditorPanel::createEditorPage()
   c.startRow =
     addRow(*form, tr("Start"), createVec3Layout(c.start, "Start", PositionRange));
   c.endRow = addRow(*form, tr("End"), createVec3Layout(c.end, "End", PositionRange));
+  // an emitter spot's cone, which with its range takes the place of the spot vectors
+  c.coneH = createSpin("ConeH", ConeRange);
+  c.coneH->setToolTip(tr("The full horizontal angle of the beam in degrees"));
+  c.coneHRow = addRow(*form, tr("Cone h"), c.coneH);
+  c.coneV = createSpin("ConeV", ConeRange);
+  c.coneV->setToolTip(tr("The full vertical angle of the beam in degrees"));
+  c.coneVRow = addRow(*form, tr("Cone v"), c.coneV);
 
   // transform
   form->addSection(tr("Transform"));
@@ -1138,52 +1319,28 @@ QWidget* LightEditorPanel::createEditorPage()
   c.intensity->setToolTip(tr("The brightest component of the color"));
   form->addRow(tr("Intensity"), c.intensity);
 
-  // the math light page: the math block of the engine's math lights
-  auto* mathForm = createForm();
-  c.mathForm = mathForm;
-  auto* mixedMathText = createNoticeLabel(
-    "MixedMathNotice",
-    tr("The selected lights are math and texture lights: choose a tab to make all of "
-       "them lights of its kind."));
-  mixedMathText->setWordWrap(true);
-  setInfoStyle(mixedMathText);
-  c.mixedMathRow = addRow(*mathForm, mixedMathText);
-  c.mathType = new QLabel{};
-  c.mathType->setObjectName(controlName("MathType"));
-  c.mathTypeRow = addRow(*mathForm, tr("Type"), c.mathType);
-  // the engine's predefined styles, which change the light's colour (D54)
-  c.mathStyle = createComboBox("MathStyle", {});
-  setStyleItems(*c.mathStyle, predefinedStyleOptions());
-  c.mathStyle->setToolTip(tr("Varies the light's brightness over time like a style"));
-  c.mathStyleRow = addRow(*mathForm, tr("Style"), c.mathStyle);
-  c.falloff = createComboBox(
-    "Falloff",
-    {
-      tr("Inverse Square (unbounded)"),
-      tr("Linear"),
-      tr("Smooth"),
-      tr("Exponential"),
-      tr("Inverse Square (clamped) - PBR safe"),
-    });
-  c.falloffRow = addRow(*mathForm, tr("Curve"), c.falloff);
-  c.falloffExpRow = addRow(
-    *mathForm,
-    tr("Falloff exponent"),
-    createSliderLayout(c.falloffExpSlider, c.falloffExp, "FalloffExp", FalloffExpRange));
-  c.innerRadiusRow = addRow(
-    *mathForm,
-    tr("Inner radius"),
-    createSliderLayout(
-      c.innerRadiusSlider, c.innerRadius, "InnerRadius", InnerRadiusRange));
-  c.shapeExpRow = addRow(
-    *mathForm,
-    tr("Shape"),
-    createSliderLayout(c.shapeExpSlider, c.shapeExp, "ShapeExp", ShapeExpRange));
-  c.shapeExp->setToolTip(tr("2 is an ellipse, 16 a rectangle"));
+  // the emitter page: the emitter block
+  auto* emitterForm = createForm();
+  c.emitterForm = emitterForm;
+  auto* mixedEmitterText = createNoticeLabel(
+    "MixedEmitterNotice",
+    tr("The selected lights are emitters and texture lights: choose a tab to make all "
+       "of them lights of its kind."));
+  mixedEmitterText->setWordWrap(true);
+  setInfoStyle(mixedEmitterText);
+  c.mixedEmitterRow = addRow(*emitterForm, mixedEmitterText);
+  c.falloff = createComboBox("Falloff", {});
+  setFalloffItems(*c.falloff);
+  c.falloffRow = addRow(*emitterForm, tr("Falloff"), c.falloff);
   c.penumbraRow = addRow(
-    *mathForm,
+    *emitterForm,
     tr("Penumbra"),
     createSliderLayout(c.penumbraSlider, c.penumbra, "Penumbra", PenumbraRange));
+  c.squarenessRow = addRow(
+    *emitterForm,
+    tr("Squareness"),
+    createSliderLayout(c.squarenessSlider, c.squareness, "Squareness", SquarenessRange));
+  c.squareness->setToolTip(tr("2 is an ellipse, 16 a rectangle"));
   c.pattern = createComboBox(
     "Pattern",
     {
@@ -1194,9 +1351,9 @@ QWidget* LightEditorPanel::createEditorPage()
       tr("Banded (sine rings)"),
       tr("Granular (stippled)"),
     });
-  c.patternRow = addRow(*mathForm, tr("Pattern"), c.pattern);
+  c.patternRow = addRow(*emitterForm, tr("Pattern"), c.pattern);
   c.patternStrengthRow = addRow(
-    *mathForm,
+    *emitterForm,
     tr("Strength"),
     createSliderLayout(
       c.patternStrengthSlider,
@@ -1204,20 +1361,39 @@ QWidget* LightEditorPanel::createEditorPage()
       "PatternStrength",
       PatternStrengthRange));
   c.patternScaleRow = addRow(
-    *mathForm,
+    *emitterForm,
     tr("Scale"),
     createSliderLayout(
       c.patternScaleSlider, c.patternScale, "PatternScale", PatternScaleRange));
+  c.patternScale->setToolTip(
+    tr("The pattern's size in the world, whatever the light's range: at 1 an ice cell is "
+       "about 32 units across, as on a light of radius 256 before; 2 is twice as fine"));
   c.patternPhaseRow = addRow(
-    *mathForm,
+    *emitterForm,
     tr("Phase"),
     createSliderLayout(
       c.patternPhaseSlider, c.patternPhase, "PatternPhase", PatternPhaseRange));
   c.energyClamp = createCheckBox("EnergyClamp", tr("Energy clamp (PBR safe)"));
-  c.energyClampRow = addRow(*mathForm, c.energyClamp);
+  c.energyClampRow = addRow(*emitterForm, c.energyClamp);
+  c.effect = createComboBox("Effect", {});
+  setEffectItems(*c.effect);
+  c.effect->setToolTip(tr("Varies the light's brightness over time"));
+  c.effectRow = addRow(*emitterForm, tr("Effect"), c.effect);
+  c.effectSpeed = createSpin("EffectSpeed", EffectSpeedRange);
+  c.effectSpeedRow = addRow(*emitterForm, tr("Speed"), c.effectSpeed);
+  c.effectAmountRow = addRow(
+    *emitterForm,
+    tr("Amount"),
+    createSliderLayout(
+      c.effectAmountSlider, c.effectAmount, "EffectAmount", EffectAmountRange));
+  c.effectPhase = createSpin("EffectPhase", EffectPhaseRange);
+  c.effectPhase->setToolTip(tr(
+    "Where in its cycle the effect starts, 0 to 1, so that neighbouring lights differ"));
+  c.effectPhaseRow = addRow(*emitterForm, tr("Phase"), c.effectPhase);
 
   // the texture light page: the light material and the engine's style
   auto* textureForm = createForm();
+  c.textureForm = textureForm;
   c.texture = createComboBox("Texture", {EngineDefaultTexture});
   c.texture->setEditable(true);
   c.texture->setInsertPolicy(QComboBox::NoInsert);
@@ -1227,13 +1403,13 @@ QWidget* LightEditorPanel::createEditorPage()
   c.styleChoice = createComboBox("StyleChoice", {});
   textureForm->addRow(tr("Style"), c.styleChoice);
 
-  c.mathPage = createTabPage("MathPage", mathForm);
+  c.emitterPage = createTabPage("EmitterPage", emitterForm);
   c.texturePage = createTabPage("TexturePage", textureForm);
   c.tabs = new TabBook{};
   c.tabs->setObjectName(controlName("Tabs"));
-  c.tabs->addPage(c.mathPage, tr("Math"));
+  c.tabs->addPage(c.emitterPage, tr("Emitter"));
   c.tabs->addPage(c.texturePage, tr("Texture"));
-  fitTabPages({c.mathPage, c.texturePage}, MathPageIndex);
+  fitTabPages({c.emitterPage, c.texturePage}, EmitterPageIndex);
 
   // misc
   auto* miscForm = createForm();
@@ -1253,16 +1429,17 @@ QWidget* LightEditorPanel::createEditorPage()
     c.intensity,
     c.texture,
     c.styleChoice,
-    c.mathStyle,
     c.falloff,
-    c.falloffExpSlider,
-    c.falloffExp,
-    c.innerRadiusSlider,
-    c.innerRadius,
-    c.shapeExpSlider,
-    c.shapeExp,
+    c.emitSize,
+    c.emitStart,
+    c.autoRange,
+    c.range,
+    c.coneH,
+    c.coneV,
     c.penumbraSlider,
     c.penumbra,
+    c.squarenessSlider,
+    c.squareness,
     c.pattern,
     c.patternStrengthSlider,
     c.patternStrength,
@@ -1271,6 +1448,11 @@ QWidget* LightEditorPanel::createEditorPage()
     c.patternPhaseSlider,
     c.patternPhase,
     c.energyClamp,
+    c.effect,
+    c.effectSpeed,
+    c.effectAmountSlider,
+    c.effectAmount,
+    c.effectPhase,
     c.castShadows,
     c.skipSpecular,
   };
@@ -1412,19 +1594,53 @@ void LightEditorPanel::connectEditor()
        {mdl::LightType::Point, mdl::LightType::Spot, mdl::LightType::Sun})
   {
     connect(c.typeRadios[size_t(type)], &QAbstractButton::clicked, this, [=, this]() {
-      editLights("Set Light Type", [&](mdl::LightProperties& light) {
-        // like the in-game editor: a change of type resets the light to the default
-        // of the new type, keeping its colour and its math block
-        if (light.type != type)
-        {
-          light = mdl::defaultLight(type, light);
-        }
-      });
+      const auto policy =
+        m_document.map().gameInfo().gameConfig.entityConfig.rotationPolicy;
+      editOrientedLights(
+        "Set Light Type",
+        [&](const mdl::Entity& entity, mdl::LightProperties& light)
+          -> std::optional<vm::mat3x3d> {
+          // like the in-game editor: a change of type resets the light to the default
+          // of the new type, keeping its colour and its emitter block; an
+          // emitter keeps its range with auto range off and its rotation, and only one
+          // without a rotation points down when it becomes a spot (G0 section 9)
+          if (light.type == type)
+          {
+            return std::nullopt;
+          }
+          light = mdl::emitterShapeSwitch(type, light);
+          return mdl::lightUsesEmitter(light) && type == mdl::LightType::Spot
+                     && vm::is_equal(
+                       mdl::lightRotation(entity, policy),
+                       vm::mat3x3d::identity(),
+                       NoRotationEpsilon)
+                   ? std::optional{mdl::emitterSpotRotation()}
+                   : std::nullopt;
+        });
     });
   }
 
   connect(c.equalRadius, &QAbstractButton::clicked, this, [this](const bool checked) {
     auto& controls = *m_controls;
+    if (controls.emitterOmnis)
+    {
+      // an emitter omni's Range row stays; unticking shows the three radii and writes
+      // nothing, ticking sets all three to the range (G0 section 9)
+      controls.emitterRadiiShown = !checked;
+      controls.form->setRowVisible(controls.radiusXyzRow, !checked);
+      if (checked)
+      {
+        editLights("Set Light Radius", [](mdl::LightProperties& light) {
+          const auto range = mdl::emitterRange(light.radius);
+          light.radius = vm::vec3d{range, range, range};
+          light.equalRadius = true;
+          light = mdl::applyEmitterOmniRangeFloor(light);
+          light = mdl::applyEmitterAutoRange(light, mdl::EmitterEdit::Range);
+        });
+      }
+      return;
+    }
+
     controls.equilateral = checked;
     controls.form->setRowVisible(controls.radiusRow, checked);
     controls.form->setRowVisible(controls.radiusXyzRow, !checked);
@@ -1436,6 +1652,8 @@ void LightEditorPanel::connectEditor()
       editLights("Set Light Radius", [](mdl::LightProperties& light) {
         light.radius = vm::vec3d{light.radius.x(), light.radius.x(), light.radius.x()};
         light.equalRadius = true;
+        light = mdl::applyEmitterOmniRangeFloor(light);
+        light = mdl::applyEmitterAutoRange(light, mdl::EmitterEdit::Range);
       });
     }
   });
@@ -1443,6 +1661,9 @@ void LightEditorPanel::connectEditor()
     c.radius, "Set Light Radius", [](mdl::LightProperties& light, const double value) {
       light.radius = vm::vec3d{value, value, value};
       light.equalRadius = true;
+      // an emitter omni's range is at least 24, and its size follows its range
+      light = mdl::applyEmitterOmniRangeFloor(light);
+      light = mdl::applyEmitterAutoRange(light, mdl::EmitterEdit::Range);
     });
   for (size_t i = 0; i < 3; ++i)
   {
@@ -1452,6 +1673,8 @@ void LightEditorPanel::connectEditor()
       [=](mdl::LightProperties& light, const double value) {
         light.radius[i] = value;
         light.equalRadius = false;
+        light = mdl::applyEmitterOmniRangeFloor(light);
+        light = mdl::applyEmitterAutoRange(light, mdl::EmitterEdit::Range);
       });
   }
   connectCheckBox(
@@ -1484,7 +1707,13 @@ void LightEditorPanel::connectEditor()
   connect(c.color, &ColorButton::colorChangedByUser, this, [this](const QColor& color) {
     const auto hue = vm::vec3d{color.redF(), color.greenF(), color.blueF()};
     editLights("Set Light Color", [&](mdl::LightProperties& light) {
-      light.color = hue * intensityOf(light.color);
+      const auto intensity = intensityOf(light.color);
+      light.color = hue * intensity;
+      // a darker colour is a lower intensity, which an emitter's range follows
+      if (intensityOf(light.color) != intensity)
+      {
+        light = mdl::applyEmitterAutoRange(light, mdl::EmitterEdit::Reach);
+      }
     });
   });
   connectSpin(
@@ -1492,6 +1721,8 @@ void LightEditorPanel::connectEditor()
     "Set Light Intensity",
     [](mdl::LightProperties& light, const double value) {
       light.color = hueOf(light.color) * value;
+      // the range of an emitter follows its intensity
+      light = mdl::applyEmitterAutoRange(light, mdl::EmitterEdit::Reach);
     });
 
   connect(c.texture, &QComboBox::activated, this, [this](const int index) {
@@ -1522,103 +1753,165 @@ void LightEditorPanel::connectEditor()
     }
   });
 
-  // the tab is the switch between the two kinds of light (D51): a click on it writes, the
-  // page change of a refresh does not
-  connect(c.tabs->tabBar(), &TabBar::tabClicked, this, [this](const int index) {
-    editLightEntities(
-      "Set Light Math", [&](const mdl::Entity& entity, mdl::LightProperties& light) {
-        if (index == TexturePageIndex)
+  // the tab is the switch between the two kinds of light: a click on it writes, the page
+  // change of a refresh does not
+  connect(
+    c.tabs->tabBar(), &TabBar::tabClicked, this, &LightEditorPanel::switchLightKind);
+
+  // an emitter control edits emitters only; after an edit of the reach or the range, auto
+  // range recomputes each light from its own values; the start then stays below the range
+  // (G0 section 5), which auto range ensures only where it applies
+  const auto followReach = std::optional{mdl::EmitterEdit::Reach};
+  const auto followRange = std::optional{mdl::EmitterEdit::Range};
+  const auto followNothing = std::optional<mdl::EmitterEdit>{};
+  const auto forEmitters = [](const std::optional<mdl::EmitterEdit> follow, auto set) {
+    return [=](mdl::LightProperties& light, const auto value) {
+      if (mdl::lightUsesEmitter(light))
+      {
+        set(light, value);
+        if (follow)
         {
-          // the other math keys stay
-          light.math.enabled = false;
+          light = mdl::applyEmitterAutoRange(light, *follow);
+          light.emitter.start =
+            mdl::clampEmitterStart(light.emitter.start, mdl::emitterRange(light.radius));
         }
-        else if (!light.math.enabled)
-        {
-          if (mdl::hasMathLightBlock(entity))
-          {
-            // a disabled block gets its kept values back
-            light.math.enabled = true;
-          }
-          else
-          {
-            // a light without a math block of its own gets the in-game editor's seed
-            // (D29), as its Math tab gives it
-            light.math = mdl::seededMathLightProperties();
-          }
-        }
-      });
-  });
-  connect(c.mathStyle, &QComboBox::activated, this, [this](const int index) {
+      }
+    };
+  };
+
+  // a curve that gains a reach factor tests the range again (G0 section 5)
+  const auto setFalloff =
+    forEmitters(followReach, [](mdl::LightProperties& light, const int falloff) {
+      light = mdl::applyEmitterFalloff(light, mdl::LightFalloff(falloff));
+    });
+  connect(c.falloff, &QComboBox::activated, this, [=, this](const int index) {
     auto ok = false;
-    const auto style = m_controls->mathStyle->itemData(index).toString().toInt(&ok);
+    const auto falloff = m_controls->falloff->itemData(index).toInt(&ok);
     if (ok)
     {
-      editLights("Set Light Math Style", [&](mdl::LightProperties& light) {
-        light.math.style = style;
+      editLights("Set Light Falloff", [&](mdl::LightProperties& light) {
+        setFalloff(light, falloff);
       });
     }
   });
-  connect(c.falloff, &QComboBox::activated, this, [this](const int index) {
-    editLights("Set Light Falloff", [&](mdl::LightProperties& light) {
-      light.math.falloff = mdl::LightFalloff(index);
-    });
-  });
-  connectSlider(
-    c.falloffExpSlider,
-    c.falloffExp,
-    "Set Light Falloff Exponent",
-    [](mdl::LightProperties& light, const double value) {
-      light.math.falloffExp = value;
-    });
-  connectSlider(
-    c.innerRadiusSlider,
-    c.innerRadius,
-    "Set Light Inner Radius",
-    [](mdl::LightProperties& light, const double value) {
-      light.math.innerRadius = value;
-    });
-  connectSlider(
-    c.shapeExpSlider,
-    c.shapeExp,
-    "Set Light Shape",
-    [](mdl::LightProperties& light, const double value) { light.math.shapeExp = value; });
+  connectSpin(
+    c.emitSize,
+    "Set Light Size",
+    forEmitters(followReach, [](mdl::LightProperties& light, const double value) {
+      light.emitter.size = value;
+    }));
+  connectSpin(
+    c.emitStart,
+    "Set Light Start",
+    forEmitters(followReach, [](mdl::LightProperties& light, const double value) {
+      light.emitter.start = value;
+    }));
+  connectCheckBox(
+    c.autoRange,
+    "Set Light Auto Range",
+    forEmitters(followReach, [](mdl::LightProperties& light, const bool checked) {
+      light.emitter.autoRange = checked;
+    }));
+  connectSpin(
+    c.range,
+    "Set Light Range",
+    forEmitters(followRange, [](mdl::LightProperties& light, const double value) {
+      light = mdl::withEmitterRange(light, value);
+    }));
+  connectSpin(
+    c.coneH,
+    "Set Light Cone",
+    forEmitters(followNothing, [](mdl::LightProperties& light, const double value) {
+      light.emitter.coneH = value;
+    }));
+  connectSpin(
+    c.coneV,
+    "Set Light Cone",
+    forEmitters(followNothing, [](mdl::LightProperties& light, const double value) {
+      light.emitter.coneV = value;
+    }));
   connectSlider(
     c.penumbraSlider,
     c.penumbra,
     "Set Light Penumbra",
-    [](mdl::LightProperties& light, const double value) { light.math.penumbra = value; });
-  connect(c.pattern, &QComboBox::activated, this, [this](const int index) {
+    forEmitters(followNothing, [](mdl::LightProperties& light, const double value) {
+      light.emitter.penumbra = value;
+    }));
+  connectSlider(
+    c.squarenessSlider,
+    c.squareness,
+    "Set Light Squareness",
+    forEmitters(followNothing, [](mdl::LightProperties& light, const double value) {
+      light.emitter.squareness = value;
+    }));
+  const auto setPattern =
+    forEmitters(followNothing, [](mdl::LightProperties& light, const int index) {
+      light.emitter.pattern = mdl::LightPattern(index);
+    });
+  connect(c.pattern, &QComboBox::activated, this, [=, this](const int index) {
     editLights("Set Light Pattern", [&](mdl::LightProperties& light) {
-      light.math.pattern = mdl::LightPattern(index);
+      setPattern(light, index);
     });
   });
   connectSlider(
     c.patternStrengthSlider,
     c.patternStrength,
     "Set Light Pattern Strength",
-    [](mdl::LightProperties& light, const double value) {
-      light.math.patternStrength = value;
-    });
+    forEmitters(followNothing, [](mdl::LightProperties& light, const double value) {
+      light.emitter.patternStrength = value;
+    }));
   connectSlider(
     c.patternScaleSlider,
     c.patternScale,
     "Set Light Pattern Scale",
-    [](mdl::LightProperties& light, const double value) {
-      light.math.patternScale = value;
-    });
+    forEmitters(followNothing, [](mdl::LightProperties& light, const double value) {
+      light.emitter.patternScale = value;
+    }));
   connectSlider(
     c.patternPhaseSlider,
     c.patternPhase,
     "Set Light Pattern Phase",
-    [](mdl::LightProperties& light, const double value) {
-      light.math.patternPhase = value;
-    });
+    forEmitters(followNothing, [](mdl::LightProperties& light, const double value) {
+      light.emitter.patternPhase = value;
+    }));
   connectCheckBox(
     c.energyClamp,
     "Set Light Energy Clamp",
-    [](mdl::LightProperties& light, const bool checked) {
-      light.math.energyClamp = checked;
-    });
+    forEmitters(followNothing, [](mdl::LightProperties& light, const bool checked) {
+      light.emitter.energyClamp = checked;
+    }));
+  const auto setEffect = forEmitters(
+    followNothing,
+    [](mdl::LightProperties& light, const int effect) { light.emitter.effect = effect; });
+  connect(c.effect, &QComboBox::activated, this, [=, this](const int index) {
+    auto ok = false;
+    const auto effect = m_controls->effect->itemData(index).toInt(&ok);
+    if (ok)
+    {
+      editLights("Set Light Effect", [&](mdl::LightProperties& light) {
+        setEffect(light, effect);
+      });
+    }
+  });
+  connectSpin(
+    c.effectSpeed,
+    "Set Light Effect Speed",
+    forEmitters(followNothing, [](mdl::LightProperties& light, const double value) {
+      light.emitter.effectSpeed = value;
+    }));
+  connectSlider(
+    c.effectAmountSlider,
+    c.effectAmount,
+    "Set Light Effect Amount",
+    forEmitters(followNothing, [](mdl::LightProperties& light, const double value) {
+      light.emitter.effectAmount = value;
+    }));
+  connectSpin(
+    c.effectPhase,
+    "Set Light Effect Phase",
+    forEmitters(followNothing, [](mdl::LightProperties& light, const double value) {
+      light.emitter.effectPhase = value;
+    }));
 
   connectCheckBox(
     c.castShadows,
@@ -1673,7 +1966,7 @@ void LightEditorPanel::connectEditor()
     &LightEditorPanel::convertLightOrigins);
 
   connect(c.tabs, &TabBook::pageChanged, this, [this](const int index) {
-    fitTabPages({m_controls->mathPage, m_controls->texturePage}, index);
+    fitTabPages({m_controls->emitterPage, m_controls->texturePage}, index);
   });
 }
 
@@ -1816,6 +2109,10 @@ void LightEditorPanel::updateEditor()
   const auto allLights = [&](const auto& predicate) {
     return std::ranges::all_of(lights, predicate);
   };
+  const auto anyEmitter =
+    anyLight([](const auto& light) { return mdl::lightUsesEmitter(light); });
+  const auto allEmitters =
+    allLights([](const auto& light) { return mdl::lightUsesEmitter(light); });
 
   // setting a control must not write it
   auto blockers = std::vector<QSignalBlocker>{};
@@ -1862,6 +2159,8 @@ void LightEditorPanel::updateEditor()
     c.handleThreshold->setValue(
       double(pref(Preferences::LightVolumeHandleThreshold)) * 100.0);
   }
+  // an emitter's handle box is its volume, without a threshold
+  c.handleThreshold->setEnabled(!allEmitters);
 
   c.offCentreNotice->setVisible(recentre.has_value());
   if (recentre)
@@ -1872,8 +2171,9 @@ void LightEditorPanel::updateEditor()
         .arg(std::ceil(*recentre)));
   }
 
-  c.styledNotice->setVisible(
-    anyLight([](const auto& light) { return light.style != -1; }));
+  c.styledNotice->setVisible(anyLight([](const auto& light) {
+    return light.style != -1 && !mdl::lightUsesEmitter(light);
+  }));
 
   // type
   const auto [type, mixedTypes] =
@@ -1892,25 +2192,61 @@ void LightEditorPanel::updateEditor()
   // volume, only for lights of one type
   const auto isPointOrSun = !mixedTypes && type != mdl::LightType::Spot;
   const auto isSpot = !mixedTypes && type == mdl::LightType::Spot;
-  // one radius only when the user chose it and every light has one (D52)
-  const auto equilateral =
-    c.equilateral && allLights([](const auto& light) { return light.equalRadius; });
+  // an emitter has no target vectors: its range and cone take their place
+  const auto isTextureSpot = isSpot && !anyEmitter;
+  const auto isEmitterSpot = isSpot && allEmitters;
+  // emitter omnis and spots, whatever the mix, share the rows that set their extent
+  // (G0 section 9, range and reach in the panel)
+  const auto isEmitterOmniOrSpot = allEmitters && allLights([](const auto& light) {
+                                     return light.type != mdl::LightType::Sun;
+                                   });
+  c.emitterOmnis = isEmitterOmniOrSpot && !mixedTypes && type == mdl::LightType::Point;
+  const auto allEqualRadius =
+    allLights([](const auto& light) { return light.equalRadius; });
+  // one radius only when the user chose it and every light has one (D52); an emitter
+  // omni's Equilateral shows ticked while its radii are equal, unless the user chose to
+  // see them
+  const auto equilateral = c.emitterOmnis ? allEqualRadius && !c.emitterRadiiShown
+                                          : c.equilateral && allEqualRadius;
   const auto hasCenter = allLights([](const auto& light) { return light.hasCenter; });
   const auto explicitStartEnd =
     allLights([](const auto& light) { return light.explicitStartEnd; });
 
-  c.form->setRowVisible(c.mixedTypesRow, mixedTypes);
+  c.form->setRowVisible(c.mixedTypesRow, mixedTypes && !isEmitterOmniOrSpot);
   c.form->setRowVisible(c.equalRadiusRow, isPointOrSun);
-  c.form->setRowVisible(c.radiusRow, isPointOrSun && equilateral);
+  // an emitter omni's one radius is its Range
+  c.form->setRowVisible(c.radiusRow, isPointOrSun && equilateral && !c.emitterOmnis);
   c.form->setRowVisible(c.radiusXyzRow, isPointOrSun && !equilateral);
   c.form->setRowVisible(c.centerRow, isPointOrSun);
   c.form->setRowVisible(c.centerXyzRow, isPointOrSun && hasCenter);
-  c.form->setRowVisible(c.targetRow, isSpot);
-  c.form->setRowVisible(c.rightRow, isSpot);
-  c.form->setRowVisible(c.upRow, isSpot);
-  c.form->setRowVisible(c.explicitStartEndRow, isSpot);
-  c.form->setRowVisible(c.startRow, isSpot && explicitStartEnd);
-  c.form->setRowVisible(c.endRow, isSpot && explicitStartEnd);
+  c.form->setRowVisible(c.targetRow, isTextureSpot);
+  c.form->setRowVisible(c.rightRow, isTextureSpot);
+  c.form->setRowVisible(c.upRow, isTextureSpot);
+  c.form->setRowVisible(c.explicitStartEndRow, isTextureSpot);
+  c.form->setRowVisible(c.startRow, isTextureSpot && explicitStartEnd);
+  c.form->setRowVisible(c.endRow, isTextureSpot && explicitStartEnd);
+  // Range, Auto range, Size and Start, each light set by its own rule; Auto range and
+  // Size only for a curve that uses them; none for a sun. The cone only when every light
+  // is a spot.
+  const auto hasReachCurve = anyLight(
+    [](const auto& light) { return mdl::emitterCurveHasReach(light.emitter.falloff); });
+  const auto autoRangeInForce =
+    allLights([](const auto& light) { return mdl::emitterAutoRangeInForce(light); });
+  c.form->setRowVisible(c.rangeRow, isEmitterOmniOrSpot);
+  c.form->setRowVisible(c.autoRangeRow, isEmitterOmniOrSpot && hasReachCurve);
+  c.form->setRowVisible(c.emitSizeRow, isEmitterOmniOrSpot && hasReachCurve);
+  c.form->setRowVisible(c.emitStartRow, isEmitterOmniOrSpot);
+  c.form->setRowVisible(c.autoRangeNoteRow, isEmitterOmniOrSpot && hasReachCurve);
+  c.rangeLabel->setText(
+    isEmitterOmniOrSpot && autoRangeInForce ? tr("Range (auto)") : tr("Range"));
+  c.form->setRowVisible(c.coneHRow, isEmitterSpot);
+  c.form->setRowVisible(c.coneVRow, isEmitterSpot);
+  // an emitter omni's light_center is the bulb's offset from its origin
+  const auto centerText = allEmitters && !mixedTypes && type == mdl::LightType::Point
+                            ? tr("Bulb offset")
+                            : tr("Center");
+  c.center->setText(centerText);
+  c.centerLabel->setText(centerText);
 
   c.equalRadius->setChecked(equilateral);
   setSpin(c.radius, lights, [](const auto& light) { return light.radius.x(); });
@@ -1990,80 +2326,78 @@ void LightEditorPanel::updateEditor()
   c.styleChoice->setPlaceholderText(styleMulti ? Multi : QString::number(style));
   c.styleChoice->setCurrentIndex(styleMulti ? -1 : findStyleIndex(*c.styleChoice, style));
 
-  // the page follows the lights: math lights, and math lights mixed with texture lights,
-  // on the Math page, texture lights on the Texture page; the tab book's signals are not
+  // the page follows the lights: emitters, and emitters mixed with texture lights, on the
+  // Emitter page, texture lights on the Texture page; the tab book's signals are not
   // blocked, because its tab bar follows them
-  const auto mathEnabled =
-    allLights([](const auto& light) { return light.math.enabled; });
-  const auto anyMathEnabled =
-    anyLight([](const auto& light) { return light.math.enabled; });
-  const auto mixedMath = anyMathEnabled && !mathEnabled;
-  c.tabs->switchToPage(anyMathEnabled ? MathPageIndex : TexturePageIndex);
-  c.mathForm->setRowVisible(c.mixedMathRow, mixedMath);
-  c.texturePage->setEnabled(!mixedMath);
+  const auto mixedKinds = anyEmitter && !allEmitters;
+  c.tabs->switchToPage(anyEmitter ? EmitterPageIndex : TexturePageIndex);
+  c.emitterForm->setRowVisible(c.mixedEmitterRow, mixedKinds);
+  c.texturePage->setEnabled(!mixedKinds);
 
-  // the math fields, only for lights of one kind: lights of both kinds have the notice
-  const auto oneKind = !mixedMath;
+  // the emitter fields, only for lights of one kind: lights of both kinds have the notice
+  const auto oneKind = !mixedKinds;
+  // a sun's light_radius is a box, not a reach: no falloff; size, start and auto range
+  // are in the Volume section
+  const auto isSun = !mixedTypes && type == mdl::LightType::Sun;
+  const auto hasCurve = oneKind && !isSun;
   const auto patterned = anyLight(
-    [](const auto& light) { return light.math.pattern != mdl::LightPattern::None; });
+    [](const auto& light) { return light.emitter.pattern != mdl::LightPattern::None; });
+  const auto animated =
+    anyLight([](const auto& light) { return light.emitter.effect != 0; });
 
-  c.mathForm->setRowVisible(c.mathTypeRow, oneKind);
-  c.mathForm->setRowVisible(c.mathStyleRow, oneKind);
-  c.mathForm->setRowVisible(c.falloffRow, oneKind);
-  c.mathForm->setRowVisible(c.falloffExpRow, oneKind);
-  c.mathForm->setRowVisible(c.innerRadiusRow, oneKind);
-  c.mathForm->setRowVisible(c.shapeExpRow, oneKind && isSpot);
-  c.mathForm->setRowVisible(c.penumbraRow, oneKind && isSpot);
-  c.mathForm->setRowVisible(c.patternRow, oneKind);
-  c.mathForm->setRowVisible(c.patternStrengthRow, oneKind && patterned);
-  c.mathForm->setRowVisible(c.patternScaleRow, oneKind && patterned);
-  c.mathForm->setRowVisible(c.patternPhaseRow, oneKind && patterned);
-  c.mathForm->setRowVisible(c.energyClampRow, oneKind);
+  c.emitterForm->setRowVisible(c.falloffRow, hasCurve);
+  c.emitterForm->setRowVisible(c.penumbraRow, oneKind && isSpot);
+  c.emitterForm->setRowVisible(c.squarenessRow, oneKind && isSpot);
+  c.emitterForm->setRowVisible(c.patternRow, oneKind);
+  c.emitterForm->setRowVisible(c.patternStrengthRow, oneKind && patterned);
+  c.emitterForm->setRowVisible(c.patternScaleRow, oneKind && patterned);
+  c.emitterForm->setRowVisible(c.patternPhaseRow, oneKind && patterned);
+  c.emitterForm->setRowVisible(c.energyClampRow, oneKind);
+  c.emitterForm->setRowVisible(c.effectRow, oneKind);
+  c.emitterForm->setRowVisible(c.effectSpeedRow, oneKind && animated);
+  c.emitterForm->setRowVisible(c.effectAmountRow, oneKind && animated);
+  c.emitterForm->setRowVisible(c.effectPhaseRow, oneKind && animated);
 
-  // the engine derives the math type from the light's geometry (D40)
-  c.mathType->setText(
-    mixedTypes ? Multi
-               : tr("%1 (follows the light type)")
-                   .arg(QString::fromStdString(std::string{mdl::mathTypeName(type)})));
-  const auto [mathStyle, mathStyleMulti] =
-    firstValue(lights, [](const auto& light) { return light.math.style; });
-  c.mathStyle->setPlaceholderText(Multi);
-  c.mathStyle->setCurrentIndex(
-    mathStyleMulti ? -1 : findStyleIndex(*c.mathStyle, mathStyle));
-  setComboBox(
-    c.falloff, lights, [](const auto& light) { return int(light.math.falloff); });
-  const auto falloffExpUsed = anyLight([](const auto& light) {
-    return light.math.falloff != mdl::LightFalloff::Linear
-           && light.math.falloff != mdl::LightFalloff::Smooth;
-  });
-  c.falloffExp->setEnabled(falloffExpUsed);
-  c.falloffExpSlider->setEnabled(falloffExpUsed);
-  c.falloffExp->setToolTip(falloffExpUsed ? QString{} : tr("Unused by this curve"));
-  setSlider(c.falloffExpSlider, c.falloffExp, lights, [](const auto& light) {
-    return light.math.falloffExp;
-  });
-  setSlider(c.innerRadiusSlider, c.innerRadius, lights, [](const auto& light) {
-    return light.math.innerRadius;
-  });
-  setSlider(c.shapeExpSlider, c.shapeExp, lights, [](const auto& light) {
-    return light.math.shapeExp;
-  });
+  setComboBoxData(
+    c.falloff, lights, [](const auto& light) { return int(light.emitter.falloff); });
+  setSpin(c.emitSize, lights, [](const auto& light) { return light.emitter.size; });
+  setSpin(c.emitStart, lights, [](const auto& light) { return light.emitter.start; });
+  setCheckBox(
+    c.autoRange, lights, [](const auto& light) { return light.emitter.autoRange; });
+  setSpin(
+    c.range, lights, [](const auto& light) { return mdl::emitterRange(light.radius); });
+  setSpin(c.coneH, lights, [](const auto& light) { return light.emitter.coneH; });
+  setSpin(c.coneV, lights, [](const auto& light) { return light.emitter.coneV; });
   setSlider(c.penumbraSlider, c.penumbra, lights, [](const auto& light) {
-    return light.math.penumbra;
+    return light.emitter.penumbra;
+  });
+  setSlider(c.squarenessSlider, c.squareness, lights, [](const auto& light) {
+    return light.emitter.squareness;
   });
   setComboBox(
-    c.pattern, lights, [](const auto& light) { return int(light.math.pattern); });
+    c.pattern, lights, [](const auto& light) { return int(light.emitter.pattern); });
   setSlider(c.patternStrengthSlider, c.patternStrength, lights, [](const auto& light) {
-    return light.math.patternStrength;
+    return light.emitter.patternStrength;
   });
   setSlider(c.patternScaleSlider, c.patternScale, lights, [](const auto& light) {
-    return light.math.patternScale;
+    return light.emitter.patternScale;
   });
   setSlider(c.patternPhaseSlider, c.patternPhase, lights, [](const auto& light) {
-    return light.math.patternPhase;
+    return light.emitter.patternPhase;
   });
   setCheckBox(
-    c.energyClamp, lights, [](const auto& light) { return light.math.energyClamp; });
+    c.energyClamp, lights, [](const auto& light) { return light.emitter.energyClamp; });
+  setComboBoxData(
+    c.effect, lights, [](const auto& light) { return light.emitter.effect; });
+  setSpin(
+    c.effectSpeed, lights, [](const auto& light) { return light.emitter.effectSpeed; });
+  setSlider(c.effectAmountSlider, c.effectAmount, lights, [](const auto& light) {
+    return light.emitter.effectAmount;
+  });
+  // the phase as the engine uses it, modulo 1
+  setSpin(c.effectPhase, lights, [](const auto& light) {
+    return light.emitter.effectPhase - std::floor(light.emitter.effectPhase);
+  });
 
   // misc
   setCheckBox(c.castShadows, lights, [](const auto& light) { return light.castShadows; });
@@ -2102,28 +2436,75 @@ void LightEditorPanel::editLightEntities(
   const std::string& commandName,
   const std::function<void(const mdl::Entity&, mdl::LightProperties&)>& edit)
 {
+  editOrientedLights(
+    commandName, [&](const mdl::Entity& entity, mdl::LightProperties& light) {
+      edit(entity, light);
+      return std::optional<vm::mat3x3d>{};
+    });
+}
+
+void LightEditorPanel::editOrientedLights(
+  const std::string& commandName,
+  const std::function<
+    std::optional<vm::mat3x3d>(const mdl::Entity&, mdl::LightProperties&)>& edit)
+{
   auto& map = m_document.map();
 
-  // per light, only the properties that the edit changes, so that the lights keep their
-  // other values and a value that is written unchanged is not rounded (D42)
+  // per light, only the properties that the edit changes (editedLightEntity)
   auto nodesToSwap = NodesToSwap{};
   for (auto* entityNode : editableLightNodes(map))
   {
     const auto& entity = entityNode->entity();
     auto light = mdl::parseLightProperties(entity);
-    edit(entity, light);
-
-    const auto update = mdl::lightKeyDiff(entity, light);
-    if (!update.set.empty() || !update.remove.empty())
+    const auto rotation = edit(entity, light);
+    if (auto changed = editedLightEntity(entity, light, rotation))
     {
-      nodesToSwap.emplace_back(
-        entityNode, mdl::NodeContents{mdl::applyLightPropertyUpdate(entity, update)});
+      nodesToSwap.emplace_back(entityNode, mdl::NodeContents{std::move(*changed)});
     }
   }
 
   if (!swapNodeContents(map, commandName, std::move(nodesToSwap)))
   {
     // the control that the user changed may show a value that no light has
+    refresh();
+  }
+}
+
+void LightEditorPanel::switchLightKind(const int pageIndex)
+{
+  auto& map = m_document.map();
+  const auto policy = map.gameInfo().gameConfig.entityConfig.rotationPolicy;
+
+  if (pageIndex == TexturePageIndex)
+  {
+    editLights("Set Light Kind", [](mdl::LightProperties& light) {
+      // the emit_* keys stay; a spot gets the pyramid round its cone with its rotation
+      // unchanged, an omni or a sun keeps its volume keys, which it shares
+      light = mdl::asTextureLight(light);
+    });
+    return;
+  }
+
+  // to emitters, in one command: a texture light gets its kept block or a new one
+  auto nodesToSwap = NodesToSwap{};
+  for (auto* entityNode : editableLightNodes(map))
+  {
+    const auto& entity = entityNode->entity();
+    auto light = mdl::parseLightProperties(entity);
+    if (mdl::lightUsesEmitter(light))
+    {
+      continue;
+    }
+
+    auto [emitter, rotation] = mdl::asEmitterLight(entity, light, policy);
+    if (auto changed = editedLightEntity(entity, emitter, rotation))
+    {
+      nodesToSwap.emplace_back(entityNode, mdl::NodeContents{std::move(*changed)});
+    }
+  }
+
+  if (!swapNodeContents(map, "Set Light Kind", std::move(nodesToSwap)))
+  {
     refresh();
   }
 }

@@ -25,6 +25,7 @@
 #include "mdl/BrushNode.h"
 #include "mdl/GameInfo.h"
 #include "mdl/GameInfo.h" // IWYU pragma: keep
+#include "mdl/Light.h"
 #include "mdl/Map.h"
 #include "mdl/PatchNode.h"
 #include "mdl/WorldNode.h"
@@ -57,6 +58,23 @@ PatchNode* createPatchNode(const std::string& materialName)
     {0, 1, 1}, {1, 1, 2}, {2, 1, 1},
     {0, 2, 0}, {1, 2, 1}, {2, 2, 0} }, materialName}};
   // clang-format on
+}
+
+LightProperties makeEmitterOmni()
+{
+  auto light = LightProperties{};
+  light.radius = vm::vec3d{288, 288, 288};
+  light.emitter = seededEmitterProperties();
+  return light;
+}
+
+LightProperties makeEmitterSpot(const double range)
+{
+  auto light = LightProperties{};
+  light.type = LightType::Spot;
+  light.radius = vm::vec3d{range, range, range};
+  light.emitter = seededEmitterProperties();
+  return light;
 }
 
 } // namespace tb::mdl

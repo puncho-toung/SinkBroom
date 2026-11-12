@@ -20,6 +20,7 @@
 #pragma once
 
 #include "mdl/EntityProperties.h"
+#include "mdl/EntityRotation.h"
 #include "mdl/Light.h"
 
 #include "vm/bbox.h"
@@ -30,6 +31,7 @@
 #include <array>
 #include <iosfwd>
 #include <optional>
+#include <utility>
 
 namespace tb::mdl
 {
@@ -44,16 +46,16 @@ enum class LightElement
 {
   // a point light's ellipsoid at t = 1, where its falloff reaches 0
   OuterShell,
-  // a math point light's ellipsoid at t = math_inner_radius, the edge of its core
+  // an omni emitter's ellipsoid at its start (emit_start), the edge of its core
   InnerShell,
   // a spot light's cone surface from the near to the far cap
   Funnel,
   // a spot light's far cap
   Base,
-  // a math spot light's cap at t = math_inner_radius, the end of its core
+  // an emitter spot's cap at its start (emit_start), the end of its core
   InnerCap,
-  // a spot light's inner cone at 1 - math_penumbra (a light without math at the
-  // stand-in's 0.15), never picked
+  // a spot light's inner cone at 1 - emit_penumbra (a texture spot at the stand-in's
+  // 0.15), never picked
   Penumbra,
   // a sun's box
   SunBox,
@@ -68,7 +70,7 @@ std::ostream& operator<<(std::ostream& lhs, LightElement rhs);
 /**
  * The geometry of an id Tech 4 light as RBDOOM-3-BFG's renderer derives it
  * (R_ComputePointLightProjectionMatrix, R_ComputeSpotLightProjectionMatrix) and the
- * shading curves of its math lights (mathlight.inc.hlsl).
+ * shading curves of its emitters (emitter.inc.hlsl).
  *
  * "Local" is the engine's light space: a point p_l is at origin + R * p_l in the world,
  * where R is the light's rotation, whose column i is the engine's axis[i]. A spot light's
@@ -162,15 +164,14 @@ bool isCentredSpot(const LightProperties& light);
  * and |up| (zNear + zFar) / |target|. The apex is the centre of the face z = 0. Returns
  * nothing for a degenerate light (a radius component below 1e-6, or see
  * spotLightFrustum).
+ * An enabled emitter's box is emitterEditBox, without a threshold.
  */
 std::optional<vm::bbox3d> lightEditBox(const LightProperties& light);
 
 /**
  * The largest falloff parameter t in [0, 1] at which the light is still visible: its
- * falloff curve (lightFalloff for a math light, legacyFalloff for a light without math),
- * at most 1, is at least the given threshold there. Found by bisection in 24 steps; a
- * math light with an inner radius of at least 0.999 is visible to t = 1. The threshold is
- * clamped to [0.01, 0.5].
+ * stand-in falloff curve (legacyFalloff), at most 1, is at least the given threshold
+ * there. Found by bisection in 24 steps. The threshold is clamped to [0.01, 0.5].
  */
 double visibleFalloffT(const LightProperties& light, double threshold);
 
@@ -179,6 +180,7 @@ double visibleFalloffT(const LightProperties& light, double threshold);
  * box of +-radius * visibleFalloffT(light, threshold) in local space, so that its faces
  * are where the light fades below the threshold; for a spot light and a sun the box of
  * lightEditBox. Returns nothing for a degenerate light.
+ * An enabled emitter's box is emitterEditBox, without a threshold.
  */
 std::optional<vm::bbox3d> lightEditBox(const LightProperties& light, double threshold);
 
@@ -196,6 +198,7 @@ std::optional<vm::bbox3d> lightEditBox(const LightProperties& light, double thre
  *
  * Returns nothing if the box is denied: a point half extent below 1, a spot box
  * shallower than 24 or with a half extent below 1, or a degenerate base.
+ * An enabled emitter is emitterFromEditBox, without a threshold.
  */
 std::optional<LightProperties> lightFromEditBox(
   const LightProperties& base, const vm::mat3x3d& rotation, const vm::bbox3d& box);
@@ -209,6 +212,7 @@ std::optional<LightProperties> lightFromEditBox(
  *
  * Returns nothing if the box is denied: as without a threshold, or a point light whose
  * visibleFalloffT is below 1e-6.
+ * An enabled emitter is emitterFromEditBox, without a threshold.
  */
 std::optional<LightProperties> lightFromEditBox(
   const LightProperties& base,
@@ -245,27 +249,48 @@ double superellipseRadius(double u, double v, double shapeExp);
 /**
  * Whether the given world point is inside the light's volume: the ellipsoid inscribed in
  * the box of a point light, the lit frustum of a spot light, the box of a sun.
+ * An enabled emitter: its lit shape, see the emitter functions below.
  */
 bool containsPoint(
   const LightProperties& light, const LightFrame& frame, const vm::vec3d& world);
 
 /**
- * The math light falloff curve MLFalloffCurve in double precision: 1 at t = 0 (except
- * the unclamped inverse square, which is 1e6 there) and 0 at t = 1.
+ * A sphere about the given light's volume in the given frame: every world point that
+ * containsPoint accepts, and every point of the light's volume placed in the world by
+ * the frame (origin + R * local), lies within the radius of the centre. The centre is an
+ * emitter's bulb in the world, origin + R * emitterBulb, else the frame's origin. The
+ * radius about it: a point light's largest radius, a sun's box diagonal, an emitter
+ * spot's range, a texture spot's farthest frustum corner; infinite where no bound is
+ * known (a degenerate spot).
+ *
+ * R need not be a rotation. A frame read from a matrix key that was written with two
+ * decimals is orthonormal only to about 0.01, so the radius is widened by a bound on its
+ * error: with e the largest entry of |R^T R - I|, Gershgorin gives the singular values of
+ * R in [sqrt(1 - 3e), sqrt(1 + 3e)], so a local distance d is at most d / sqrt(1 - 3e) in
+ * the world either way, and an emitter's bulb, placed by R where containsPoint inverts
+ * with R^T, is off by at most 3e |bulb| / sqrt(1 - 3e). For e above 0.1 the radius is
+ * infinite.
  */
-double lightFalloff(double t, const MathLightProperties& math);
+std::pair<vm::vec3d, double> lightBoundingSphere(
+  const LightProperties& light, const LightFrame& frame);
 
 /**
- * The stand-in falloff of a light without math: 1 - smoothstep(0, 1, t).
+ * The falloff curve of emitter.inc.hlsl in double precision: 1 at t = 0 (except
+ * the unclamped inverse square, which is 1e6 there) and 0 at t = 1.
+ */
+double lightFalloff(double t, const LightCurve& curve);
+
+/**
+ * The stand-in falloff of a texture light: 1 - smoothstep(0, 1, t).
  */
 double legacyFalloff(double t);
 
 /**
- * The spot light's superellipse mask MLSpotMask at the projected position (u, v): 1
- * inside the penumbra ring, 0 outside the unit superellipse. A penumbra of 0 gives a
- * sharp edge.
+ * The spot light's superellipse mask of emitter.inc.hlsl at the projected position (u,
+ * v): 1 inside the penumbra ring, 0 outside the unit superellipse. A penumbra of 0 gives
+ * a sharp edge.
  */
-double spotMask(double u, double v, const MathLightProperties& math);
+double spotMask(double u, double v, const LightCurve& curve);
 
 /**
  * The falloff parameter of a spot light at depth d: (d - zNear) / zFar, 0 at the near cap
@@ -338,5 +363,195 @@ std::optional<double> intersectRaySpotCap(
  */
 std::optional<double> intersectRaySpotBase(
   const LightProperties& light, const LightFrame& frame, const vm::ray3d& ray);
+
+/**
+ * The bulb of an emitter in local space: light_center for an omni that has one, else the
+ * origin.
+ */
+vm::vec3d emitterBulb(const LightProperties& light);
+
+/**
+ * The distance along the given world ray to a cap of the given emitter spot in the given
+ * frame: the part of the sphere of the given radius about its bulb that lies in front of
+ * the bulb inside the ring of its cone, the superellipse of its squareness (with a
+ * tolerance of 1e-6). That is its round cap at its range and the cap of its core at its
+ * start. The ray's first crossing of the sphere, where it enters, if it lies on the cap;
+ * with fromInside also the second, where it leaves. Nothing if neither does.
+ */
+std::optional<double> intersectRayEmitterCap(
+  const LightProperties& light,
+  const LightFrame& frame,
+  double radius,
+  bool fromInside,
+  const vm::ray3d& ray);
+
+/**
+ * The box that the light volume tool edits for an emitter, in the light's own axes (local
+ * space: forward, left, up; not the beam space of a texture spot). An omni:
+ * +-light_radius about the bulb, without visible-falloff scaling. A spot: [0, R] x [-R
+ * sinHalfH, R sinHalfH] x [-R sinHalfV, R sinHalfV] with sinHalf = sin(cone / 2), whose
+ * face x = 0 is the bulb: the bounding box of the lit cone, which ends on the sphere of
+ * radius R, so that its side faces touch the cone where it is widest (G0 section 9). A
+ * sun: +-radius. Nothing for a radius component below 1e-6.
+ */
+std::optional<vm::bbox3d> emitterEditBox(const LightProperties& light);
+
+/**
+ * Returns the given emitter changed so that its edit box is the given box, which is in
+ * the space of the base's edit box; the rotation is the light's R. A box of the base
+ * box's size moves the origin and changes nothing else. Otherwise an omni gets the half
+ * extents as its radius and keeps its light_center; a spot gets the box's depth as its
+ * range, keeps a cone angle whose side faces did not move (so the sides follow the far
+ * face), and sets a cone angle whose side face moved to 2 asin(e / R), e that face's
+ * distance to the axis (half the width when both faces moved) and R the new range,
+ * clamped to 1 to 120 degrees; an edge or a corner
+ * applies both rules. A changed range then sets the size by the auto range rule. A sun is
+ * edited like today's. The range floor ends a drag on 24 (G0 section 5): a spot's depth
+ * below 24 is 24, and an omni whose largest half extent would be below 24 has its dragged
+ * half extents scaled, in proportion and each about its face that did not move, so that
+ * the largest is 24. Returns nothing if the box is denied: any half extent below 1.
+ */
+std::optional<LightProperties> emitterFromEditBox(
+  const LightProperties& base, const vm::mat3x3d& rotation, const vm::bbox3d& box);
+
+/**
+ * The rotation of a new emitter spot, EmitterSpotPitchYawRoll read as entityRotation
+ * reads id Tech 4 angles: axis[0] points down, axis[1] is world +Y, axis[2] world +X.
+ */
+vm::mat3x3d emitterSpotRotation();
+
+/**
+ * Returns the given light as an emitter spot that fills the given world-aligned box (draw
+ * mode): its bulb at the centre of the box's top face, its range the box's height, and
+ * each cone angle 2 asin(half extent / height), clamped to 1 to 120 degrees, from the
+ * box's half extent along the matching axis of emitterSpotRotation(), so that the drawn
+ * box is the spot's edit box unless a side is wider than sin 60 of the height. The size
+ * follows the range by auto range. The
+ * caller writes the rotation EmitterSpotPitchYawRoll. The box must be at least 24 high;
+ * returns the base if a half extent is below 1.
+ */
+LightProperties emitterSpotFromWorldBox(
+  const vm::bbox3d& box, const LightProperties& base);
+
+/**
+ * Returns the given light as an emitter omni (a sun stays a sun) that fills the given
+ * world-aligned box (draw mode): its bulb at the box's centre and its radius the half
+ * extents. The rotation properties must be removed, as today. The size follows the range
+ * by auto range. Returns the base if a half extent is below 1, or for an omni if the
+ * largest is below 24; a sun's box may be any size.
+ */
+LightProperties emitterOmniFromWorldBox(
+  const vm::bbox3d& box, const LightProperties& base);
+
+/**
+ * A light with the rotation it must be written with.
+ */
+struct OrientedLight
+{
+  LightProperties light;
+  vm::mat3x3d rotation;
+};
+
+/**
+ * Converts a texture spot into an emitter spot: with n = target / |target| and the beam
+ * frame's r (right made perpendicular to n), the emitter's axes in the old light's space
+ * are x = n, y = -r, z = x cross y, turned by the given rotation; coneH = 2 atan(|right|
+ * / |target|) and coneV = 2 atan(|up| / |target|), clamped; range = zNear + zFar; the
+ * origin, the colour and the kept emitter values stay, the target vectors become 0, and
+ * the size follows the range by auto range. With an explicit light_start the emitter's
+ * start is zNear, max(start * n, 8); otherwise the block keeps its own start, 0 for a new
+ * block. Nothing for a degenerate spot or a light that is not a texture spot. The inverse
+ * of textureSpotFromEmitterSpot.
+ */
+std::optional<OrientedLight> emitterSpotFromTextureSpot(
+  const LightProperties& light, const vm::mat3x3d& rotation);
+
+/**
+ * Converts an emitter spot into a texture spot with the same rotation: with T = max(R -
+ * 8, 16), light_target (T, 0, 0), light_right (0, -T tanHalfH, 0), light_up (0, 0, T
+ * tanHalfV), no start or end. The emitter block is disabled and keeps its values. The
+ * light must be a spot. The inverse of emitterSpotFromTextureSpot for a range of 24 or
+ * more.
+ */
+LightProperties textureSpotFromEmitterSpot(const LightProperties& light);
+
+/**
+ * The only way an emitter becomes a texture light: a spot through
+ * textureSpotFromEmitterSpot, an omni and a sun by clearing the flag, since they share
+ * their volume keys. The rotation is unchanged. A light that is not an emitter is
+ * returned unchanged.
+ */
+LightProperties asTextureLight(const LightProperties& light);
+
+/**
+ * The inverse of asTextureLight, the Emitter tab's switch (G0 section 9, kind switch):
+ * the given light of the given entity as an emitter of its own type, and the rotation to
+ * write with it, if any. A kept emitter block (hasEmitterBlock) is enabled again; a light
+ * without one gets the block of a new emitter. A light's first effect is its style's
+ * (emitterEffectForStyle) when the entity has no emit_effect key. A spot's frustum
+ * becomes its forward axis, cone and range (emitterSpotFromTextureSpot), the kept values
+ * staying; a spot without a frustum becomes a new spot pointing down
+ * (seededEmitterLight, emitterSpotRotation). A point light or a sun keeps its volume,
+ * whose keys emitters share, and a new block's size follows its range. A kept block whose
+ * range is out of step with its auto range is brought back with auto range off, as a read
+ * of it would take it (G0 section 5, a hand-set range wins). The policy is the game's
+ * entities.rotation.policy.
+ */
+std::pair<LightProperties, std::optional<vm::mat3x3d>> asEmitterLight(
+  const Entity& entity, const LightProperties& light, EntityRotationPolicy policy);
+
+/**
+ * The given light with the given range by an emitter's rule (G0 section 5): a spot's
+ * three radii are the range, an omni's box is scaled as a whole so that its largest
+ * radius is the range. A sun has no range and is returned unchanged.
+ */
+LightProperties withEmitterRange(const LightProperties& light, double range);
+
+/**
+ * The rotation of an emitter spot whose beam runs along the given direction, with the
+ * roll of the in-engine aim's world-up rule (G0 section 9): axis[0] the direction,
+ * axis[1] = normalize(worldUp x axis[0]), or, when that cross product is shorter than
+ * 0.01, the given previous axis[1] made perpendicular to axis[0]; axis[2] = axis[0] x
+ * axis[1].
+ */
+vm::mat3x3d emitterAimRotation(const vm::vec3d& forward, const vm::vec3d& previousLeft);
+
+/**
+ * The property changes that write the given rotation (column i = axis[i]) to the given
+ * light entity the way the editors write rotation today: idTech4AnglesUpdate with the
+ * matrix's pitch, yaw and roll. Nothing for a degenerate rotation, and nothing when the
+ * entity's rotation (lightRotation under the id Tech 4 policy) already is the given one,
+ * each entry within 1e-6, so that its keys stay as they are.
+ */
+EntityRotationUpdate lightRotationUpdate(
+  const Entity& entity, const vm::mat3x3d& rotation);
+
+/**
+ * The curve and mask inputs of an emitter for lightFalloff and spotMask:
+ * with start' = clamp(start, 0, R - 1), innerRadius = start' / R and falloffExp = k = (R
+ * - start') / max(size, 1); falloff, squareness (shapeExp), penumbra, pattern and energy
+ * clamp as the emitter has them.
+ */
+LightCurve emitterCurve(const LightProperties& light);
+
+/**
+ * The falloff parameter of an emitter at the given local point: the length of the point's
+ * offset from the bulb divided per axis by the radius (a spot's range on every axis). Not
+ * saturated; a sun reads like an omni about its origin.
+ */
+double emitterFalloffT(const LightProperties& light, const vm::vec3d& local);
+
+/**
+ * The spot mask of an emitter at the given local point: with p the offset from the bulb
+ * over the range, a = p.x and safeA = max(a, 1e-4), spotMask((p.y / tanHalfH / safeA,
+ * p.z / tanHalfV / safeA)) in front of the bulb and 0 behind it. 1 for an omni and a sun.
+ */
+double emitterSpotMask(const LightProperties& light, const vm::vec3d& local);
+
+/**
+ * lightFalloff(emitterFalloffT, emitterCurve) times emitterSpotMask: the emitter's
+ * attenuation at the given local point, before colour, pattern and energy clamp.
+ */
+double emitterFalloff(const LightProperties& light, const vm::vec3d& local);
 
 } // namespace tb::mdl

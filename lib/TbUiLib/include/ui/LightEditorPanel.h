@@ -22,9 +22,12 @@
 #include "base/NotifierConnection.h"
 #include "ui/SidebarPanel.h"
 
+#include "vm/mat.h"
+
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 class QLabel;
@@ -55,9 +58,9 @@ class SignalDelayer;
  * light_origin is read-only until it is converted.
  *
  * The editor shows the volume tools first, then the light's type, volume, transform and
- * colour, then a Math and a Texture page with the options of each kind of light, then
+ * colour, then an Emitter and a Texture page with the options of each kind of light, then
  * the flags. The page follows the selected lights; a click on a page's tab makes them
- * lights of its kind: math_enabled is set, and the other math properties are kept.
+ * lights of its kind: emitter is set, and the other emitter properties are kept.
  *
  * Its Draw volume button is the only way to the light volume tool, which is active only
  * to draw a volume: the button activates it in draw mode, follows it when it is
@@ -117,6 +120,19 @@ private:
   void editLightEntities(
     const std::string& commandName,
     const std::function<void(const mdl::Entity&, mdl::LightProperties&)>& edit);
+  /**
+   * Like editLightEntities, but the edit may also return a rotation (column i is the
+   * light's axis[i]) that is written with the light, in the same command.
+   */
+  void editOrientedLights(
+    const std::string& commandName,
+    const std::function<
+      std::optional<vm::mat3x3d>(const mdl::Entity&, mdl::LightProperties&)>& edit);
+  /**
+   * Makes the selected lights lights of the kind of the given page, as a click on its tab
+   * does.
+   */
+  void switchLightKind(int pageIndex);
   void editAngles(std::size_t component, double value);
   void removeTargetProperties(
     const std::string& commandName,

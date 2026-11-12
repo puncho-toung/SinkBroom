@@ -30,6 +30,9 @@
 #include <array>
 #include <cmath>
 #include <numbers>
+#include <optional>
+#include <span>
+#include <vector>
 
 namespace tb::render
 {
@@ -44,6 +47,11 @@ constexpr auto PointSlices = std::size_t{16};
 constexpr auto PointStacks = std::size_t{8};
 constexpr auto PointUniquePoints = 2 + (PointStacks - 1) * PointSlices;
 constexpr auto SpotSegments = std::size_t{32};
+// an emitter spot's round caps (the base's and the core's) have this many rings from
+// their centre to the cone's edge: a fan and one band of quads (RV-C-TP-03)
+constexpr auto EmitterCapRings = std::size_t{2};
+// each of the two arcs that outline an emitter spot's round cap has this many segments
+constexpr auto EmitterCapArcSegments = SpotSegments / 2;
 
 constexpr auto LineAlpha = 0.9;
 constexpr auto CapAlphaScale = 0.5;
@@ -52,9 +60,9 @@ constexpr auto MinBrightness = 0.25;
 constexpr auto MinHueDivisor = 1e-3;
 constexpr auto InnerRadiusSharp = 0.999;
 constexpr auto MinPenumbra = 1e-3;
-// a math light's core gets its own shell or cap from this inner radius on (D55, D69)
+// an emitter's core gets its own shell or cap from this inner radius on (D55, D69)
 constexpr auto MinInnerShellRadius = 0.02;
-// the stand-in shape of a spot light without math, the seed's (D29, D69)
+// the stand-in shape of a texture spot (D29, D69)
 constexpr auto LegacySpotShapeExp = 2.0;
 constexpr auto LegacySpotPenumbra = 0.15;
 // like mdl::pointFalloffT
@@ -290,21 +298,20 @@ std::array<vm::vec2d, SpotSegments> superellipse(const double shapeExp)
 }
 
 /**
- * The shape exponent of a spot light's cone: its math block's, or the stand-in's ellipse
- * without math, whose kept math keys are not read (D63, D69).
+ * The shape exponent of a spot light's cone: an emitter's squareness, or the stand-in's
+ * ellipse for a texture spot.
  */
 double shapeExpOf(const mdl::LightProperties& light)
 {
-  return light.math.enabled ? light.math.shapeExp : LegacySpotShapeExp;
+  return mdl::lightUsesEmitter(light) ? light.emitter.squareness : LegacySpotShapeExp;
 }
 
 /**
- * The penumbra of a spot light: its math block's, or the stand-in's without math (D63,
- * D69).
+ * The penumbra of a spot light: an emitter's, or the stand-in's for a texture spot.
  */
 double penumbraOf(const mdl::LightProperties& light)
 {
-  return light.math.enabled ? light.math.penumbra : LegacySpotPenumbra;
+  return mdl::lightUsesEmitter(light) ? light.emitter.penumbra : LegacySpotPenumbra;
 }
 
 /**
@@ -380,7 +387,7 @@ void addConeSurface(
 void addCap(
   LightVolumeMesh& mesh,
   const vm::vec3d& centre,
-  const std::vector<vm::vec3d>& points,
+  const std::span<const vm::vec3d> points,
   const std::size_t ring,
   const vm::vec4f& color,
   const bool flip)
@@ -395,7 +402,7 @@ void addCap(
 
 void addRingOutline(
   LightVolumeMesh& mesh,
-  const std::vector<vm::vec3d>& points,
+  const std::span<const vm::vec3d> points,
   const std::size_t ring,
   const vm::vec4f& color)
 {
@@ -430,22 +437,105 @@ bool hasPenumbraSurface(const mdl::LightProperties& light)
   return penumbra > MinPenumbra && penumbra < 1.0;
 }
 
+// The functions below take the light's curve, lightVolumeCurve(light), which a mesh
+// build makes once and passes down (DP-G1T-05); the public functions of the same rules
+// make it themselves.
+
 /**
- * Whether a spot light draws the cap of its core at t = inner radius: a math light with
- * an inner radius in [0.02, 0.999), drawn with its translucency bands (D69).
+ * Whether the given curve has a core that is drawn: an emitter's, with an inner radius in
+ * [0.02, 0.999).
  */
-bool hasInnerCap(const mdl::LightProperties& light, const LightVolumeStyle& style)
+bool hasCore(const std::optional<mdl::LightCurve>& curve)
 {
-  return !style.outerShellOnly && lightVolumeHasInnerCap(light);
+  return curve && curve->innerRadius >= MinInnerShellRadius
+         && curve->innerRadius < InnerRadiusSharp;
 }
 
 /**
- * Whether a point light draws the shell of its core at t = inner radius: a math light
+ * lightVolumeAlphaCap with the light's curve.
+ */
+double alphaCapOf(
+  const mdl::LightProperties& light,
+  const std::optional<mdl::LightCurve>& curve,
+  const double alphaCap)
+{
+  // a sun's energy clamp bounds only its HDR colour, not an unbounded core (I2.12)
+  return light.type != mdl::LightType::Sun && curve && !curve->energyClamp ? 1.0
+                                                                           : alphaCap;
+}
+
+/**
+ * lightVolumeBandMeans with the light's curve.
+ */
+std::vector<double> bandMeans(
+  const mdl::LightProperties& light,
+  const std::optional<mdl::LightCurve>& curve,
+  const LightVolumeStyle& style)
+{
+  const auto shells = std::max(style.shells, 1);
+  const auto scale =
+    alphaCapOf(light, curve, style.alphaCap) * lightVolumeBrightness(light.color);
+
+  auto means = std::vector<double>{};
+  means.reserve(size_t(shells));
+
+  auto inner = lightVolumeFalloff(0.0, curve);
+  for (int j = 1; j <= shells; ++j)
+  {
+    const auto outer = lightVolumeFalloff(double(j) / double(shells), curve);
+    means.push_back(scale * (inner + outer) / 2.0);
+    inner = outer;
+  }
+  return means;
+}
+
+/**
+ * lightVolumeShellAlphas with the light's curve.
+ */
+std::vector<double> shellAlphas(
+  const mdl::LightProperties& light,
+  const std::optional<mdl::LightCurve>& curve,
+  const LightVolumeStyle& style)
+{
+  const auto means = bandMeans(light, curve, style);
+  const auto scale = fillScale(style);
+
+  if (style.outerShellOnly)
+  {
+    return {std::clamp(means.front(), 0.0, 1.0) * scale};
+  }
+
+  auto alphas = std::vector<double>(means.size(), 0.0);
+  for (std::size_t j = 0; j < means.size(); ++j)
+  {
+    const auto next = j + 1 < means.size() ? means[j + 1] : 0.0;
+    // behind an opaque outer shell, an inner shell adds nothing
+    const auto alpha = next < 1.0 ? (means[j] - next) / (1.0 - next) : 0.0;
+    alphas[j] = std::clamp(alpha, 0.0, 1.0) * scale;
+  }
+  return alphas;
+}
+
+/**
+ * Whether a spot light draws the cap of its core at t = inner radius: an emitter spot
+ * with an inner radius in [0.02, 0.999), drawn with its translucency bands (D69).
+ */
+bool hasInnerCap(
+  const mdl::LightProperties& light,
+  const std::optional<mdl::LightCurve>& curve,
+  const LightVolumeStyle& style)
+{
+  return !style.outerShellOnly && light.type == mdl::LightType::Spot && hasCore(curve);
+}
+
+/**
+ * Whether a point light draws the shell of its core at t = inner radius: an emitter omni
  * with an inner radius in [0.02, 0.999), drawn with its translucency bands (D55).
  */
-bool hasInnerShell(const mdl::LightProperties& light, const LightVolumeStyle& style)
+bool hasInnerShell(
+  const std::optional<mdl::LightCurve>& curve, const LightVolumeStyle& style)
 {
-  return !style.outerShellOnly && lightVolumeHasInnerShell(light);
+  return !style.outerShellOnly && hasCore(curve);
 }
 
 /**
@@ -466,9 +556,12 @@ int spotBands(const LightVolumeStyle& style)
 /**
  * The factor of a spot light's falloff in its ring alphas: cap b, scaled in 2D.
  */
-double spotAlphaScale(const mdl::LightProperties& light, const LightVolumeStyle& style)
+double spotAlphaScale(
+  const mdl::LightProperties& light,
+  const std::optional<mdl::LightCurve>& curve,
+  const LightVolumeStyle& style)
 {
-  return lightVolumeAlphaCap(light, style.alphaCap) * lightVolumeBrightness(light.color)
+  return alphaCapOf(light, curve, style.alphaCap) * lightVolumeBrightness(light.color)
          * fillScale(style);
 }
 
@@ -477,16 +570,20 @@ double spotAlphaScale(const mdl::LightProperties& light, const LightVolumeStyle&
  * a cap whose alpha is 0 is not drawn.
  */
 float spotCapAlpha(
-  const mdl::LightProperties& light, const LightVolumeStyle& style, const double t)
+  const mdl::LightProperties& light,
+  const std::optional<mdl::LightCurve>& curve,
+  const LightVolumeStyle& style,
+  const double t)
 {
   const auto ringAlpha =
-    float(spotAlphaScale(light, style) * lightVolumeFalloff(t, light.math));
+    float(spotAlphaScale(light, curve, style) * lightVolumeFalloff(t, curve));
   return float(CapAlphaScale * ringAlpha);
 }
 
 void appendPointLight(
   LightVolumeMesh& mesh,
   const mdl::LightProperties& light,
+  const std::optional<mdl::LightCurve>& curve,
   const mdl::LightFrame& frame,
   const LightVolumeStyle& style,
   const vm::vec3d& hue)
@@ -494,9 +591,14 @@ void appendPointLight(
   const auto radius = vm::abs(light.radius);
   const auto flip = vm::compute_determinant(frame.R) < 0.0;
 
+  // an emitter omni's shells and box are centred on its bulb, origin + R light_center
+  const auto bulb =
+    mdl::lightUsesEmitter(light) ? mdl::emitterBulb(light) : vm::vec3d{0, 0, 0};
+  const auto shellFrame = mdl::LightFrame{toWorld(frame, bulb), frame.R};
+
   if (hasVolume(radius))
   {
-    const auto alphas = lightVolumeShellAlphas(light, style);
+    const auto alphas = shellAlphas(light, curve, style);
     const auto shells = alphas.size();
     for (std::size_t j = 0; j < shells; ++j)
     {
@@ -505,7 +607,7 @@ void appendPointLight(
       {
         const auto first = mesh.triangles.size();
         const auto t = style.outerShellOnly ? 1.0 : double(j + 1) / double(shells);
-        addEllipsoid(mesh, frame, flip, radius * t, vertexColor(hue, alphas[j]));
+        addEllipsoid(mesh, shellFrame, flip, radius * t, vertexColor(hue, alphas[j]));
         addRange(
           mesh,
           j + 1 == shells ? mdl::LightElement::OuterShell : mdl::LightElement::Band,
@@ -513,18 +615,18 @@ void appendPointLight(
       }
     }
 
-    if (hasInnerShell(light, style))
+    if (hasInnerShell(curve, style))
     {
       const auto first = mesh.triangles.size();
-      const auto t = light.math.innerRadius;
+      const auto t = curve->innerRadius;
       addEllipsoid(
-        mesh, frame, flip, radius * t, vertexColor(hue, innerShellAlpha(alphas, t)));
+        mesh, shellFrame, flip, radius * t, vertexColor(hue, innerShellAlpha(alphas, t)));
       addRange(mesh, mdl::LightElement::InnerShell, first);
     }
   }
 
   const auto lineColor = vertexColor(hue, LineAlpha);
-  addBoxLines(mesh, boxCorners(frame, radius), lineColor);
+  addBoxLines(mesh, boxCorners(shellFrame, radius), lineColor);
 
   if (light.hasCenter)
   {
@@ -540,6 +642,7 @@ void appendPointLight(
 void appendSpotLight(
   LightVolumeMesh& mesh,
   const mdl::LightProperties& light,
+  const std::optional<mdl::LightCurve>& curve,
   const mdl::LightFrame& frame,
   const LightVolumeStyle& style,
   const vm::vec3d& hue)
@@ -558,13 +661,14 @@ void appendSpotLight(
   const auto bands = spotBands(style);
   auto depths = std::vector<double>{};
   auto ringColors = std::vector<vm::vec4f>{};
-  const auto alphaScale = spotAlphaScale(light, style);
+  const auto alphaScale = spotAlphaScale(light, curve, style);
   for (int j = 0; j <= bands; ++j)
   {
     const auto t = double(j) / double(bands);
     depths.push_back(frustum->zNear + frustum->zFar * t);
+    // a texture spot: the stand-in curve
     ringColors.push_back(
-      vertexColor(hue, alphaScale * lightVolumeFalloff(t, light.math)));
+      vertexColor(hue, alphaScale * lightVolumeFalloff(t, std::nullopt)));
   }
 
   const auto ring = spotRing(light);
@@ -588,7 +692,7 @@ void appendSpotLight(
 
     const auto capColor = [&](const std::size_t j, const double t) {
       auto color = ringColors[j];
-      color[3] = spotCapAlpha(light, style, t);
+      color[3] = spotCapAlpha(light, curve, style, t);
       return color;
     };
 
@@ -607,27 +711,6 @@ void appendSpotLight(
     const auto farCentre = toWorld(frame, mdl::spotPoint(light, 0, 0, depths.back()));
     addCap(mesh, farCentre, outer, lastRing, capColor(lastRing, 1.0), flip);
     addRange(mesh, mdl::LightElement::Base, first);
-  }
-
-  // the end of a math light's core, wound like the far cap so that it faces the base,
-  // drawn even at alpha 0 so that it can be picked and highlighted (D69)
-  auto innerCapRing = std::vector<vm::vec3d>{};
-  if (hasInnerCap(light, style))
-  {
-    const auto t = light.math.innerRadius;
-    const auto depth = frustum->zNear + frustum->zFar * t;
-    innerCapRing = coneRings(light, frame, ring, 1.0, std::vector{depth});
-
-    const auto first = mesh.triangles.size();
-    const auto centre = toWorld(frame, mdl::spotPoint(light, 0, 0, depth));
-    addCap(
-      mesh,
-      centre,
-      innerCapRing,
-      0,
-      vertexColor(hue, spotCapAlpha(light, style, t)),
-      flip);
-    addRange(mesh, mdl::LightElement::InnerCap, first);
   }
 
   const auto lineColor = vertexColor(hue, LineAlpha);
@@ -650,15 +733,12 @@ void appendSpotLight(
       coneRings(light, frame, ring, 1.0 - penumbraOf(light), std::vector{depths.back()});
     addRingOutline(mesh, penumbra, 0, lineColor);
   }
-  if (!innerCapRing.empty())
-  {
-    addRingOutline(mesh, innerCapRing, 0, lineColor);
-  }
 }
 
 void appendSun(
   LightVolumeMesh& mesh,
   const mdl::LightProperties& light,
+  const std::optional<mdl::LightCurve>& curve,
   const mdl::LightFrame& frame,
   const LightVolumeStyle& style,
   const vm::vec3d& hue)
@@ -668,7 +748,7 @@ void appendSun(
   const auto corners = boxCorners(frame, radius);
 
   // the falloff of a sun is 1 everywhere
-  const auto alpha = lightVolumeAlphaCap(light, style.alphaCap)
+  const auto alpha = alphaCapOf(light, curve, style.alphaCap)
                      * lightVolumeBrightness(light.color) * fillScale(style);
   const auto first = mesh.triangles.size();
   addBoxFill(mesh, corners, flip, vertexColor(hue, alpha));
@@ -697,96 +777,308 @@ void appendSun(
   }
 }
 
-} // namespace
-
-bool lightVolumeHasInnerShell(const mdl::LightProperties& light)
+/**
+ * The local direction from an emitter spot's bulb through the point (u, v) of the unit
+ * superellipse scaled by the given factor: forward along x, cone h along y, cone v
+ * along z.
+ */
+vm::vec3d emitterSpotDirection(
+  const double tanHalfH, const double tanHalfV, const vm::vec2d& uv, const double scale)
 {
-  return light.math.enabled && light.math.innerRadius >= MinInnerShellRadius
-         && light.math.innerRadius < InnerRadiusSharp;
+  return vm::normalize(
+    vm::vec3d{1.0, scale * uv.x() * tanHalfH, scale * uv.y() * tanHalfV});
 }
 
-bool lightVolumeHasInnerCap(const mdl::LightProperties& light)
+/**
+ * The tangents of an emitter spot's two half angles, computed once per light.
+ */
+struct EmitterCone
 {
-  return light.type == mdl::LightType::Spot && lightVolumeHasInnerShell(light);
+  double tanHalfH;
+  double tanHalfV;
+};
+
+EmitterCone emitterCone(const mdl::LightProperties& light)
+{
+  return {
+    mdl::emitterTanHalf(light.emitter.coneH), mdl::emitterTanHalf(light.emitter.coneV)};
 }
 
-double lightVolumeFalloff(const double t, const mdl::MathLightProperties& math)
+using EmitterRing = std::array<vm::vec3d, SpotSegments>;
+
+/**
+ * The world points of one ring of an emitter spot's cone, scaled by the given factor, at
+ * the given distance from its bulb, on the sphere of that distance.
+ */
+EmitterRing emitterConeRing(
+  const EmitterCone& cone,
+  const mdl::LightFrame& frame,
+  const std::array<vm::vec2d, SpotSegments>& ring,
+  const double scale,
+  const double distance)
 {
-  if (!math.enabled)
+  auto points = EmitterRing{};
+  for (std::size_t i = 0; i < SpotSegments; ++i)
   {
-    return std::clamp(mdl::legacyFalloff(t), 0.0, 1.0);
+    points[i] = toWorld(
+      frame,
+      distance * emitterSpotDirection(cone.tanHalfH, cone.tanHalfV, ring[i], scale));
   }
-  if (math.innerRadius >= InnerRadiusSharp)
+  return points;
+}
+
+/**
+ * The world points of an emitter spot's cone, scaled by the given factor, ring by ring at
+ * the given distances from its bulb: each ring lies on the sphere of its distance.
+ */
+std::vector<vm::vec3d> emitterConeRings(
+  const EmitterCone& cone,
+  const mdl::LightFrame& frame,
+  const std::array<vm::vec2d, SpotSegments>& ring,
+  const double scale,
+  const std::vector<double>& distances)
+{
+  auto points = std::vector<vm::vec3d>{};
+  points.reserve(distances.size() * SpotSegments);
+  for (const auto distance : distances)
   {
-    return 1.0;
+    for (const auto& uv : ring)
+    {
+      points.push_back(toWorld(
+        frame, distance * emitterSpotDirection(cone.tanHalfH, cone.tanHalfV, uv, scale)));
+    }
   }
-  return std::clamp(mdl::lightFalloff(t, math), 0.0, 1.0);
+  return points;
 }
 
-double lightVolumeAlphaCap(const mdl::LightProperties& light, const double alphaCap)
+/**
+ * Appends the lateral surface of an emitter spot's cone between the given rings, wound
+ * like addConeSurface. Its first ring is the bulb, where the first triangle of each quad
+ * has no area, so the first band is a fan.
+ */
+void addEmitterConeSurface(
+  LightVolumeMesh& mesh,
+  const std::vector<vm::vec3d>& points,
+  const std::vector<vm::vec4f>& ringColors,
+  const bool flip)
 {
-  // a sun's energy clamp bounds only its HDR colour, not an unbounded core (I2.12)
-  return light.type != mdl::LightType::Sun && light.math.enabled
-             && !light.math.energyClamp
-           ? 1.0
-           : alphaCap;
-}
+  const auto rings = ringColors.size();
+  const auto at = [&](const std::size_t i, const std::size_t j) -> const vm::vec3d& {
+    return points[j * SpotSegments + (i % SpotSegments)];
+  };
 
-vm::vec3d lightVolumeHue(const vm::vec3d& color)
-{
-  const auto divisor = std::max(vm::get_max_component(color), MinHueDivisor);
-  return vm::clamp(color / divisor, vm::vec3d{0, 0, 0}, vm::vec3d{1, 1, 1});
-}
-
-double lightVolumeBrightness(const vm::vec3d& color)
-{
-  return std::clamp(vm::get_max_component(color), MinBrightness, 1.0);
-}
-
-std::vector<double> lightVolumeBandMeans(
-  const mdl::LightProperties& light, const LightVolumeStyle& style)
-{
-  const auto shells = std::max(style.shells, 1);
-  const auto scale =
-    lightVolumeAlphaCap(light, style.alphaCap) * lightVolumeBrightness(light.color);
-
-  auto means = std::vector<double>{};
-  means.reserve(size_t(shells));
-
-  auto inner = lightVolumeFalloff(0.0, light.math);
-  for (int j = 1; j <= shells; ++j)
+  for (std::size_t j = 0; j + 1 < rings; ++j)
   {
-    const auto outer = lightVolumeFalloff(double(j) / double(shells), light.math);
-    means.push_back(scale * (inner + outer) / 2.0);
-    inner = outer;
+    for (std::size_t i = 0; i < SpotSegments; ++i)
+    {
+      const auto& a = at(i, j);
+      const auto& b = at(i + 1, j);
+      const auto& c = at(i + 1, j + 1);
+      const auto& d = at(i, j + 1);
+      const auto& cj = ringColors[j];
+      const auto& cj1 = ringColors[j + 1];
+      if (j != 0)
+      {
+        addTriangle(mesh, flip, a, b, c, cj, cj, cj1);
+      }
+      addTriangle(mesh, flip, a, c, d, cj, cj1, cj1);
+    }
   }
-  return means;
 }
 
-std::vector<double> lightVolumeShellAlphas(
-  const mdl::LightProperties& light, const LightVolumeStyle& style)
+/**
+ * Appends the round cap of an emitter spot at the given distance from its bulb, the part
+ * of that sphere inside the cone: a fan around the axis and EmitterCapRings - 1 bands of
+ * quads out to the cone's edge (one band at two rings), all wound like a fan of addCap.
+ * Returns its outermost ring, the cone's edge on that sphere.
+ */
+EmitterRing addEmitterCap(
+  LightVolumeMesh& mesh,
+  const EmitterCone& cone,
+  const mdl::LightFrame& frame,
+  const std::array<vm::vec2d, SpotSegments>& ring,
+  const double distance,
+  const vm::vec4f& color,
+  const bool flip)
 {
-  const auto means = lightVolumeBandMeans(light, style);
-  const auto scale = fillScale(style);
-
-  if (style.outerShellOnly)
+  // ring k at (k + 1) / EmitterCapRings of the cone's edge, on the sphere
+  auto rings = std::array<EmitterRing, EmitterCapRings>{};
+  for (std::size_t k = 0; k < EmitterCapRings; ++k)
   {
-    return {std::clamp(means.front(), 0.0, 1.0) * scale};
+    rings[k] = emitterConeRing(
+      cone, frame, ring, double(k + 1) / double(EmitterCapRings), distance);
   }
 
-  auto alphas = std::vector<double>(means.size(), 0.0);
-  for (std::size_t j = 0; j < means.size(); ++j)
+  addCap(mesh, toWorld(frame, vm::vec3d{distance, 0, 0}), rings.front(), 0, color, flip);
+  for (std::size_t k = 0; k + 1 < EmitterCapRings; ++k)
   {
-    const auto next = j + 1 < means.size() ? means[j + 1] : 0.0;
-    // behind an opaque outer shell, an inner shell adds nothing
-    const auto alpha = next < 1.0 ? (means[j] - next) / (1.0 - next) : 0.0;
-    alphas[j] = std::clamp(alpha, 0.0, 1.0) * scale;
+    const auto& inner = rings[k];
+    const auto& outer = rings[k + 1];
+    for (std::size_t i = 0; i < SpotSegments; ++i)
+    {
+      const auto j = (i + 1) % SpotSegments;
+      addTriangle(mesh, flip, inner[i], outer[i], outer[j], color, color, color);
+      addTriangle(mesh, flip, inner[i], outer[j], inner[j], color, color, color);
+    }
   }
-  return alphas;
+  return rings.back();
 }
 
-LightVolumeMeshSize lightVolumeMeshSize(
+/**
+ * Whether an emitter spot's round cap is outlined by its two arcs: where it is not filled
+ * (an unselected light) and in a 2D view, where its dome is seen from the side.
+ */
+bool hasEmitterCapArcs(const LightVolumeStyle& style)
+{
+  return style.outerShellOnly || style.twoD;
+}
+
+/**
+ * Appends the two arcs of an emitter spot's round cap through its axis, in the planes of
+ * cone h (forward and axis[1]) and cone v (forward and axis[2]), from rim to rim on the
+ * sphere of the given range, so that the drawn light reaches its range on the axis.
+ */
+void addEmitterCapArcs(
+  LightVolumeMesh& mesh,
   const mdl::LightProperties& light,
+  const mdl::LightFrame& frame,
+  const double range,
+  const vm::vec4f& color)
+{
+  for (const auto& [axis, cone] :
+       {std::pair{std::size_t{1}, light.emitter.coneH},
+        std::pair{std::size_t{2}, light.emitter.coneV}})
+  {
+    const auto halfAngle = std::atan(mdl::emitterTanHalf(cone));
+    const auto at = [&](const std::size_t i) {
+      const auto angle =
+        halfAngle * (2.0 * double(i) / double(EmitterCapArcSegments) - 1.0);
+      auto local = vm::vec3d{range * std::cos(angle), 0, 0};
+      local[axis] = range * std::sin(angle);
+      return toWorld(frame, local);
+    };
+    // each point of the arc once (RV2-TP-03)
+    auto previous = at(0);
+    for (std::size_t i = 1; i <= EmitterCapArcSegments; ++i)
+    {
+      const auto next = at(i);
+      addLine(mesh, previous, next, color);
+      previous = next;
+    }
+  }
+}
+
+void appendEmitterSpot(
+  LightVolumeMesh& mesh,
+  const mdl::LightProperties& light,
+  const std::optional<mdl::LightCurve>& curve,
+  const mdl::LightFrame& frame,
+  const LightVolumeStyle& style,
+  const vm::vec3d& hue)
+{
+  const auto range = mdl::emitterRange(light.radius);
+  if (range < DegenerateRadius)
+  {
+    return;
+  }
+
+  // the light's own axes (forward, cone h, cone v) keep the orientation of the (u, v, d)
+  // space that the cone is wound for; only a mirrored rotation reverses it
+  const auto flip = vm::compute_determinant(frame.R) > 0.0;
+
+  // the rings at t = j / bands on the spheres about the bulb, the first the bulb itself
+  const auto bands = spotBands(style);
+  auto distances = std::vector<double>{};
+  auto ringColors = std::vector<vm::vec4f>{};
+  // one allocation each (RV2-TP-06)
+  distances.reserve(std::size_t(bands) + 1);
+  ringColors.reserve(std::size_t(bands) + 1);
+  const auto alphaScale = spotAlphaScale(light, curve, style);
+  for (int j = 0; j <= bands; ++j)
+  {
+    const auto t = double(j) / double(bands);
+    distances.push_back(range * t);
+    ringColors.push_back(vertexColor(hue, alphaScale * lightVolumeFalloff(t, curve)));
+  }
+
+  // the two tangents once for every ring of the light
+  const auto cone = emitterCone(light);
+  const auto ring = spotRing(light);
+  const auto outer = emitterConeRings(cone, frame, ring, 1.0, distances);
+  const auto lastRing = distances.size() - 1;
+
+  const auto firstFunnel = mesh.triangles.size();
+  addEmitterConeSurface(mesh, outer, ringColors, flip);
+  addRange(mesh, mdl::LightElement::Funnel, firstFunnel);
+
+  const auto hasPenumbra = hasPenumbraSurface(light);
+  if (!style.outerShellOnly)
+  {
+    if (hasPenumbra)
+    {
+      const auto first = mesh.triangles.size();
+      const auto inner =
+        emitterConeRings(cone, frame, ring, 1.0 - penumbraOf(light), distances);
+      addEmitterConeSurface(mesh, inner, ringColors, flip);
+      addRange(mesh, mdl::LightElement::Penumbra, first);
+    }
+
+    // the round cap is drawn even at alpha 0, so that it can be picked and highlighted
+    auto capColor = ringColors[lastRing];
+    capColor[3] = spotCapAlpha(light, curve, style, 1.0);
+    const auto first = mesh.triangles.size();
+    addEmitterCap(mesh, cone, frame, ring, range, capColor, flip);
+    addRange(mesh, mdl::LightElement::Base, first);
+  }
+
+  // the end of the core at the start, wound like the base so that it faces away from
+  // the bulb, drawn even at alpha 0 so that it can be picked and highlighted; its
+  // outermost ring is the ring of its outline
+  auto innerCapRing = std::optional<EmitterRing>{};
+  if (hasInnerCap(light, curve, style))
+  {
+    const auto t = curve->innerRadius;
+    const auto first = mesh.triangles.size();
+    innerCapRing = addEmitterCap(
+      mesh,
+      cone,
+      frame,
+      ring,
+      range * t,
+      vertexColor(hue, spotCapAlpha(light, curve, style, t)),
+      flip);
+    addRange(mesh, mdl::LightElement::InnerCap, first);
+  }
+
+  const auto lineColor = vertexColor(hue, LineAlpha);
+  // four edges from the bulb to the rim, a quarter turn apart
+  for (std::size_t i = 0; i < SpotSegments; i += SpotSegments / 4)
+  {
+    addLine(mesh, frame.origin, outer[lastRing * SpotSegments + i], lineColor);
+  }
+  addRingOutline(mesh, outer, lastRing, lineColor);
+  if (hasPenumbra)
+  {
+    const auto penumbra =
+      emitterConeRing(cone, frame, ring, 1.0 - penumbraOf(light), range);
+    addRingOutline(mesh, penumbra, 0, lineColor);
+  }
+  if (innerCapRing)
+  {
+    addRingOutline(mesh, *innerCapRing, 0, lineColor);
+  }
+  if (hasEmitterCapArcs(style))
+  {
+    addEmitterCapArcs(mesh, light, frame, range, lineColor);
+  }
+}
+
+/**
+ * lightVolumeMeshSize with the light's curve.
+ */
+LightVolumeMeshSize meshSize(
+  const mdl::LightProperties& light,
+  const std::optional<mdl::LightCurve>& curve,
   const LightVolumeStyle& style,
   const std::optional<vm::vec3d>& entityOrigin)
 {
@@ -804,32 +1096,61 @@ LightVolumeMeshSize lightVolumeMeshSize(
   case mdl::LightType::Point:
     if (hasVolume(vm::abs(light.radius)))
     {
-      const auto alphas = lightVolumeShellAlphas(light, style);
+      const auto alphas = shellAlphas(light, curve, style);
       size.ranges = std::size_t(
         std::ranges::count_if(alphas, [](const auto alpha) { return alpha > 0.0; }));
-      size.ranges += hasInnerShell(light, style) ? 1 : 0;
+      size.ranges += hasInnerShell(curve, style) ? 1 : 0;
       size.triangles = size.ranges * unitSphere().triangles.size();
     }
     size.lines = BoxLineVertices + (light.hasCenter ? CrossLineVertices : 0);
     break;
   case mdl::LightType::Spot:
+    if (mdl::lightUsesEmitter(light))
+    {
+      if (mdl::emitterRange(light.radius) >= DegenerateRadius)
+      {
+        // the cone's first band is a fan from the bulb; a round cap is a fan and quads
+        constexpr auto EmitterCapVertices =
+          (SpotSegments + (EmitterCapRings - 1) * SpotSegments * 2) * 3;
+        const auto surfaceVertices =
+          SpotSegments * (std::size_t(spotBands(style)) * 2 - 1) * 3;
+        const auto penumbra = hasPenumbraSurface(light);
+        const auto innerCap = hasInnerCap(light, curve, style);
+        size.triangles = surfaceVertices;
+        size.ranges = 1;
+        if (!style.outerShellOnly)
+        {
+          size.triangles += (penumbra ? surfaceVertices : 0) + EmitterCapVertices;
+          size.ranges += (penumbra ? 1 : 0) + 1;
+        }
+        if (innerCap)
+        {
+          size.triangles += EmitterCapVertices;
+          size.ranges += 1;
+        }
+        // two vertices per arc segment, two arcs
+        constexpr auto CapArcVertices = EmitterCapArcSegments * 2 * 2;
+        size.lines = 4 * 2 + OutlineVertices + (penumbra ? OutlineVertices : 0)
+                     + (innerCap ? OutlineVertices : 0)
+                     + (hasEmitterCapArcs(style) ? CapArcVertices : 0);
+      }
+      break;
+    }
     if (mdl::spotLightFrustum(light))
     {
       const auto surfaceVertices = SpotSegments * std::size_t(spotBands(style)) * 6;
       size.triangles = surfaceVertices;
       size.ranges = 1;
-      const auto innerCap = hasInnerCap(light, style);
       if (!style.outerShellOnly)
       {
         const auto penumbra = hasPenumbraSurface(light);
-        const auto nearCap = spotCapAlpha(light, style, 0.0) > 0.0f;
-        size.triangles += (penumbra ? surfaceVertices : 0) + (nearCap ? CapVertices : 0)
-                          + CapVertices + (innerCap ? CapVertices : 0);
-        size.ranges += (penumbra ? 1 : 0) + (nearCap ? 1 : 0) + 1 + (innerCap ? 1 : 0);
+        const auto nearCap = spotCapAlpha(light, curve, style, 0.0) > 0.0f;
+        size.triangles +=
+          (penumbra ? surfaceVertices : 0) + (nearCap ? CapVertices : 0) + CapVertices;
+        size.ranges += (penumbra ? 1 : 0) + (nearCap ? 1 : 0) + 1;
       }
       size.lines = FrustumLineVertices + 2 * OutlineVertices
-                   + (hasPenumbraSurface(light) ? OutlineVertices : 0)
-                   + (innerCap ? OutlineVertices : 0);
+                   + (hasPenumbraSurface(light) ? OutlineVertices : 0);
     }
     break;
   case mdl::LightType::Sun:
@@ -847,9 +1168,13 @@ LightVolumeMeshSize lightVolumeMeshSize(
   return size;
 }
 
-void appendLightVolumeMesh(
+/**
+ * appendLightVolumeMesh with the light's curve.
+ */
+void appendMesh(
   LightVolumeMesh& mesh,
   const mdl::LightProperties& light,
+  const std::optional<mdl::LightCurve>& curve,
   const mdl::LightFrame& frame,
   const LightVolumeStyle& style,
   const std::optional<vm::vec3d>& entityOrigin)
@@ -859,13 +1184,20 @@ void appendLightVolumeMesh(
   switch (light.type)
   {
   case mdl::LightType::Point:
-    appendPointLight(mesh, light, frame, style, hue);
+    appendPointLight(mesh, light, curve, frame, style, hue);
     break;
   case mdl::LightType::Spot:
-    appendSpotLight(mesh, light, frame, style, hue);
+    if (mdl::lightUsesEmitter(light))
+    {
+      appendEmitterSpot(mesh, light, curve, frame, style, hue);
+    }
+    else
+    {
+      appendSpotLight(mesh, light, curve, frame, style, hue);
+    }
     break;
   case mdl::LightType::Sun:
-    appendSun(mesh, light, frame, style, hue);
+    appendSun(mesh, light, curve, frame, style, hue);
     break;
     switchDefault();
   }
@@ -876,20 +1208,117 @@ void appendLightVolumeMesh(
   }
 }
 
+} // namespace
+
+bool lightVolumeHasInnerShell(const mdl::LightProperties& light)
+{
+  return hasCore(lightVolumeCurve(light));
+}
+
+bool lightVolumeHasInnerCap(const mdl::LightProperties& light)
+{
+  return light.type == mdl::LightType::Spot && lightVolumeHasInnerShell(light);
+}
+
+double lightVolumeFalloff(const double t, const std::optional<mdl::LightCurve>& curve)
+{
+  if (!curve)
+  {
+    return std::clamp(mdl::legacyFalloff(t), 0.0, 1.0);
+  }
+  if (curve->innerRadius >= InnerRadiusSharp)
+  {
+    return 1.0;
+  }
+  return std::clamp(mdl::lightFalloff(t, *curve), 0.0, 1.0);
+}
+
+std::optional<mdl::LightCurve> lightVolumeCurve(const mdl::LightProperties& light)
+{
+  return mdl::lightUsesEmitter(light) ? std::optional{mdl::emitterCurve(light)}
+                                      : std::nullopt;
+}
+
+double lightVolumeAlphaCap(const mdl::LightProperties& light, const double alphaCap)
+{
+  return alphaCapOf(light, lightVolumeCurve(light), alphaCap);
+}
+
+vm::vec3d lightVolumeHue(const vm::vec3d& color)
+{
+  const auto divisor = std::max(vm::get_max_component(color), MinHueDivisor);
+  return vm::clamp(color / divisor, vm::vec3d{0, 0, 0}, vm::vec3d{1, 1, 1});
+}
+
+double lightVolumeBrightness(const vm::vec3d& color)
+{
+  return std::clamp(vm::get_max_component(color), MinBrightness, 1.0);
+}
+
+std::vector<double> lightVolumeBandMeans(
+  const mdl::LightProperties& light, const LightVolumeStyle& style)
+{
+  return bandMeans(light, lightVolumeCurve(light), style);
+}
+
+std::vector<double> lightVolumeShellAlphas(
+  const mdl::LightProperties& light, const LightVolumeStyle& style)
+{
+  return shellAlphas(light, lightVolumeCurve(light), style);
+}
+
+LightVolumeMeshSize lightVolumeMeshSize(
+  const mdl::LightProperties& light,
+  const LightVolumeStyle& style,
+  const std::optional<vm::vec3d>& entityOrigin)
+{
+  // a sun's size needs no curve
+  const auto curve =
+    light.type != mdl::LightType::Sun ? lightVolumeCurve(light) : std::nullopt;
+  return meshSize(light, curve, style, entityOrigin);
+}
+
+void appendLightVolumeMesh(
+  LightVolumeMesh& mesh,
+  const mdl::LightProperties& light,
+  const mdl::LightFrame& frame,
+  const LightVolumeStyle& style,
+  const std::optional<vm::vec3d>& entityOrigin)
+{
+  appendMesh(mesh, light, lightVolumeCurve(light), frame, style, entityOrigin);
+}
+
 LightVolumeMesh buildLightVolumeMesh(
   const mdl::LightProperties& light,
   const mdl::LightFrame& frame,
   const LightVolumeStyle& style,
   const std::optional<vm::vec3d>& entityOrigin)
 {
-  const auto size = lightVolumeMeshSize(light, style, entityOrigin);
+  // the curve once for the size and the mesh
+  const auto curve = lightVolumeCurve(light);
+  const auto size = meshSize(light, curve, style, entityOrigin);
 
   auto mesh = LightVolumeMesh{};
   mesh.triangles.reserve(size.triangles);
   mesh.lines.reserve(size.lines);
   mesh.ranges.reserve(size.ranges);
-  appendLightVolumeMesh(mesh, light, frame, style, entityOrigin);
+  appendMesh(mesh, light, curve, frame, style, entityOrigin);
   return mesh;
+}
+
+std::vector<vm::vec3d> emitterSpotRing(
+  const mdl::LightProperties& light,
+  const mdl::LightFrame& frame,
+  const double distance,
+  const double scale)
+{
+  if (light.type != mdl::LightType::Spot || !mdl::lightUsesEmitter(light))
+  {
+    return {};
+  }
+  const auto points =
+    emitterConeRing(emitterCone(light), frame, spotRing(light), scale, distance);
+  return {points.begin(), points.end()};
 }
 
 } // namespace tb::render

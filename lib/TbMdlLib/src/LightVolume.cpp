@@ -26,6 +26,8 @@
 #include "kd/contracts.h"
 
 #include "vm/intersection.h"
+#include "vm/mat_ext.h"
+#include "vm/scalar.h"
 #include "vm/vec.h"
 
 #include <algorithm>
@@ -46,9 +48,6 @@ constexpr auto MinVisibleThreshold = 0.01;
 constexpr auto MaxVisibleThreshold = 0.5;
 constexpr auto VisibleFalloffSteps = 24;
 
-// a math light with an inner radius from here on is uniform to its edge (D43)
-constexpr auto InnerRadiusSharp = 0.999;
-
 // R_ComputeSpotLightProjectionMatrix
 constexpr auto SpotLightMinZNear = 8.0;
 constexpr auto SpotLightMinZFar = 16.0;
@@ -57,12 +56,29 @@ constexpr auto SpotLightMinZFar = 16.0;
 constexpr auto MinSpotBoxDepth = 24.0;
 constexpr auto MinHalfExtent = 1.0;
 
+// a face of an edited box nearer than this to the base box's face did not move
+constexpr auto BoxFaceEpsilon = 1e-6;
+
 // the tolerance of a centred spot light
 constexpr auto CentredRelativeEpsilon = 1e-4;
 constexpr auto CentredAbsoluteEpsilon = 0.01;
 
 // the smallest shape exponent of a superellipse
 constexpr auto MinShapeExp = 1e-3;
+
+// the in-engine aim keeps axis[1] level while worldUp x axis[0] is at least this long
+constexpr auto AimLevelEpsilon = 0.01;
+
+// two rotations whose entries agree to this are the same rotation
+constexpr auto SameRotationEpsilon = 1e-6;
+
+// a point of an emitter cap this close outside the ring of its cone is still on the cap
+// (D69)
+constexpr auto RingEpsilon = 1e-6;
+
+// lightBoundingSphere bounds a frame whose R^T R is off the identity by at most this
+// in any entry; a frame further off, a scale, has no bound
+constexpr auto MaxFrameError = 0.1;
 
 /**
  * HLSL's saturate, which unlike std::clamp maps NaN to 0.
@@ -169,19 +185,6 @@ constexpr auto CornerUVs = std::array<std::array<double, 2>, 4>{{
   {1.0, 1.0},
   {-1.0, 1.0},
 }};
-
-vm::mat3x3d rotationPart(const vm::mat4x4d& m)
-{
-  auto result = vm::mat3x3d{};
-  for (std::size_t c = 0; c < 3; ++c)
-  {
-    for (std::size_t r = 0; r < 3; ++r)
-    {
-      result[c][r] = m[c][r];
-    }
-  }
-  return result;
-}
 
 /**
  * The index of the component with the smallest absolute value, the first of equal ones.
@@ -318,11 +321,204 @@ std::optional<LightProperties> spotFromEditBox(
 }
 
 /**
- * The falloff of the given light that visibleFalloffT compares with its threshold.
+ * The falloff of a light that visibleFalloffT compares with its threshold: the stand-in
+ * curve, at most 1.
  */
-double visibleFalloff(const double t, const MathLightProperties& math)
+double visibleFalloff(const double t)
 {
-  return std::min(math.enabled ? lightFalloff(t, math) : legacyFalloff(t), 1.0);
+  return std::min(legacyFalloff(t), 1.0);
+}
+
+vm::mat4x4d rotationMatrix4(const vm::mat3x3d& R)
+{
+  auto result = vm::mat4x4d::identity();
+  for (std::size_t c = 0; c < 3; ++c)
+  {
+    for (std::size_t r = 0; r < 3; ++r)
+    {
+      result[c][r] = R[c][r];
+    }
+  }
+  return result;
+}
+
+/**
+ * An emitter ignores the target vectors; they are 0, as parseLightProperties leaves them.
+ */
+void clearTargetVectors(LightProperties& light)
+{
+  light.target = vm::vec3d{0, 0, 0};
+  light.right = vm::vec3d{0, 0, 0};
+  light.up = vm::vec3d{0, 0, 0};
+  light.explicitStartEnd = false;
+  light.start = vm::vec3d{0, 0, 0};
+  light.end = vm::vec3d{0, 0, 0};
+  light.badTargetInfo = false;
+}
+
+bool faceMoved(const double edited, const double base)
+{
+  return std::abs(edited - base) > BoxFaceEpsilon;
+}
+
+bool lateralFacesMoved(const vm::bbox3d& box, const vm::bbox3d& base, const std::size_t i)
+{
+  return faceMoved(box.min[i], base.min[i]) || faceMoved(box.max[i], base.max[i]);
+}
+
+/**
+ * The half extent of an emitter spot's box along the lateral axis i after an edit: the
+ * cone is symmetric, so a single moved face sets it by its distance to the axis; with
+ * both faces or neither moved it is half the width.
+ */
+double lateralHalfExtent(
+  const vm::bbox3d& box, const vm::bbox3d& base, const std::size_t i)
+{
+  const auto minMoved = faceMoved(box.min[i], base.min[i]);
+  const auto maxMoved = faceMoved(box.max[i], base.max[i]);
+  if (minMoved && !maxMoved)
+  {
+    return std::abs(box.min[i]);
+  }
+  if (maxMoved && !minMoved)
+  {
+    return std::abs(box.max[i]);
+  }
+  return (box.max[i] - box.min[i]) / 2.0;
+}
+
+std::optional<LightProperties> emitterOmniFromEditBox(
+  const LightProperties& base,
+  const vm::mat3x3d& rotation,
+  const vm::bbox3d& box,
+  const vm::bbox3d& baseBox)
+{
+  auto halfExtents = box.size() / 2.0;
+  if (
+    halfExtents.x() < MinHalfExtent || halfExtents.y() < MinHalfExtent
+    || halfExtents.z() < MinHalfExtent)
+  {
+    return std::nullopt;
+  }
+
+  // the range floor (G0 section 5): a drag that would leave the largest radius below 24
+  // ends on 24; the dragged radii are held, in proportion, so that the largest is 24,
+  // each about its face that did not move (about the centre when both moved)
+  auto heldBox = box;
+  if (vm::get_max_component(halfExtents) < MinEmitterRange)
+  {
+    auto dragged = 0.0;
+    for (std::size_t i = 0; i < 3; ++i)
+    {
+      if (lateralFacesMoved(box, baseBox, i))
+      {
+        dragged = std::max(dragged, halfExtents[i]);
+      }
+    }
+    if (dragged <= 0.0)
+    {
+      return std::nullopt;
+    }
+    for (std::size_t i = 0; i < 3; ++i)
+    {
+      const auto minMoved = faceMoved(box.min[i], baseBox.min[i]);
+      const auto maxMoved = faceMoved(box.max[i], baseBox.max[i]);
+      if (minMoved || maxMoved)
+      {
+        halfExtents[i] *= MinEmitterRange / dragged;
+        const auto centre = !maxMoved   ? box.max[i] - halfExtents[i]
+                            : !minMoved ? box.min[i] + halfExtents[i]
+                                        : (box.min[i] + box.max[i]) / 2.0;
+        heldBox.min[i] = centre - halfExtents[i];
+        heldBox.max[i] = centre + halfExtents[i];
+      }
+    }
+  }
+
+  auto light = base;
+  // the box is centred on the bulb, which light_center keeps apart from the origin
+  light.origin = base.origin + rotation * (heldBox.center() - emitterBulb(base));
+  light.radius = halfExtents;
+  light.equalRadius = equalComponents(halfExtents);
+
+  return faceMoved(emitterRange(light.radius), emitterRange(base.radius))
+           ? applyEmitterAutoRange(light, EmitterEdit::Range)
+           : light;
+}
+
+std::optional<LightProperties> emitterSpotFromEditBox(
+  const LightProperties& base,
+  const vm::mat3x3d& rotation,
+  const vm::bbox3d& box,
+  const vm::bbox3d& baseBox)
+{
+  // the range floor (G0 section 5): a far face dragged nearer than 24 to the bulb ends
+  // on 24
+  const auto range = std::max(box.max.x() - box.min.x(), MinEmitterRange);
+  const auto halfH = lateralHalfExtent(box, baseBox, 1);
+  const auto halfV = lateralHalfExtent(box, baseBox, 2);
+  if (halfH < MinHalfExtent || halfV < MinHalfExtent)
+  {
+    return std::nullopt;
+  }
+
+  auto light = base;
+  // the near face is the bulb, which has no handle of its own
+  light.origin = base.origin + rotation * vm::vec3d{box.min.x(), 0, 0};
+  light.radius = vm::vec3d{range, range, range};
+  light.equalRadius = true;
+
+  // a cone angle whose side faces stayed is kept, so that the sides follow the far face;
+  // a side face at distance e from the axis sets 2 asin(e / R), clamped
+  if (lateralFacesMoved(box, baseBox, 1))
+  {
+    light.emitter.coneH = emitterConeFromSinHalf(halfH / range);
+  }
+  if (lateralFacesMoved(box, baseBox, 2))
+  {
+    light.emitter.coneV = emitterConeFromSinHalf(halfV / range);
+  }
+
+  return faceMoved(range, emitterRange(base.radius))
+           ? applyEmitterAutoRange(light, EmitterEdit::Range)
+           : light;
+}
+
+/**
+ * Whether the given local point is inside an emitter's lit shape: an omni's ellipsoid
+ * about its bulb, a spot's cone up to its range, a sun's box.
+ */
+bool emitterContainsPoint(const LightProperties& light, const vm::vec3d& local)
+{
+  switch (light.type)
+  {
+  case LightType::Point:
+    return pointFalloffT(local - emitterBulb(light), vm::abs(light.radius)) <= 1.0;
+  case LightType::Sun:
+    return pointLightLocalBox(light).contains(local);
+  case LightType::Spot: {
+    const auto a = local.x();
+    if (a <= 0.0 || vm::length(local) > emitterRange(light.radius))
+    {
+      return false;
+    }
+    const auto u = local.y() / (a * emitterTanHalf(light.emitter.coneH));
+    const auto v = local.z() / (a * emitterTanHalf(light.emitter.coneV));
+    return superellipseRadius(u, v, light.emitter.squareness) <= 1.0;
+  }
+    switchDefault();
+  }
+}
+
+/**
+ * Whether the given local point in front of an emitter spot's bulb (x above 0) lies
+ * inside the ring of its cone, the superellipse of its squareness.
+ */
+bool insideEmitterRing(const LightProperties& light, const vm::vec3d& local)
+{
+  const auto u = local.y() / (local.x() * emitterTanHalf(light.emitter.coneH));
+  const auto v = local.z() / (local.x() * emitterTanHalf(light.emitter.coneV));
+  return superellipseRadius(u, v, light.emitter.squareness) <= 1.0 + RingEpsilon;
 }
 
 } // namespace
@@ -365,7 +561,7 @@ std::ostream& operator<<(std::ostream& lhs, const LightElement rhs)
 
 vm::mat3x3d lightRotation(const Entity& entity, const EntityRotationPolicy policy)
 {
-  const auto R = rotationPart(entityRotation(entity, policy));
+  const auto R = vm::slice<3, 3>(entityRotation(entity, policy), 0, 0);
 
   // upstream's angle and Euler parses read nan and inf: no rotation, like an unread angle
   for (std::size_t c = 0; c < 3; ++c)
@@ -471,6 +667,11 @@ bool isCentredSpot(const LightProperties& light)
 
 std::optional<vm::bbox3d> lightEditBox(const LightProperties& light)
 {
+  if (light.emitter.enabled)
+  {
+    return emitterEditBox(light);
+  }
+
   switch (light.type)
   {
   case LightType::Point:
@@ -496,27 +697,21 @@ std::optional<vm::bbox3d> lightEditBox(const LightProperties& light)
   }
 }
 
-double visibleFalloffT(const LightProperties& light, const double threshold)
+double visibleFalloffT(const LightProperties&, const double threshold)
 {
-  const auto& math = light.math;
-  if (math.enabled && math.innerRadius >= InnerRadiusSharp)
-  {
-    return 1.0;
-  }
-
   const auto level = std::clamp(threshold, MinVisibleThreshold, MaxVisibleThreshold);
-  if (visibleFalloff(1.0, math) >= level)
+  if (visibleFalloff(1.0) >= level)
   {
     return 1.0;
   }
 
-  // every falloff curve decreases from t = 0 to t = 1
+  // the curve decreases from t = 0 to t = 1
   auto visible = 0.0;
   auto invisible = 1.0;
   for (auto step = 0; step < VisibleFalloffSteps; ++step)
   {
     const auto t = (visible + invisible) / 2.0;
-    if (visibleFalloff(t, math) >= level)
+    if (visibleFalloff(t) >= level)
     {
       visible = t;
     }
@@ -531,7 +726,7 @@ double visibleFalloffT(const LightProperties& light, const double threshold)
 std::optional<vm::bbox3d> lightEditBox(
   const LightProperties& light, const double threshold)
 {
-  if (light.type != LightType::Point)
+  if (light.type != LightType::Point || light.emitter.enabled)
   {
     return lightEditBox(light);
   }
@@ -547,6 +742,11 @@ std::optional<vm::bbox3d> lightEditBox(
 std::optional<LightProperties> lightFromEditBox(
   const LightProperties& base, const vm::mat3x3d& rotation, const vm::bbox3d& box)
 {
+  if (base.emitter.enabled)
+  {
+    return emitterFromEditBox(base, rotation, box);
+  }
+
   switch (base.type)
   {
   case LightType::Point:
@@ -564,7 +764,7 @@ std::optional<LightProperties> lightFromEditBox(
   const vm::bbox3d& box,
   const double threshold)
 {
-  return base.type == LightType::Point
+  return base.type == LightType::Point && !base.emitter.enabled
            ? pointFromEditBox(base, rotation, box, visibleFalloffT(base, threshold))
            : lightFromEditBox(base, rotation, box);
 }
@@ -604,6 +804,11 @@ bool containsPoint(
 {
   const auto local = vm::transpose(frame.R) * (world - frame.origin);
 
+  if (light.emitter.enabled)
+  {
+    return emitterContainsPoint(light, local);
+  }
+
   switch (light.type)
   {
   case LightType::Point:
@@ -630,13 +835,76 @@ bool containsPoint(
   }
 }
 
-double lightFalloff(const double t, const MathLightProperties& math)
+std::pair<vm::vec3d, double> lightBoundingSphere(
+  const LightProperties& light, const LightFrame& frame)
 {
-  const auto k = math.falloffExp;
-  const auto inner = math.innerRadius;
+  constexpr auto Unbounded = std::numeric_limits<double>::infinity();
+
+  // an emitter omni's volume is centred on its bulb, every other volume on the origin
+  const auto bulb = light.emitter.enabled ? emitterBulb(light) : vm::vec3d{0, 0, 0};
+  const auto centre =
+    light.emitter.enabled ? frame.origin + frame.R * bulb : frame.origin;
+
+  // how far R is from a rotation (RV2-TP-01): a rounded matrix key is off by about 0.01
+  const auto gram = vm::transpose(frame.R) * frame.R - vm::mat3x3d::identity();
+  auto e = 0.0;
+  for (std::size_t c = 0; c < 3; ++c)
+  {
+    e = std::max(e, vm::get_max_component(vm::abs(gram[c])));
+  }
+  if (!(e <= MaxFrameError))
+  {
+    return {centre, Unbounded};
+  }
+  const auto stretch = 1.0 / std::sqrt(1.0 - 3.0 * e);
+
+  // the bounds below hold in the light's local space, about the bulb
+  const auto radius = vm::abs(light.radius);
+  auto reach = Unbounded;
+  switch (light.type)
+  {
+  case LightType::Point:
+    // an ellipsoid of the radii about the centre
+    reach = vm::get_max_component(radius);
+    break;
+  case LightType::Sun:
+    // the box of the radii about the origin
+    reach = vm::length(radius);
+    break;
+  case LightType::Spot:
+    if (light.emitter.enabled)
+    {
+      // the cone up to the sphere of its range about the bulb
+      reach = emitterRange(light.radius);
+    }
+    else if (const auto frustum = spotLightFrustum(light))
+    {
+      // the frustum is the convex hull of its corners
+      reach = 0.0;
+      for (const auto& corners : {frustum->nearCorners, frustum->farCorners})
+      {
+        for (const auto& corner : corners)
+        {
+          reach = std::max(reach, vm::length(corner));
+        }
+      }
+    }
+    break;
+    switchDefault();
+  }
+
+  // the tests behind it compare with <= 1 in their own arithmetic
+  const auto world = stretch * (reach + 3.0 * e * vm::length(bulb));
+  return {centre, std::isfinite(world) ? world * (1.0 + 1e-6) + 1e-6 : Unbounded};
+}
+
+double lightFalloff(const double t, const LightCurve& curve)
+{
+  const auto k = curve.falloffExp;
+  const auto inner = curve.innerRadius;
   const auto u = saturate((t - inner) / std::max(1.0 - inner, 1e-3));
 
-  switch (math.falloff)
+  switch (curve.falloff)
   {
   case LightFalloff::Linear:
     return 1.0 - u;
@@ -667,17 +935,17 @@ double legacyFalloff(const double t)
   return 1.0 - smoothstep(0.0, 1.0, t);
 }
 
-double spotMask(const double u, const double v, const MathLightProperties& math)
+double spotMask(const double u, const double v, const LightCurve& curve)
 {
-  const auto k = math.shapeExp;
+  const auto k = curve.shapeExp;
   const auto r = std::pow(std::pow(std::abs(u), k) + std::pow(std::abs(v), k), 1.0 / k);
 
   // smoothstep(1, 1, r) divides by zero
-  if (math.penumbra <= 0.0)
+  if (curve.penumbra <= 0.0)
   {
     return r >= 1.0 ? 0.0 : 1.0;
   }
-  return 1.0 - smoothstep(1.0 - math.penumbra, 1.0, r);
+  return 1.0 - smoothstep(1.0 - curve.penumbra, 1.0, r);
 }
 
 double spotFalloffT(const double d, const double zNear, const double zFar)
@@ -834,6 +1102,428 @@ std::optional<double> intersectRaySpotBase(
 {
   const auto s = spot(light);
   return s ? intersectRaySpotCap(light, frame, s->zNear + s->zFar, ray) : std::nullopt;
+}
+
+vm::vec3d emitterBulb(const LightProperties& light)
+{
+  return light.type == LightType::Point && light.hasCenter ? light.center
+                                                           : vm::vec3d{0, 0, 0};
+}
+
+std::optional<double> intersectRayEmitterCap(
+  const LightProperties& light,
+  const LightFrame& frame,
+  const double radius,
+  const bool fromInside,
+  const vm::ray3d& ray)
+{
+  const auto origin = vm::transpose(frame.R) * (ray.origin - frame.origin);
+  const auto direction = vm::transpose(frame.R) * ray.direction;
+
+  // |origin + s direction| = radius
+  const auto a = vm::dot(direction, direction);
+  const auto b = vm::dot(origin, direction);
+  const auto c = vm::dot(origin, origin) - radius * radius;
+  const auto discriminant = b * b - a * c;
+  if (a <= 0.0 || discriminant < 0.0)
+  {
+    return std::nullopt;
+  }
+
+  const auto root = std::sqrt(discriminant);
+  const auto crossings = std::array{(-b - root) / a, (-b + root) / a};
+  // the first crossing is where the ray enters the sphere, the second where it leaves
+  for (std::size_t i = 0; i < (fromInside ? 2u : 1u); ++i)
+  {
+    const auto distance = crossings[i];
+    const auto point = origin + distance * direction;
+    if (distance >= 0.0 && point.x() > 0.0 && insideEmitterRing(light, point))
+    {
+      return distance;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<vm::bbox3d> emitterEditBox(const LightProperties& light)
+{
+  if (hasDegenerateRadius(light.radius))
+  {
+    return std::nullopt;
+  }
+
+  switch (light.type)
+  {
+  case LightType::Point: {
+    const auto bulb = emitterBulb(light);
+    return vm::bbox3d{bulb - light.radius, bulb + light.radius};
+  }
+  case LightType::Spot: {
+    // the bounding box of the lit cone, which ends on the sphere of its range: its side
+    // faces touch the cone where it is widest (G0 section 9)
+    const auto range = emitterRange(light.radius);
+    const auto halfH = range * emitterSinHalf(light.emitter.coneH);
+    const auto halfV = range * emitterSinHalf(light.emitter.coneV);
+    return vm::bbox3d{vm::vec3d{0.0, -halfH, -halfV}, vm::vec3d{range, halfH, halfV}};
+  }
+  case LightType::Sun:
+    return vm::bbox3d{-light.radius, light.radius};
+    switchDefault();
+  }
+}
+
+std::optional<LightProperties> emitterFromEditBox(
+  const LightProperties& base, const vm::mat3x3d& rotation, const vm::bbox3d& box)
+{
+  const auto baseBox = emitterEditBox(base);
+  if (!baseBox)
+  {
+    return std::nullopt;
+  }
+
+  if (base.type == LightType::Sun)
+  {
+    return pointFromEditBox(base, rotation, box, 1.0);
+  }
+
+  // a box of the same size was moved
+  if (vm::is_equal(box.size(), baseBox->size(), BoxFaceEpsilon))
+  {
+    auto light = base;
+    light.origin = base.origin + rotation * (box.min - baseBox->min);
+    return light;
+  }
+
+  return base.type == LightType::Spot
+           ? emitterSpotFromEditBox(base, rotation, box, *baseBox)
+           : emitterOmniFromEditBox(base, rotation, box, *baseBox);
+}
+
+vm::mat3x3d emitterSpotRotation()
+{
+  // as entityRotation reads id Tech 4 angles: roll, then pitch, then yaw
+  const auto& angles = EmitterSpotPitchYawRoll;
+  return vm::slice<3, 3>(
+    vm::rotation_matrix(
+      vm::to_radians(angles.z()), vm::to_radians(angles.x()), vm::to_radians(angles.y())),
+    0,
+    0);
+}
+
+LightProperties emitterSpotFromWorldBox(
+  const vm::bbox3d& box, const LightProperties& base)
+{
+  const auto size = box.size();
+  const auto height = size.z();
+  contract_pre(height >= MinSpotBoxDepth);
+
+  // the box's half extent along each lateral axis of the new spot, from its matrix
+  const auto R = emitterSpotRotation();
+  const auto halfSize = size / 2.0;
+  const auto halfH = vm::dot(vm::abs(R[1]), halfSize);
+  const auto halfV = vm::dot(vm::abs(R[2]), halfSize);
+  if (halfH < MinHalfExtent || halfV < MinHalfExtent)
+  {
+    return base;
+  }
+
+  auto light = base;
+  clearTargetVectors(light);
+  light.type = LightType::Spot;
+  light.emitter.enabled = true;
+  light.emitter.hasBlock = true;
+  light.origin = vm::vec3d{box.center().x(), box.center().y(), box.max.z()};
+  light.radius = vm::vec3d{height, height, height};
+  light.equalRadius = true;
+  light.hasCenter = false;
+  light.center = vm::vec3d{0, 0, 0};
+  // so that the drawn box is the spot's edit box, unless a side is wider than sin 60 of
+  // the height
+  light.emitter.coneH = emitterConeFromSinHalf(halfH / height);
+  light.emitter.coneV = emitterConeFromSinHalf(halfV / height);
+
+  return applyEmitterAutoRange(light, EmitterEdit::Range);
+}
+
+LightProperties emitterOmniFromWorldBox(
+  const vm::bbox3d& box, const LightProperties& base)
+{
+  // a point-light box smaller than 24 makes no light; a sun's box may be any size
+  const auto halfExtents = box.size() / 2.0;
+  if (
+    halfExtents.x() < MinHalfExtent || halfExtents.y() < MinHalfExtent
+    || halfExtents.z() < MinHalfExtent
+    || (base.type != LightType::Sun && vm::get_max_component(halfExtents) < MinEmitterRange))
+  {
+    return base;
+  }
+
+  auto light = base;
+  clearTargetVectors(light);
+  light.type = base.type == LightType::Sun ? LightType::Sun : LightType::Point;
+  light.emitter.enabled = true;
+  light.emitter.hasBlock = true;
+  light.radius = halfExtents;
+  light.equalRadius = equalComponents(halfExtents);
+  // the rotation keys are removed, so the bulb is origin + light_center
+  light.origin = box.center() - emitterBulb(light);
+
+  return applyEmitterAutoRange(light, EmitterEdit::Range);
+}
+
+std::optional<OrientedLight> emitterSpotFromTextureSpot(
+  const LightProperties& light, const vm::mat3x3d& rotation)
+{
+  if (light.type != LightType::Spot || light.emitter.enabled)
+  {
+    return std::nullopt;
+  }
+
+  const auto s = spot(light);
+  const auto beam = beamFrame(light);
+  if (!s || !beam)
+  {
+    return std::nullopt;
+  }
+
+  // forward along the beam; y is minus right, so that the inverse writes right as the
+  // engine's right, which is minus left
+  auto axes = vm::mat3x3d{};
+  axes[0] = s->n;
+  axes[1] = -beam->r;
+  axes[2] = vm::cross(axes[0], axes[1]);
+
+  const auto range = s->zNear + s->zFar;
+
+  auto result = light;
+  result.emitter.enabled = true;
+  result.emitter.hasBlock = true;
+  result.emitter.coneH =
+    emitterConeFromTanHalf(vm::length(light.right) / s->targetLength);
+  result.emitter.coneV = emitterConeFromTanHalf(vm::length(light.up) / s->targetLength);
+  result.radius = vm::vec3d{range, range, range};
+  result.equalRadius = true;
+  result.hasCenter = false;
+  result.center = vm::vec3d{0, 0, 0};
+  // an explicit light_start is where the old light began: the emitter starts there too;
+  // otherwise the block keeps its own start, 0 for a new block
+  if (light.explicitStartEnd)
+  {
+    result.emitter.start = s->zNear;
+  }
+  clearTargetVectors(result);
+
+  // the kind switch is no range edit (G0 section 5): a kept linear or smooth block keeps
+  // its auto range flag, which a Range edit would turn off
+  auto converted = applyEmitterAutoRange(result, EmitterEdit::Range);
+  converted.emitter.autoRange = result.emitter.autoRange;
+
+  return OrientedLight{
+    std::move(converted),
+    rotation * axes,
+  };
+}
+
+LightProperties textureSpotFromEmitterSpot(const LightProperties& light)
+{
+  contract_pre(light.type == LightType::Spot);
+
+  // the engine's near plane is at 8 and its far plane at 8 + T, so the beam ends at R
+  const auto T =
+    std::max(emitterRange(light.radius) - SpotLightMinZNear, SpotLightMinZFar);
+
+  auto result = light;
+  result.emitter.enabled = false;
+  result.badTargetInfo = false;
+  result.target = vm::vec3d{T, 0, 0};
+  result.right = vm::vec3d{0, -T * emitterTanHalf(light.emitter.coneH), 0};
+  result.up = vm::vec3d{0, 0, T * emitterTanHalf(light.emitter.coneV)};
+  result.explicitStartEnd = false;
+  result.start = vm::vec3d{0, 0, 0};
+  result.end = result.target;
+
+  // a texture spot reads no radius and no centre: the values parseLightProperties leaves
+  result.radius = vm::vec3d{300, 300, 300};
+  result.equalRadius = true;
+  result.hasCenter = false;
+  result.center = vm::vec3d{0, 0, 0};
+  return result;
+}
+
+LightProperties asTextureLight(const LightProperties& light)
+{
+  if (!light.emitter.enabled)
+  {
+    return light;
+  }
+  if (light.type == LightType::Spot)
+  {
+    return textureSpotFromEmitterSpot(light);
+  }
+
+  // an omni and a sun share their volume keys with a texture light
+  auto result = light;
+  result.emitter.enabled = false;
+  return result;
+}
+
+std::pair<LightProperties, std::optional<vm::mat3x3d>> asEmitterLight(
+  const Entity& entity, const LightProperties& light, const EntityRotationPolicy policy)
+{
+  const auto keptBlock = hasEmitterBlock(entity);
+
+  auto block = light.emitter;
+  if (keptBlock)
+  {
+    block.enabled = true;
+    block.hasBlock = true;
+  }
+  else
+  {
+    block = seededEmitterProperties();
+  }
+  // a light's first effect is its style's: style and emit_effect select the same
+  // predefined styles (G0 section 9, kind switch)
+  if (!entity.hasProperty(LightPropertyKeys::EmitEffect))
+  {
+    block.effect = emitterEffectForStyle(light.style);
+  }
+
+  // the test of a hand-set range, made where the kept block comes back (DP-T5-02), so
+  // that the light does not keep a stored "1" that it does not honour
+  const auto withHandSetTest = [&](LightProperties result) {
+    if (keptBlock && emitterRangeSetByHand(result))
+    {
+      result.emitter.autoRange = false;
+    }
+    return result;
+  };
+
+  if (light.type != LightType::Spot)
+  {
+    auto result = light;
+    result.emitter = block;
+    return {
+      keptBlock ? withHandSetTest(result)
+                : applyEmitterAutoRange(result, EmitterEdit::Range),
+      std::nullopt};
+  }
+
+  // the conversion reads the texture spot with the block it will enable
+  auto texture = light;
+  texture.emitter = block;
+  texture.emitter.enabled = false;
+  if (
+    const auto oriented =
+      emitterSpotFromTextureSpot(texture, lightRotation(entity, policy)))
+  {
+    return {withHandSetTest(oriented->light), oriented->rotation};
+  }
+  return {seededEmitterLight(LightType::Spot, light), emitterSpotRotation()};
+}
+
+LightProperties withEmitterRange(const LightProperties& light, const double range)
+{
+  auto result = light;
+  if (light.type == LightType::Spot)
+  {
+    result.radius = vm::vec3d{range, range, range};
+    result.equalRadius = true;
+  }
+  else if (light.type == LightType::Point)
+  {
+    const auto largest = emitterRange(light.radius);
+    result.radius =
+      largest > 0.0 ? light.radius * (range / largest) : vm::vec3d{range, range, range};
+  }
+  return result;
+}
+
+vm::mat3x3d emitterAimRotation(const vm::vec3d& forward, const vm::vec3d& previousLeft)
+{
+  auto axes = vm::mat3x3d{};
+  axes[0] = vm::normalize(forward);
+
+  // the in-engine aim's rule: the roll keeps axis[1] level, unless the beam is within
+  // 0.01 of vertical, where the previous axis[1] is kept
+  const auto level = vm::cross(vm::vec3d{0, 0, 1}, axes[0]);
+  const auto left = vm::length(level) >= AimLevelEpsilon
+                      ? level
+                      : previousLeft - vm::dot(previousLeft, axes[0]) * axes[0];
+  axes[1] = vm::normalize(left);
+  axes[2] = vm::cross(axes[0], axes[1]);
+  return axes;
+}
+
+EntityRotationUpdate lightRotationUpdate(
+  const Entity& entity, const vm::mat3x3d& rotation)
+{
+  // the same rotation is no edit, even where its angles would be written differently
+  if (vm::is_equal(
+        lightRotation(entity, EntityRotationPolicy::IdTech4),
+        rotation,
+        SameRotationEpsilon))
+  {
+    return {};
+  }
+
+  const auto yawPitchRoll =
+    entityYawPitchRoll(vm::mat4x4d::identity(), rotationMatrix4(rotation));
+  if (vm::is_nan(yawPitchRoll))
+  {
+    return {};
+  }
+  return idTech4AnglesUpdate(
+    entity, vm::vec3d{yawPitchRoll.y(), yawPitchRoll.x(), yawPitchRoll.z()});
+}
+
+LightCurve emitterCurve(const LightProperties& light)
+{
+  const auto& emitter = light.emitter;
+  const auto range = emitterRange(light.radius);
+  const auto start = clampEmitterStart(emitter.start, range);
+
+  return LightCurve{
+    .falloff = emitter.falloff,
+    .falloffExp = (range - start) / std::max(emitter.size, 1.0),
+    .innerRadius = range > 0.0 ? start / range : 0.0,
+    .shapeExp = emitter.squareness,
+    .penumbra = emitter.penumbra,
+    .pattern = emitter.pattern,
+    .patternStrength = emitter.patternStrength,
+    .patternScale = emitter.patternScale,
+    .patternPhase = emitter.patternPhase,
+    .energyClamp = emitter.energyClamp,
+  };
+}
+
+double emitterFalloffT(const LightProperties& light, const vm::vec3d& local)
+{
+  const auto range = emitterRange(light.radius);
+  const auto radius = light.type == LightType::Spot ? vm::vec3d{range, range, range}
+                                                    : vm::abs(light.radius);
+  return pointFalloffT(local - emitterBulb(light), radius);
+}
+
+double emitterSpotMask(const LightProperties& light, const vm::vec3d& local)
+{
+  if (light.type != LightType::Spot)
+  {
+    return 1.0;
+  }
+
+  // the shader's p: the offset from the bulb in units of the range
+  const auto p = local / emitterRange(light.radius);
+  const auto safeA = std::max(p.x(), 1e-4);
+  const auto u = p.y() / (emitterTanHalf(light.emitter.coneH) * safeA);
+  const auto v = p.z() / (emitterTanHalf(light.emitter.coneV) * safeA);
+  return p.x() > 0.0 ? spotMask(u, v, emitterCurve(light)) : 0.0;
+}
+
+double emitterFalloff(const LightProperties& light, const vm::vec3d& local)
+{
+  return lightFalloff(emitterFalloffT(light, local), emitterCurve(light))
+         * emitterSpotMask(light, local);
 }
 
 } // namespace tb::mdl

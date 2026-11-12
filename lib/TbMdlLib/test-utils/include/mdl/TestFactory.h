@@ -28,6 +28,7 @@ class Brush;
 class BrushNode;
 class Map;
 class PatchNode;
+struct LightProperties;
 
 BrushNode* createBrushNode(
   const Map& map,
@@ -35,5 +36,17 @@ BrushNode* createBrushNode(
   const std::function<void(mdl::Brush&)>& brushFunc = [](mdl::Brush&) {});
 
 PatchNode* createPatchNode(const std::string& materialName = "material");
+
+/**
+ * An emitter omni at the defaults of its keys (seededEmitterProperties), radius 288, its
+ * bulb at its origin.
+ */
+LightProperties makeEmitterOmni();
+
+/**
+ * An emitter spot at the defaults of its keys (seededEmitterProperties) with the given
+ * range, a new spot's cone of 60 degrees, its forward axis the frame's x.
+ */
+LightProperties makeEmitterSpot(double range = 288.0);
 
 } // namespace tb::mdl

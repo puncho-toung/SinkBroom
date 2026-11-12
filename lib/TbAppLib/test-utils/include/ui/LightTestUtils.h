@@ -45,13 +45,7 @@ namespace ui
 inline constexpr auto DefaultThreshold = 0.10;
 
 /**
- * The t at which the seeded math block (D29, linear, inner radius 0.1) is visible at
- * the default threshold: u = (t - 0.1) / 0.9 = 0.9.
- */
-inline constexpr auto SeededVisibleT = 0.91;
-
-/**
- * The t at which a light without math is visible at the given level, where
+ * The t at which a texture light is visible at the given level, where
  * 1 - smoothstep(t) is the level: smoothstep(t) = 1 - level, whose inverse is
  * 1/2 - sin(asin(1 - 2 y) / 3) (D61). A point light's handle box is +-radius * t.
  */

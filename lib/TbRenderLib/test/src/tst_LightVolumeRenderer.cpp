@@ -27,14 +27,17 @@
 #include "gl/Shaders.h"
 #include "gl/TestUtils.h"
 #include "gl/VboManager.h"
+#include "gl/Vertex.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityNode.h"
 #include "mdl/GameConfig.h"
+#include "mdl/Light.h"
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
 #include "mdl/Map_NodeVisibility.h"
 #include "mdl/Map_Nodes.h"
 #include "mdl/Map_Selection.h"
+#include "render/LightVolumeMesh.h"
 #include "render/LightVolumeRenderer.h"
 #include "render/RenderBatch.h"
 #include "render/RenderContext.h"
@@ -44,9 +47,12 @@
 
 #include "vm/mat.h"
 #include "vm/vec.h"
+#include "vm/vec_io.h" // IWYU pragma: keep
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -323,6 +329,13 @@ TEST_CASE("LightVolumeRenderer")
       REQUIRE(renderer->unselectedRanges().size() == 2);
       CHECK(renderer->unselectedRanges()[0].fillCount == 224 * 3);
       CHECK(!renderer->unselectedRanges()[0].selected);
+      // the centre and reach that the frame tests read, set once per build
+      for (const auto& range : renderer->unselectedRanges())
+      {
+        const auto [centre, reach] = mdl::lightBoundingSphere(range.props, range.frame);
+        CHECK(range.centre == centre);
+        CHECK(range.reach == reach);
+      }
 
       mdl::hideNodes(map, {otherLight});
       renderer->invalidate();
@@ -602,6 +615,207 @@ TEST_CASE("LightVolumeRenderer")
       CHECK(vboManager.currentVboCount() == vboCount);
       CHECK(!recorder.events.empty());
     }
+  }
+
+  SECTION("emitters")
+  {
+    SECTION("a selected emitter spot is collected as its cone and round cap")
+    {
+      auto* spotLight = new mdl::EntityNode{mdl::Entity{{
+        {"classname", "light"},
+        {"origin", "0 0 512"},
+        {"angles", "90 0 0"},
+        {"light_radius", "288 288 288"},
+        {"emitter", "1"},
+        {"emit_shape", "spot"},
+      }}};
+      mdl::addNodes(map, {{&mdl::parentForNodes(map), {spotLight}}});
+      mdl::deselectAll(map);
+      mdl::selectNodes(map, {spotLight});
+
+      renderer->invalidate();
+      renderer->collect(map, LightVolumeVisibility::Selected, style);
+      REQUIRE(renderer->selectedRanges().size() == 1);
+      const auto& range = renderer->selectedRanges().front();
+      CHECK(mdl::lightUsesEmitter(range.props));
+      CHECK(range.fillCount > 0);
+      CHECK(range.fillCount == lightVolumeMeshSize(range.props, style).triangles);
+    }
+
+    SECTION("an emitter omni is drawn back to front by its bulb")
+    {
+      // its origin is next to the camera at -1000, its bulb at 2000 is the farthest
+      auto* emitterLight = new mdl::EntityNode{mdl::Entity{{
+        {"classname", "light"},
+        {"origin", "-900 0 0"},
+        {"light_radius", "64 64 64"},
+        {"light_center", "2900 0 0"},
+        {"emitter", "1"},
+        {"emit_shape", "omni"},
+      }}};
+      mdl::addNodes(map, {{&mdl::parentForNodes(map), {emitterLight}}});
+      renderer->invalidate();
+
+      renderFrame(outside, LightVolumeVisibility::All);
+      REQUIRE(renderer->unselectedRanges().size() == 3);
+      REQUIRE(renderer->selectedRanges().size() == 1);
+
+      const auto firstOf = [&](const mdl::EntityNode* node) {
+        const auto iRange = std::ranges::find_if(
+          renderer->unselectedRanges(),
+          [&](const auto& range) { return range.node == node; });
+        REQUIRE(iRange != renderer->unselectedRanges().end());
+        return GLint(iRange->fillFirst);
+      };
+
+      // the emitter at 3000 and the other light at 2000 in one run, then the selected
+      // light at 1000
+      auto triangleFirsts = std::vector<std::vector<GLint>>{};
+      for (const auto& draw : recorder.multiDraws)
+      {
+        if (draw.mode == GL_TRIANGLES)
+        {
+          triangleFirsts.push_back(draw.firsts);
+        }
+      }
+      CHECK(
+        triangleFirsts
+        == std::vector<std::vector<GLint>>{
+          {firstOf(emitterLight), firstOf(otherLight)},
+          {GLint(renderer->selectedRanges().front().fillFirst)},
+        });
+    }
+  }
+}
+
+TEST_CASE("mdl::lightBoundingSphere holds what the renderer and the tool test")
+{
+  // the per-frame tests read a centre and a reach set once per build, not the light
+  // (RV-C-TP-04): every point that containsPoint accepts lies within the reach, and so
+  // does every vertex of the light's mesh, which the tool's surface picks test; also in a
+  // frame read from a matrix key with the engine's two decimals (RV2-TP-01)
+  const auto policy = mdl::EntityRotationPolicy::IdTech4;
+  const auto rotations = std::vector<std::vector<mdl::EntityProperty>>{
+    {},
+    {{"angles", "20 35 10"}},
+    {{"rotation", "0.71 0.71 0 -0.71 0.71 0 0 0 1"}},
+    // yaw 35, pitch 20, roll 10 rounded to two decimals
+    {{"rotation", "0.77 -0.52 0.38 0.54 0.84 0.05 -0.34 0.16 0.93"}},
+  };
+  struct Case
+  {
+    std::string name;
+    std::vector<mdl::EntityProperty> properties;
+    vm::vec3d centre;
+  };
+  const auto origin = vm::vec3d{16, -32, 8};
+  const auto cases = std::vector<Case>{
+    {"texture point", {{"light_radius", "300 200 100"}}, origin},
+    {"texture point with a centre",
+     {{"light_radius", "300 300 300"}, {"light_center", "100 0 0"}},
+     origin},
+    {"texture spot",
+     {{"light_target", "0 0 -256"},
+      {"light_up", "0 -128 0"},
+      {"light_right", "-128 0 0"},
+      {"light_start", "0 0 -32"},
+      {"light_end", "0 0 -400"}},
+     origin},
+    {"texture sun", {{"light_radius", "300 200 100"}, {"parallel", "1"}}, origin},
+    {"emitter omni about its bulb",
+     {{"emitter", "1"},
+      {"emit_shape", "omni"},
+      {"light_radius", "300 200 100"},
+      {"light_center", "100 0 0"}},
+     vm::vec3d{0, 0, 0}},
+    {"emitter spot",
+     {{"emitter", "1"},
+      {"emit_shape", "spot"},
+      {"light_radius", "288 288 288"},
+      {"emit_cone", "100 40"},
+      {"emit_square", "8"}},
+     origin},
+    {"emitter sun",
+     {{"emitter", "1"},
+      {"emit_shape", "sun"},
+      {"light_radius", "300 200 100"},
+      {"light_center", "0 0 1"}},
+     origin},
+  };
+
+  for (const auto& [name, properties, centre] : cases)
+  {
+    for (std::size_t rotation = 0; rotation < rotations.size(); ++rotation)
+    {
+      CAPTURE(name, rotation);
+      auto all =
+        std::vector<mdl::EntityProperty>{{"classname", "light"}, {"origin", "16 -32 8"}};
+      all.insert(all.end(), properties.begin(), properties.end());
+      all.insert(all.end(), rotations[rotation].begin(), rotations[rotation].end());
+      const auto entity = mdl::Entity{all};
+      const auto light = mdl::parseLightProperties(entity);
+      const auto frame = mdl::lightFrame(entity, policy);
+      const auto [rangeCentre, reach] = mdl::lightBoundingSphere(light, frame);
+
+      // an emitter omni's centre is its bulb in the world
+      const auto expectedCentre = mdl::lightUsesEmitter(light)
+                                    ? frame.origin + frame.R * mdl::emitterBulb(light)
+                                    : frame.origin;
+      CHECK(rangeCentre == expectedCentre);
+      // a rounded matrix key keeps the bound
+      CHECK(std::isfinite(reach));
+      if (name == "emitter omni about its bulb" && rotation == 0)
+      {
+        CHECK(rangeCentre == vm::vec3d{116, -32, 8});
+      }
+
+      for (const auto outerShellOnly : {false, true})
+      {
+        auto style = LightVolumeStyle{};
+        style.outerShellOnly = outerShellOnly;
+        // the surfaces; a point light's box lines lie outside its ellipsoid
+        const auto mesh = buildLightVolumeMesh(light, frame, style);
+        for (const auto& vertex : mesh.triangles)
+        {
+          const auto point = vm::vec3d{gl::getVertexComponent<0>(vertex)};
+          // the vertices are floats
+          if (vm::length(point - rangeCentre) > reach + 1e-3)
+          {
+            FAIL_CHECK("a vertex outside the reach: " << point);
+          }
+        }
+      }
+
+      auto inside = 0;
+      for (auto x = -800.0; x <= 800.0; x += 40.0)
+      {
+        for (auto y = -800.0; y <= 800.0; y += 40.0)
+        {
+          for (auto z = -800.0; z <= 800.0; z += 40.0)
+          {
+            const auto point = frame.origin + vm::vec3d{x, y, z};
+            if (mdl::containsPoint(light, frame, point))
+            {
+              ++inside;
+              if (vm::squared_distance(rangeCentre, point) > reach * reach)
+              {
+                FAIL_CHECK("outside the reach: " << point);
+              }
+            }
+          }
+        }
+      }
+      CHECK(inside > 0);
+    }
+  }
+
+  SECTION("a frame that is not a rotation has no bound")
+  {
+    const auto light = mdl::parseLightProperties(
+      mdl::Entity{{{"classname", "light"}, {"light_radius", "64 64 64"}}});
+    const auto [centre, reach] = mdl::lightBoundingSphere(
+      light, mdl::LightFrame{vm::vec3d{0, 0, 0}, vm::mat3x3d::identity() * 0.5});
+    CHECK(reach == std::numeric_limits<double>::infinity());
   }
 }
 

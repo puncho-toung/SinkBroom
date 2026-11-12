@@ -61,13 +61,21 @@ enum class LightVolumeVisibility
  */
 struct LightRange
 {
+  // what the per-frame loops read, beside the node so that they touch nothing of props
+  // (RV2-TP-04)
   const mdl::EntityNode* node = nullptr;
-  mdl::LightProperties props;
-  mdl::LightFrame frame;
   std::size_t fillFirst = 0;
   std::size_t fillCount = 0;
   std::size_t lineFirst = 0;
   std::size_t lineCount = 0;
+  // set once per build: the world centre of the volume (an emitter omni's bulb, else the
+  // frame's origin), by which the fills are sorted, and a reach about it that contains
+  // the volume, beyond which the camera is outside it (mdl::lightBoundingSphere)
+  vm::vec3d centre;
+  double reach = 0.0;
+  // read only for a light round the camera, and by the tests
+  mdl::LightProperties props;
+  mdl::LightFrame frame;
   bool selected = false;
 };
 

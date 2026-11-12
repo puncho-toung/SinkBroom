@@ -33,6 +33,7 @@
 #include "vm/ray.h"
 #include "vm/vec.h"
 
+#include <array>
 #include <cstddef>
 #include <optional>
 #include <utility>
@@ -65,8 +66,10 @@ class MapDocument;
 
 /**
  * The volume of a light as the light volume tool edits it: the light, its frame, the
- * rotation of the box frame (the light's rotation R for a point light or a sun, R B for a
- * spot light, where B is the beam frame) and the light's edit box in the box frame.
+ * rotation of the box frame (the light's rotation R for a point light, a sun and every
+ * emitter, R B for a texture spot light, where B is the beam frame) and the light's edit
+ * box in the box frame. An emitter spot's box runs along x from its bulb, a texture spot
+ * light's along z from its apex.
  */
 struct LightVolumeBox
 {
@@ -144,20 +147,30 @@ std::optional<vm::bbox3d> scaleLightBoxAboutOrigin(
 /**
  * The world line along which the handle of the given hit of the light volume tool is
  * dragged (D66): the side's normal through its centre (also the far cap's centre); the
- * line from the box frame's origin through the corner; for an edge, the line through its
+ * line from the volume's centre (the box frame's origin, an emitter omni's bulb) through
+ * the corner; for an edge, the line through its
  * centre along its two axes, outwards from the origin (in 3D an edge is dragged in the
  * plane perpendicular to it instead). For a surface, the line through the hit point along
  * which a Shift drag edits the element (D60, D67, D69): the axis of the outer shell's
- * normal there, the ray from the light's origin for the inner shell, the grabbed lateral
- * axis of the box for the funnel, the beam for the base and the inner cap.
+ * normal there, the ray from the light's origin (an emitter omni's bulb) for the inner
+ * shell, the grabbed lateral axis of the box for the funnel, the beam for the base and
+ * the inner cap.
  */
 vm::line3d lightVolumeHandleLine(const LightVolumeBox& volume, const mdl::Hit& hit);
 
 /**
- * The light that draw mode creates when nothing is selected: the engine's default point
- * light with the math block that the light editor seeds (D24, D29).
+ * The light that draw mode creates when nothing is selected: a new emitter omni,
+ * mdl::seededEmitterLight of a point light.
  */
 mdl::LightProperties newDrawnLight();
+
+/**
+ * Whether draw mode's preview of the given drawn light outlines the drawn box beside the
+ * light's volume. Not for an emitter omni in a 2D view: a new one is a sphere whose box
+ * is not the rectangle the mapper drew, so the preview shows the sphere the release will
+ * make and nothing else (G0 section 9, DP-T4-09).
+ */
+bool drawPreviewShowsBox(const mdl::LightProperties& light, bool render2D);
 
 /**
  * The world triangles, three points each and CW seen from outside, of the given element
@@ -211,6 +224,19 @@ public:
   {
     Handles,
     Draw,
+  };
+
+  /**
+   * What the highlight of a surface draws (D60): the world triangles of its element and
+   * its outline as line vertices, empty where it has none.
+   */
+  struct SurfaceGeometry
+  {
+    mdl::LightElement element = mdl::LightElement::OuterShell;
+    mdl::LightProperties light;
+    mdl::LightFrame frame;
+    std::vector<vm::vec3d> triangles;
+    std::vector<vm::vec3f> outline;
   };
 
   static const mdl::HitType::Type SideHitType;
@@ -274,6 +300,13 @@ private:
   mutable bool m_pickableMembershipValid = false;
   mutable std::vector<const mdl::EntityNode*> m_changedLights;
   mutable std::size_t m_pickableLightBuilds = 0;
+
+  // the geometry of the last two highlighted or outlined surfaces (the one under the
+  // mouse and the clicked one), so that a frame draws them without building a mesh; an
+  // entry is used only for the same element of an equal light in an equal frame
+  mutable std::array<std::optional<SurfaceGeometry>, 2> m_surfaceGeometry;
+  mutable std::size_t m_nextSurfaceGeometry = 0;
+  mutable std::size_t m_surfaceGeometryBuilds = 0;
 
   NotifierConnection m_notifierConnection;
 
@@ -364,7 +397,7 @@ public:
    * Picks the surfaces of the shown light volumes (D57, D60), at most one per light: the
    * outer shell of a point light, or of a selected one the inner shell where the ray
    * enters it before any node hit of the pick result; the funnel or the base of a spot
-   * light, or of a selected math spot light the inner cap of its core where the ray
+   * light, or of a selected emitter spot the inner cap where the ray
    * crosses it, from either side, before any node hit (D69); the box of a sun. The other
    * surfaces are picked from outside only, like brush faces. The surfaces of unselected
    * lights are not picked if the pick result already holds a node hit, because they would
@@ -377,6 +410,27 @@ public:
    * selection change reads none, a changed light only itself (I7.10).
    */
   std::size_t pickableLightBuildCount() const;
+
+  /**
+   * How many triangle vertices the surface picks hold for the lights read so far: an
+   * emitter spot's funnel only, its round cap being picked on its sphere.
+   */
+  std::size_t pickableTriangleVertexCount() const;
+
+  /**
+   * The geometry of the given surface's highlight and outline, built once for its element
+   * of its light in its frame and kept while it is one of the last two surfaces asked
+   * for, so that drawing a highlight each frame builds no mesh.
+   *
+   * The reference is valid until the next call: a call that builds a surface overwrites
+   * the older of the two entries, which may be the one a previous call returned.
+   */
+  const SurfaceGeometry& surfaceGeometry(const LightSurfaceHit& surface) const;
+
+  /**
+   * How many times surfaceGeometry built a surface's geometry since the tool was made.
+   */
+  std::size_t surfaceGeometryBuildCount() const;
 
   const mdl::Hit& highlightedHit() const;
   /**
@@ -412,6 +466,12 @@ public:
    * Light Volume". Returns true if the key belongs to the clicked element, also when the
    * step is denied (a depth below 24), which changes nothing; false otherwise, so that the
    * keys move the selection.
+   *
+   * An emitter spot is re-aimed instead: one press turns its forward axis by the grid's
+   * rotation angle (Grid::angle) towards the delta's direction, the bulb, the range and
+   * the cone stay, the roll follows the in-engine aim's world-up rule
+   * (mdl::emitterAimRotation), and only the rotation is written, one undo step "Aim
+   * Light". A delta parallel to the beam is taken and changes nothing.
    */
   bool nudgeClickedElement(const vm::vec3d& worldDelta);
 
@@ -461,8 +521,11 @@ public:
   /**
    * Sets the world box of the volume being drawn: a selected spot light fills it with its
    * beam pointing down (a box lower than 24 is extended downwards), a selected point
-   * light or sun or a new light fills it as its box. Returns false if the box is refused
-   * (a half extent below 1), which keeps the last box.
+   * light or sun or a new light fills it as its box. A selected emitter or a new light is
+   * drawn as an emitter: a spot from the centre of the top face with pitch 90, an omni or
+   * a sun centred in the box. Returns false if the box is refused (a half extent below 1,
+   * or an emitter omni or sun whose largest half extent is below 24), which keeps the
+   * last box.
    */
   bool updateDraw(const vm::bbox3d& worldBox);
 
