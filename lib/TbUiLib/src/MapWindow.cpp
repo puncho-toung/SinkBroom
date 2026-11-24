@@ -161,6 +161,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -2327,6 +2328,167 @@ bool MapWindow::canSnapVertices() const
   const auto& map = m_document->map();
   const auto& selection = map.selection();
   return !selection.allBrushes().empty();
+}
+
+void MapWindow::safeSnapVerticesToInteger()
+{
+  safeSnapVertices(1.0);
+}
+
+void MapWindow::safeSnapVerticesToGrid()
+{
+  safeSnapVertices(m_document->map().grid().actualSize());
+}
+
+void MapWindow::safeSnapVertices(const double snapTo)
+{
+  if (!canSnapVertices())
+  {
+    return;
+  }
+
+  auto& map = m_document->map();
+  const auto report = mdl::safeSnapVertices(map, snapTo);
+  if (!report.error.empty())
+  {
+    QMessageBox::warning(
+      this, "Safe Snap Vertices", QString::fromStdString(report.error), QMessageBox::Ok);
+    return;
+  }
+  if (!report.refused())
+  {
+    return;
+  }
+
+  // Select the brushes that kept the snap from happening, so they can be fixed or left out.
+  auto offenders = std::vector<mdl::Node*>{};
+  auto seen = std::unordered_set<const mdl::BrushNode*>{};
+  auto unselectable = size_t(0);
+  for (const auto* brushes : {&report.refusedBrushes, &report.openedContactBrushes})
+  {
+    for (auto* brushNode : *brushes)
+    {
+      if (!seen.insert(brushNode).second)
+      {
+        continue;
+      }
+      if (map.editorContext().selectable(*brushNode))
+      {
+        offenders.push_back(brushNode);
+      }
+      else
+      {
+        ++unselectable;
+      }
+    }
+  }
+  if (!offenders.empty())
+  {
+    mdl::deselectAll(map);
+    mdl::selectNodes(map, offenders);
+  }
+
+  auto text = fmt::format("Nothing was snapped to a grid of {}.\n\n", snapTo);
+  if (!report.refusedBrushes.empty())
+  {
+    text += fmt::format(
+      "{} of {} {} would change shape or cannot be checked (merging vertices: {}, "
+      "changing faces: {}, becoming flat: {}, out of range: {}, inside linked groups: {}, "
+      "unlike the stock snap: {}).\n",
+      report.refusedBrushes.size(),
+      report.brushCount,
+      kdl::str_plural(report.brushCount, "brush", "brushes"),
+      report.mergeCount,
+      report.faceSetCount,
+      report.flatCount,
+      report.rangeCount,
+      report.linkedCount,
+      report.stockMismatchCount);
+  }
+  if (report.openedContactCount > 0)
+  {
+    text += fmt::format(
+      "{} {} with other brushes (touching faces or sealing overlaps) would open.\n",
+      report.openedContactCount,
+      kdl::str_plural(report.openedContactCount, "contact", "contacts"));
+  }
+  if (!offenders.empty())
+  {
+    text += fmt::format(
+      "\nThe {} {} now selected.",
+      offenders.size(),
+      kdl::str_plural(offenders.size(), "brush is", "brushes are"));
+  }
+  if (unselectable > 0)
+  {
+    text += fmt::format(
+      "\n{} {} cannot be selected (inside a closed group or entity, hidden or locked).",
+      unselectable,
+      kdl::str_plural(unselectable, "brush", "brushes"));
+  }
+  if (offenders.empty())
+  {
+    text += "\nThe selection is unchanged.";
+  }
+  text +=
+    "\n\nIf the selection ends inside connected brushes, such as part of a terrain, extend "
+    "it or snap the whole terrain at once. Some checks (seals with other brushes, the stock "
+    "snap's faces) run only once the others pass, so snapping again after a fix may list "
+    "more.";
+  QMessageBox::warning(
+    this, "Safe Snap Vertices", QString::fromStdString(text), QMessageBox::Ok);
+}
+
+void MapWindow::chunkSelectionToGrid()
+{
+  if (!canChunkSelectionToGrid())
+  {
+    return;
+  }
+
+  auto& map = m_document->map();
+  const auto report = mdl::chunkToGrid(map);
+  const auto skipped =
+    report.skippedNearCount + report.skippedVolumeCount + report.skippedFailedCount;
+  if (report.committed && skipped == 0 && report.notOpaqueCount == 0)
+  {
+    return;
+  }
+
+  // Tell what was left out: a quiet log line is easy to miss on a large selection.
+  auto text = report.committed
+                ? fmt::format(
+                    "Cut {} of {} {} into {} pieces.",
+                    report.chunkedCount,
+                    report.brushCount,
+                    kdl::str_plural(report.brushCount, "brush", "brushes"),
+                    report.pieceCount)
+                : std::string{"No selected brush was cut."};
+  if (report.notOpaqueCount > 0)
+  {
+    text += fmt::format(
+      "\n{} {} left whole: a face's material is translucent, perforated or missing, so the "
+      "faces between the pieces would be drawn.",
+      report.notOpaqueCount,
+      kdl::str_plural(report.notOpaqueCount, "brush was", "brushes were"));
+  }
+  if (skipped > 0)
+  {
+    text += fmt::format(
+      "\nCuts left out: {} with a vertex within half a unit of the grid plane, {} that "
+      "would leave a piece under one cubic unit, {} that failed.",
+      report.skippedNearCount,
+      report.skippedVolumeCount,
+      report.skippedFailedCount);
+  }
+  QMessageBox::information(
+    this, "Chunk Brushes to 512 Grid", QString::fromStdString(text), QMessageBox::Ok);
+}
+
+bool MapWindow::canChunkSelectionToGrid() const
+{
+  const auto& map = m_document->map();
+  return !map.selection().brushes.empty();
 }
 
 void MapWindow::convertSelectionToPatches()

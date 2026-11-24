@@ -671,6 +671,10 @@ Result<void> Brush::snapVertices(
   contract_pre(m_geometry != nullptr);
 
   const auto newGeometry = snappedGeometry(*m_geometry, snapToF);
+  if (!newGeometry.polyhedron())
+  {
+    return Error{"Snapped vertices do not form a polyhedron"};
+  }
 
   auto vertexMapping = kdl::flat_map<vm::vec3d, vm::vec3d>{};
   for (const auto* vertex : m_geometry->vertices())

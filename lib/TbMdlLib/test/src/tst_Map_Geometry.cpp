@@ -19,6 +19,9 @@
 
 
 #include "Matchers.h"
+#include "gl/Material.h"
+#include "gl/Texture.h"
+#include "gl/TextureResource.h"
 #include "mdl/BrushBuilder.h"
 #include "mdl/BrushFace.h"
 #include "mdl/BrushNode.h"
@@ -48,6 +51,10 @@
 #include "vm/approx.h"
 #include "vm/vec_io.h" // IWYU pragma: keep
 
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <optional>
 #include <ranges>
 
 #include <catch2/catch_test_macros.hpp>
@@ -72,6 +79,158 @@ bool checkVerticesIntegral(const auto* brushNode)
   return std::ranges::all_of(brushNode->brush().vertices(), [](const auto& vertex) {
     return pointExactlyIntegral(vertex->position());
   });
+}
+
+// The volume of a convex brush, by fans over its faces.
+double brushVolume(const Brush& brush)
+{
+  const auto origin = brush.bounds().center();
+  auto sixTimes = 0.0;
+  for (const auto& face : brush.faces())
+  {
+    const auto polygon = face.vertexPositions();
+    for (size_t i = 1; i + 1 < polygon.size(); ++i)
+    {
+      sixTimes += vm::dot(
+        polygon[0] - origin, vm::cross(polygon[i] - origin, polygon[i + 1] - origin));
+    }
+  }
+  return std::abs(sixTimes) / 6.0;
+}
+
+// True if every face of `piece` lies on a face plane of `original` or on an axial plane
+// w = k * grid.
+bool keepsPlanes(const Brush& piece, const Brush& original, const double grid)
+{
+  return std::ranges::all_of(piece.faces(), [&](const auto& face) {
+    const auto& plane = face.boundary();
+    const auto onOriginal = std::ranges::any_of(original.faces(), [&](const auto& other) {
+      return vm::is_equal(plane, other.boundary(), vm::constants<double>::almost_zero());
+    });
+    const auto axis = vm::find_abs_max_component(plane.normal);
+    const auto axial = std::abs(plane.normal[axis]) == 1.0
+                       && std::fmod(std::abs(plane.distance), grid) == 0.0;
+    return onOriginal || axial;
+  });
+}
+
+// The brush's faces as sorted vertex lists, the list sorted; rounded to `snapTo` if given.
+std::vector<std::vector<vm::vec3d>> facetsOf(
+  const Brush& brush, const std::optional<double> snapTo = std::nullopt)
+{
+  auto result = std::vector<std::vector<vm::vec3d>>{};
+  for (const auto& face : brush.faces())
+  {
+    auto facet = face.vertexPositions();
+    if (snapTo)
+    {
+      for (auto& position : facet)
+      {
+        position = *snapTo * vm::round(position / *snapTo);
+      }
+    }
+    std::sort(facet.begin(), facet.end());
+    result.push_back(std::move(facet));
+  }
+  std::sort(result.begin(), result.end());
+  return result;
+}
+
+// True if the stock snap keeps the brush's faces (its rounded facets).
+bool stockSnapKeepsFaces(Brush brush, const vm::bbox3d& worldBounds, const double snapTo)
+{
+  const auto expected = facetsOf(brush, snapTo);
+  return brush.canSnapVertices(worldBounds, snapTo)
+         && brush.snapVertices(worldBounds, snapTo, false) && facetsOf(brush) == expected;
+}
+
+// A terrain of 2 * n * n triangle prisms on a `cell` lattice, with heights off the grid,
+// as a triangle-mode terrain brush tool makes it.
+std::vector<Brush> makeTrianglePrisms(
+  const BrushBuilder& builder, const size_t n, const double cell)
+{
+  const auto height = [](const size_t i, const size_t j) {
+    return 100.0 + 37.3 * std::sin(0.7 * double(i)) + 21.9 * std::cos(1.3 * double(j))
+           + 0.37 * double((i * j) % 7);
+  };
+
+  auto brushes = std::vector<Brush>{};
+  brushes.reserve(2 * n * n);
+  for (size_t i = 0; i < n; ++i)
+  {
+    for (size_t j = 0; j < n; ++j)
+    {
+      const auto x0 = double(i) * cell;
+      const auto y0 = double(j) * cell;
+      const auto p00 = vm::vec3d{x0, y0, height(i, j)};
+      const auto p10 = vm::vec3d{x0 + cell, y0, height(i + 1, j)};
+      const auto p01 = vm::vec3d{x0, y0 + cell, height(i, j + 1)};
+      const auto p11 = vm::vec3d{x0 + cell, y0 + cell, height(i + 1, j + 1)};
+      for (const auto& top : {std::array{p00, p10, p11}, std::array{p00, p11, p01}})
+      {
+        auto points = std::vector<vm::vec3d>{};
+        for (const auto& point : top)
+        {
+          points.push_back(point);
+          points.push_back(vm::vec3d{point.x(), point.y(), 0.0});
+        }
+        brushes.push_back(builder.createBrush(points, "material") | kdl::value());
+      }
+    }
+  }
+  return brushes;
+}
+
+// n * n boxes on a `cell` lattice whose tops are planes tilted by slopes off the grid, as
+// after sculpting a square-mode terrain: rounding makes some tops non-planar.
+std::vector<Brush> makeTiltedBoxes(
+  const BrushBuilder& builder, const size_t n, const double cell)
+{
+  auto brushes = std::vector<Brush>{};
+  brushes.reserve(n * n);
+  for (size_t i = 0; i < n; ++i)
+  {
+    for (size_t j = 0; j < n; ++j)
+    {
+      const auto x0 = double(i) * cell;
+      const auto y0 = double(j) * cell;
+      const auto a = 0.0137 * double(1 + (i + 2 * j) % 5);
+      const auto b = 0.0091 * double(1 + (2 * i + j) % 3);
+      auto points = std::vector<vm::vec3d>{};
+      for (const auto dx : {0.0, cell})
+      {
+        for (const auto dy : {0.0, cell})
+        {
+          points.push_back(vm::vec3d{x0 + dx, y0 + dy, 0.0});
+          points.push_back(vm::vec3d{x0 + dx, y0 + dy, 64.3 + a * dx + b * dy});
+        }
+      }
+      brushes.push_back(builder.createBrush(points, "material") | kdl::value());
+    }
+  }
+  return brushes;
+}
+
+// The chunk cuts only brushes whose materials are loaded and opaque, and the test maps load
+// none: the chunk tests give their brushes this material. Static: a map refers to it until
+// the map is destroyed, after the test.
+gl::Material& opaqueTestMaterial()
+{
+  static auto material =
+    gl::Material{"opaque", gl::createTextureResource(gl::Texture{64, 64})};
+  return material;
+}
+
+// Sets the opaque test material on every face, on the node directly: a command would look the
+// material up by name again and find none. The faces keep their material names.
+void makeOpaque(BrushNode& brushNode)
+{
+  auto brush = brushNode.brush();
+  for (auto& face : brush.faces())
+  {
+    face.setMaterial(&opaqueTestMaterial());
+  }
+  brushNode.setBrush(std::move(brush));
 }
 
 bool checkBoundsIntegral(const auto* brush)
@@ -1371,6 +1530,760 @@ TEST_CASE("Map_Geometry")
     }
   }
 
+  SECTION("safeSnapVertices")
+  {
+    auto& map = fixture.create();
+    const auto builder = BrushBuilder{map.worldNode().mapFormat(), map.worldBounds()};
+    const auto addBrush = [&](Brush brush) {
+      auto* brushNode = new BrushNode{std::move(brush)};
+      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+      return brushNode;
+    };
+
+    SECTION("A brush on the grid is left as it is")
+    {
+      auto* brushNode = addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {128, 256, 64}}, "material")
+        | kdl::value());
+      const auto original = brushNode->brush();
+      selectNodes(map, {brushNode});
+
+      const auto report = safeSnapVertices(map, 16);
+      CHECK(!report.refused());
+      CHECK(!report.committed);
+      CHECK(report.unchangedCount == 1u);
+      CHECK(brushNode->brush() == original);
+    }
+
+    SECTION("An off-grid box snaps as the stock snap does, in one undo step")
+    {
+      auto* brushNode = addBrush(
+        builder.createCuboid(
+          vm::bbox3d{{0.3, 0.2, 0.1}, {64.4, 63.7, 32.2}}, "material")
+        | kdl::value());
+      const auto original = brushNode->brush();
+      auto stock = original;
+      REQUIRE(stock.snapVertices(map.worldBounds(), 1.0));
+      selectNodes(map, {brushNode});
+
+      const auto report = safeSnapVertices(map, 1);
+      CHECK(report.committed);
+      CHECK(report.snappedCount == 1u);
+      CHECK(checkVerticesIntegral(brushNode));
+      CHECK(brushNode->brush().faceCount() == 6u);
+      CHECK(brushNode->brush().bounds() == vm::bbox3d{{0, 0, 0}, {64, 64, 32}});
+      CHECK_THAT(
+        brushNode->brush().vertexPositions(),
+        UnorderedEquals(stock.vertexPositions()));
+
+      map.undoCommand();
+      CHECK(brushNode->brush() == original);
+      map.redoCommand();
+      CHECK(checkVerticesIntegral(brushNode));
+    }
+
+    SECTION("A snap to a grid of 16 moves every vertex to a multiple of 16")
+    {
+      auto* brushNode = addBrush(
+        builder.createCuboid(vm::bbox3d{{3.3, 9, 0.5}, {70, 120.4, 40}}, "material")
+        | kdl::value());
+      selectNodes(map, {brushNode});
+
+      const auto report = safeSnapVertices(map, 16);
+      CHECK(report.committed);
+      CHECK(brushNode->brush().faceCount() == 6u);
+      CHECK(brushNode->brush().bounds() == vm::bbox3d{{0, 16, 0}, {64, 128, 48}});
+    }
+
+    SECTION("Half-way coordinates round away from zero, as the stock snap does")
+    {
+      // -2.5 rounds to -3; rounding half up would give -2, a box of zero thickness, and
+      // refuse it. (The test needs the vertex at exactly -2.5: a plane's vertex can come out
+      // a hair off a half, and then both roundings agree.)
+      auto* brushNode = addBrush(
+        builder.createCuboid(vm::bbox3d{{-2.5, 0, 0}, {-1.6, 4, 4}}, "material")
+        | kdl::value());
+      REQUIRE(std::ranges::any_of(
+        brushNode->brush().vertexPositions(), [](const auto& v) { return v.x() == -2.5; }));
+      selectNodes(map, {brushNode});
+
+      const auto report = safeSnapVertices(map, 1);
+      CHECK(report.committed);
+      CHECK(brushNode->brush().bounds() == vm::bbox3d{{-3, 0, 0}, {-2, 4, 4}});
+    }
+
+    SECTION("A quad that would go non-planar refuses the whole snap")
+    {
+      // The top face is planar, but its rounded corners are not: the stock snap would
+      // split it into two triangles.
+      auto* tilted = addBrush(
+        builder.createBrush(
+          std::vector<vm::vec3d>{
+            {0, 0, 0},
+            {64, 0, 0},
+            {64, 64, 0},
+            {0, 64, 0},
+            {0, 0, 32.4},
+            {64, 0, 32.4 + 8.2},
+            {0, 64, 32.4 + 4.3},
+            {64, 64, 32.4 + 8.2 + 4.3},
+          },
+          "material")
+        | kdl::value());
+      auto* offGrid = addBrush(
+        builder.createCuboid(
+          vm::bbox3d{{200.3, 0.2, 0.1}, {264.4, 63.7, 32.2}}, "material")
+        | kdl::value());
+      REQUIRE(tilted->brush().faceCount() == 6u);
+      const auto originalTilted = tilted->brush();
+      const auto originalOffGrid = offGrid->brush();
+      auto stock = originalTilted;
+      REQUIRE(stock.snapVertices(map.worldBounds(), 1.0));
+      CHECK(stock.faceCount() != 6u);
+      selectNodes(map, {tilted, offGrid});
+
+      const auto report = safeSnapVertices(map, 1);
+      CHECK(report.refused());
+      CHECK(!report.committed);
+      CHECK(report.faceSetCount == 1u);
+      CHECK(report.refusedBrushes == std::vector<BrushNode*>{tilted});
+      CHECK(tilted->brush() == originalTilted);
+      CHECK(offGrid->brush() == originalOffGrid);
+    }
+
+    SECTION("A brush thinner than the grid is refused")
+    {
+      auto* brushNode = addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {64, 64, 0.3}}, "material")
+        | kdl::value());
+      const auto original = brushNode->brush();
+      selectNodes(map, {brushNode});
+
+      const auto report = safeSnapVertices(map, 1);
+      CHECK(report.refused());
+      CHECK(report.mergeCount == 1u);
+      CHECK(brushNode->brush() == original);
+    }
+
+    SECTION("A contact with an unselected brush that would open refuses the snap")
+    {
+      auto* lower = addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {64, 64, 64.4}}, "material")
+        | kdl::value());
+      auto* upper = addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 0, 64.4}, {64, 64, 128}}, "material")
+        | kdl::value());
+      const auto original = lower->brush();
+      const auto originalUpper = upper->brush();
+      selectNodes(map, {lower});
+
+      const auto report = safeSnapVertices(map, 1);
+      CHECK(report.refused());
+      CHECK(report.refusedBrushes.empty());
+      CHECK(report.openedContactCount == 1u);
+      CHECK(report.openedContactBrushes == std::vector<BrushNode*>{lower});
+      CHECK(lower->brush() == original);
+      CHECK(upper->brush() == originalUpper);
+    }
+
+    SECTION("A contact between two selected brushes that stays closed lets both snap")
+    {
+      auto* lower = addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {64, 64, 64.4}}, "material")
+        | kdl::value());
+      auto* upper = addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 0, 64.4}, {64, 64, 128}}, "material")
+        | kdl::value());
+      selectNodes(map, {lower, upper});
+
+      const auto report = safeSnapVertices(map, 1);
+      CHECK(report.committed);
+      CHECK(report.snappedCount == 2u);
+      CHECK(lower->brush().bounds().max.z() == 64.0);
+      CHECK(upper->brush().bounds().min.z() == 64.0);
+    }
+
+    SECTION("A terrain of triangle prisms snaps whole, as the stock snap does")
+    {
+      const auto brushes = makeTrianglePrisms(builder, 8, 64.0);
+      auto brushNodes = std::vector<Node*>{};
+      for (const auto& brush : brushes)
+      {
+        brushNodes.push_back(addBrush(brush));
+      }
+      selectNodes(map, brushNodes);
+
+      const auto report = safeSnapVertices(map, 1);
+      CHECK(report.committed);
+      CHECK(!report.refused());
+      CHECK(report.snappedCount + report.unchangedCount == brushes.size());
+
+      for (size_t i = 0; i < brushes.size(); ++i)
+      {
+        auto stock = brushes[i];
+        REQUIRE(stock.snapVertices(map.worldBounds(), 1.0));
+        const auto* brushNode = static_cast<const BrushNode*>(brushNodes[i]);
+        CHECK(checkVerticesIntegral(brushNode));
+        CHECK_THAT(
+          brushNode->brush().vertexPositions(),
+          UnorderedEquals(stock.vertexPositions()));
+      }
+
+      map.undoCommand();
+      for (size_t i = 0; i < brushes.size(); ++i)
+      {
+        CHECK(static_cast<const BrushNode*>(brushNodes[i])->brush() == brushes[i]);
+      }
+    }
+
+    SECTION("Sculpted quad tops: exactly the brushes stock would change are refused")
+    {
+      const auto brushes = makeTiltedBoxes(builder, 6, 64.0);
+      auto brushNodes = std::vector<Node*>{};
+      auto stockChanges = std::vector<BrushNode*>{};
+      for (const auto& brush : brushes)
+      {
+        auto* brushNode = addBrush(brush);
+        brushNodes.push_back(brushNode);
+        if (!stockSnapKeepsFaces(brush, map.worldBounds(), 1.0))
+        {
+          stockChanges.push_back(brushNode);
+        }
+      }
+      REQUIRE(!stockChanges.empty());
+      REQUIRE(stockChanges.size() < brushes.size());
+      selectNodes(map, brushNodes);
+
+      const auto report = safeSnapVertices(map, 1);
+      CHECK(report.refused());
+      CHECK(!report.committed);
+      CHECK_THAT(report.refusedBrushes, UnorderedEquals(stockChanges));
+      for (size_t i = 0; i < brushes.size(); ++i)
+      {
+        CHECK(static_cast<const BrushNode*>(brushNodes[i])->brush() == brushes[i]);
+      }
+    }
+
+    SECTION("A contact with an unselected brush that crosses the origin planes is found")
+    {
+      // the octree keeps brushes crossing x, y or z = 0 in its root; the gather must still
+      // pair them with their neighbours
+      auto* lower = addBrush(
+        builder.createCuboid(vm::bbox3d{{-64, -64, -64}, {64, 64, 64.4}}, "material")
+        | kdl::value());
+      auto* upper = addBrush(
+        builder.createCuboid(vm::bbox3d{{-64, -64, 64.4}, {64, 64, 128}}, "material")
+        | kdl::value());
+      const auto originalUpper = upper->brush();
+      selectNodes(map, {upper});
+
+      const auto report = safeSnapVertices(map, 1);
+      CHECK(report.refused());
+      CHECK(report.openedContactCount == 1u);
+      CHECK(upper->brush() == originalUpper);
+      CHECK(lower->brush().bounds().max.z() == vm::approx{64.4});
+    }
+
+    SECTION("A T-junction contact with two unselected brushes survives")
+    {
+      auto* lower = addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {64.3, 64, 64}}, "material")
+        | kdl::value());
+      addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 0, 64}, {32, 64, 128}}, "material")
+        | kdl::value());
+      addBrush(
+        builder.createCuboid(vm::bbox3d{{32, 0, 64}, {64, 64, 128}}, "material")
+        | kdl::value());
+      selectNodes(map, {lower});
+
+      const auto report = safeSnapVertices(map, 1);
+      CHECK(report.committed);
+      CHECK(report.openedContactCount == 0u);
+      CHECK(lower->brush().bounds() == vm::bbox3d{{0, 0, 0}, {64, 64, 64}});
+    }
+
+    SECTION("A contact the snap would partly lose is refused")
+    {
+      // the upper brush ends at 64.3 on the lower one; rounding the lower one to 64 would
+      // leave 0.3 of the upper brush's bottom over nothing
+      auto* lower = addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {64.3, 64, 64}}, "material")
+        | kdl::value());
+      addBrush(
+        builder.createCuboid(vm::bbox3d{{32, 0, 64}, {64.3, 64, 128}}, "material")
+        | kdl::value());
+      const auto original = lower->brush();
+      selectNodes(map, {lower});
+
+      const auto report = safeSnapVertices(map, 1);
+      CHECK(report.refused());
+      CHECK(report.openedContactCount == 1u);
+      CHECK(lower->brush() == original);
+    }
+
+    SECTION("An overlap the snap would partly lose is refused")
+    {
+      // B's left face runs from x = 256.2 at y = 0 to 255.6 at y = 512 into A, which ends at
+      // 256.3; rounding A to 256 would open a gap where y is below about 171
+      auto* a = addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {256.3, 512, 64}}, "material")
+        | kdl::value());
+      addBrush(
+        builder.createBrush(
+          std::vector<vm::vec3d>{
+            {256.2, 0, 0},
+            {255.6, 512, 0},
+            {512, 0, 0},
+            {512, 512, 0},
+            {256.2, 0, 64},
+            {255.6, 512, 64},
+            {512, 0, 64},
+            {512, 512, 64},
+          },
+          "material")
+        | kdl::value());
+      const auto original = a->brush();
+      selectNodes(map, {a});
+
+      const auto report = safeSnapVertices(map, 1);
+      CHECK(report.refused());
+      CHECK(report.openedContactCount == 1u);
+      CHECK(a->brush() == original);
+    }
+
+    SECTION("Faces 0.005 apart count as a contact (the compiler seals them)")
+    {
+      auto* a = addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {256.4, 64, 16}}, "material")
+        | kdl::value());
+      addBrush(
+        builder.createCuboid(vm::bbox3d{{256.405, 0, 0}, {512, 64, 16}}, "material")
+        | kdl::value());
+      const auto original = a->brush();
+      selectNodes(map, {a});
+
+      const auto report = safeSnapVertices(map, 1);
+      CHECK(report.refused());
+      CHECK(report.openedContactCount == 1u);
+      CHECK(a->brush() == original);
+    }
+
+    SECTION("Part of a terrain cannot be snapped where it meets the rest")
+    {
+      const auto brushes = makeTrianglePrisms(builder, 4, 64.0);
+      auto half = std::vector<Node*>{};
+      for (size_t i = 0; i < brushes.size(); ++i)
+      {
+        auto* brushNode = addBrush(brushes[i]);
+        if (i < brushes.size() / 2)
+        {
+          half.push_back(brushNode);
+        }
+      }
+      selectNodes(map, half);
+
+      const auto report = safeSnapVertices(map, 1);
+      CHECK(report.refused());
+      CHECK(report.openedContactCount > 0u);
+    }
+
+    SECTION("Two brushes that seal by an overlap must not come apart")
+    {
+      // A ends at 256.3 and B begins at 256.2: rounding A to 256 would open a 0.2 gap.
+      auto* a = addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {256.3, 64, 16}}, "material")
+        | kdl::value());
+      auto* b = addBrush(
+        builder.createCuboid(vm::bbox3d{{256.2, 0, 0}, {512, 64, 16}}, "material")
+        | kdl::value());
+      const auto originalA = a->brush();
+      selectNodes(map, {a});
+
+      const auto report = safeSnapVertices(map, 1);
+      CHECK(report.refused());
+      CHECK(report.openedContactCount == 1u);
+      CHECK(report.openedContactBrushes == std::vector<BrushNode*>{a});
+      CHECK(a->brush() == originalA);
+
+      SECTION("A seal thinner than 0.01 units is protected too")
+      {
+        // the shared piece's edges are shorter than the brush geometry's clean-up keeps
+        deselectAll(map);
+        auto* c = addBrush(
+          builder.createCuboid(vm::bbox3d{{0, 200, 0}, {64.4, 264, 16}}, "material")
+          | kdl::value());
+        addBrush(
+          builder.createCuboid(vm::bbox3d{{64.396, 200, 0}, {128, 264, 16}}, "material")
+          | kdl::value());
+        const auto originalC = c->brush();
+        selectNodes(map, {c});
+
+        const auto thin = safeSnapVertices(map, 1);
+        CHECK(thin.refused());
+        CHECK(thin.openedContactCount == 1u);
+        CHECK(c->brush() == originalC);
+      }
+
+      SECTION("An overlap that survives the snap does not refuse it")
+      {
+        deselectAll(map);
+        selectNodes(map, {b});
+        // B begins at 256.2 and rounds to 256: it still overlaps A (0 to 256.3)
+        const auto second = safeSnapVertices(map, 1);
+        CHECK(second.committed);
+        CHECK(b->brush().bounds().min.x() == 256.0);
+      }
+    }
+
+    SECTION("Two brushes touching only along a line are not a contact")
+    {
+      // float noise in the vertices (z = 64.4 on both) must not make the line a contact
+      auto* a = addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {64, 64, 64.4}}, "material")
+        | kdl::value());
+      addBrush(
+        builder.createCuboid(vm::bbox3d{{64, 0, 64.4}, {128, 64, 128}}, "material")
+        | kdl::value());
+      selectNodes(map, {a});
+
+      const auto report = safeSnapVertices(map, 1);
+      CHECK(report.committed);
+      CHECK(report.openedContactCount == 0u);
+    }
+
+    SECTION("A brush inside a group with linked copies is refused")
+    {
+      auto* brushNode = addBrush(
+        builder.createCuboid(
+          vm::bbox3d{{0.3, 0.2, 0.1}, {64.4, 63.7, 32.2}}, "material")
+        | kdl::value());
+      selectNodes(map, {brushNode});
+      auto* groupNode = groupSelectedNodes(map, "test");
+      REQUIRE(groupNode != nullptr);
+      auto* linkedGroupNode = createLinkedDuplicate(map);
+      REQUIRE(linkedGroupNode != nullptr);
+      deselectAll(map);
+
+      const auto original = brushNode->brush();
+      selectNodes(map, {groupNode, linkedGroupNode});
+      const auto report = safeSnapVertices(map, 1);
+      CHECK(report.refused());
+      CHECK(report.linkedCount == 2u);
+      CHECK(brushNode->brush() == original);
+
+      deselectAll(map);
+      selectNodes(map, {groupNode});
+      const auto single = safeSnapVertices(map, 1);
+      CHECK(single.refused());
+      CHECK(single.linkedCount == 1u);
+      CHECK(brushNode->brush() == original);
+    }
+
+    SECTION("A brush inside a group with no linked copy snaps")
+    {
+      auto* brushNode = addBrush(
+        builder.createCuboid(
+          vm::bbox3d{{0.3, 0.2, 0.1}, {64.4, 63.7, 32.2}}, "material")
+        | kdl::value());
+      selectNodes(map, {brushNode});
+      auto* groupNode = groupSelectedNodes(map, "test");
+      REQUIRE(groupNode != nullptr);
+      deselectAll(map);
+      selectNodes(map, {groupNode});
+
+      const auto report = safeSnapVertices(map, 1);
+      CHECK(report.committed);
+      CHECK(report.linkedCount == 0u);
+      CHECK(brushNode->brush().bounds() == vm::bbox3d{{0, 0, 0}, {64, 64, 32}});
+    }
+
+    SECTION("A grid below one unit is refused")
+    {
+      auto* brushNode = addBrush(
+        builder.createCuboid(
+          vm::bbox3d{{0.3, 0.2, 0.1}, {64.4, 63.7, 32.2}}, "material")
+        | kdl::value());
+      const auto original = brushNode->brush();
+      selectNodes(map, {brushNode});
+
+      const auto report = safeSnapVertices(map, 0.5);
+      CHECK(!report.error.empty());
+      CHECK(report.refused());
+      CHECK(brushNode->brush() == original);
+    }
+  }
+
+  SECTION("chunkToGrid")
+  {
+    auto& map = fixture.create();
+    const auto builder = BrushBuilder{map.worldNode().mapFormat(), map.worldBounds()};
+    const auto addBrush = [&](Brush brush) {
+      auto* brushNode = new BrushNode{std::move(brush)};
+      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+      makeOpaque(*brushNode);
+      return brushNode;
+    };
+    const auto selectedBrushes = [&]() {
+      return map.selection().brushes
+             | std::views::transform([](const auto* node) { return node->brush(); })
+             | kdl::ranges::to<std::vector>();
+    };
+
+    SECTION("A 1024 box becomes four pieces that keep its volume and planes")
+    {
+      auto* brushNode = addBrush(
+        builder.createCuboid(
+          vm::bbox3d{{0, 0, 0}, {1024, 1024, 64}},
+          "left",
+          "right",
+          "front",
+          "back",
+          "top",
+          "bottom")
+        | kdl::value());
+      const auto original = brushNode->brush();
+      selectNodes(map, {brushNode});
+
+      const auto report = chunkToGrid(map, 512);
+      CHECK(report.committed);
+      CHECK(report.chunkedCount == 1u);
+      CHECK(report.pieceCount == 4u);
+      CHECK(report.cutCount == 3u);
+      CHECK(report.skippedNearCount == 0u);
+      CHECK(report.skippedVolumeCount == 0u);
+      CHECK(report.skippedFailedCount == 0u);
+
+      const auto pieces = selectedBrushes();
+      REQUIRE(pieces.size() == 4u);
+      auto volume = 0.0;
+      for (const auto& piece : pieces)
+      {
+        volume += brushVolume(piece);
+        CHECK(keepsPlanes(piece, original, 512.0));
+        CHECK(piece.bounds().size() == vm::vec3d{512, 512, 64});
+
+        // A cut face takes the material of the brush face closest to it in direction.
+        for (const auto& face : piece.faces())
+        {
+          if (face.normal() == vm::vec3d{1, 0, 0})
+          {
+            CHECK(face.materialName() == "right");
+          }
+          if (face.normal() == vm::vec3d{-1, 0, 0})
+          {
+            CHECK(face.materialName() == "left");
+          }
+          if (face.normal() == vm::vec3d{0, 1, 0})
+          {
+            CHECK(face.materialName() == "back");
+          }
+          if (face.normal() == vm::vec3d{0, -1, 0})
+          {
+            CHECK(face.materialName() == "front");
+          }
+        }
+      }
+      CHECK(volume == vm::approx{brushVolume(original), 1e-6 * brushVolume(original)});
+
+      SECTION("A second chunk cuts nothing")
+      {
+        const auto second = chunkToGrid(map, 512);
+        CHECK(!second.committed);
+        CHECK(second.cutCount == 0u);
+        CHECK(selectedBrushes().size() == 4u);
+      }
+
+      SECTION("Undo restores the brush in one step")
+      {
+        // the brush's own node holds the first piece; the other three are new nodes
+        const auto pieceNodes = map.selection().brushes;
+        REQUIRE(std::ranges::find(pieceNodes, brushNode) != pieceNodes.end());
+        map.undoCommand();
+        CHECK(brushNode->parent() != nullptr);
+        CHECK(facetsOf(brushNode->brush()) == facetsOf(original));
+        for (const auto* pieceNode : pieceNodes)
+        {
+          CHECK((pieceNode == brushNode || pieceNode->parent() == nullptr));
+        }
+      }
+    }
+
+    SECTION("A sloped brush keeps its planes and volume")
+    {
+      auto* brushNode = addBrush(
+        builder.createBrush(
+          std::vector<vm::vec3d>{
+            {-300, -40, 0},
+            {700, -40, 0},
+            {-300, 600, 0},
+            {700, 600, 0},
+            {-300, -40, 100},
+            {700, -40, 420},
+            {-300, 600, 260},
+            {700, 600, 580},
+          },
+          "material")
+        | kdl::value());
+      const auto original = brushNode->brush();
+      selectNodes(map, {brushNode});
+
+      // x = 0 and 512, y = 0 and 512 cross it: three columns by three rows.
+      const auto report = chunkToGrid(map, 512);
+      CHECK(report.committed);
+      CHECK(report.pieceCount == 9u);
+      CHECK(report.cutCount == 8u);
+      // a cut vertex rebuilt a hair off its plane would show here as a near skip
+      CHECK(report.skippedNearCount == 0u);
+      CHECK(report.skippedFailedCount == 0u);
+
+      const auto pieces = selectedBrushes();
+      auto volume = 0.0;
+      for (const auto& piece : pieces)
+      {
+        volume += brushVolume(piece);
+        CHECK(keepsPlanes(piece, original, 512.0));
+      }
+      CHECK(volume == vm::approx{brushVolume(original), 1e-6 * brushVolume(original)});
+    }
+
+    SECTION("A brush on the grid lines is left as it is")
+    {
+      auto* brushNode = addBrush(
+        builder.createCuboid(vm::bbox3d{{512, 0, 0}, {1024, 512, 64}}, "material")
+        | kdl::value());
+      const auto original = brushNode->brush();
+      selectNodes(map, {brushNode});
+
+      const auto report = chunkToGrid(map, 512);
+      CHECK(!report.committed);
+      CHECK(report.cutCount == 0u);
+      CHECK(report.skippedNearCount == 0u);
+      CHECK(brushNode->brush() == original);
+    }
+
+    SECTION("A brush crossing only z = 512 is not cut")
+    {
+      auto* brushNode = addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {64, 64, 600}}, "material")
+        | kdl::value());
+      const auto original = brushNode->brush();
+      selectNodes(map, {brushNode});
+
+      const auto report = chunkToGrid(map, 512);
+      CHECK(!report.committed);
+      CHECK(report.cutCount == 0u);
+      CHECK(brushNode->brush() == original);
+    }
+
+    SECTION("A cut that leaves a piece under one cubic unit is left out")
+    {
+      // the vertex at x = 512.75 is far enough from the plane, but the piece beyond it is
+      // 0.75 by 1 by 1 units
+      auto* brushNode = addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {512.75, 1, 1}}, "material")
+        | kdl::value());
+      const auto original = brushNode->brush();
+      selectNodes(map, {brushNode});
+
+      const auto report = chunkToGrid(map, 512);
+      CHECK(!report.committed);
+      CHECK(report.skippedVolumeCount == 1u);
+      CHECK(brushNode->brush() == original);
+    }
+
+    SECTION("A mixed selection: the brushes not cut stay selected beside the pieces")
+    {
+      auto* big = addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {1024, 512, 64}}, "material")
+        | kdl::value());
+      auto* small = addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 600, 0}, {64, 664, 64}}, "material")
+        | kdl::value());
+      const auto originalSmall = small->brush();
+      selectNodes(map, {big, small});
+
+      const auto report = chunkToGrid(map, 512);
+      CHECK(report.committed);
+      CHECK(report.chunkedCount == 1u);
+      CHECK(report.pieceCount == 2u);
+      CHECK(big->brush().bounds().size().x() == 512.0);
+      CHECK(small->brush() == originalSmall);
+      CHECK(map.selection().brushes.size() == 3u);
+      CHECK(std::ranges::find(map.selection().brushes, small) != map.selection().brushes.end());
+    }
+
+    SECTION("A brush with a translucent face is left whole")
+    {
+      // static: the map refers to it until the map is destroyed, after this section. The
+      // brush is set on the node directly; a command would look the material up again.
+      static auto glass =
+        gl::Material{"glass", gl::createTextureResource(gl::Texture{64, 64})};
+      glass.setSurfaceParms({"coverage_translucent"});
+      auto* brushNode = addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {1024, 1024, 64}}, "material")
+        | kdl::value());
+      auto glassBrush = brushNode->brush();
+      glassBrush.face(0).setMaterial(&glass);
+      brushNode->setBrush(std::move(glassBrush));
+      REQUIRE(brushNode->brush().face(0).material() == &glass);
+      selectNodes(map, {brushNode});
+
+      const auto report = chunkToGrid(map, 512);
+      CHECK(!report.committed);
+      CHECK(report.notOpaqueCount == 1u);
+      CHECK(brushNode->parent() != nullptr);
+    }
+
+    SECTION("A brush with a missing material is left whole")
+    {
+      auto* brushNode = new BrushNode{
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {1024, 1024, 64}}, "material")
+        | kdl::value()};
+      addNodes(map, {{&parentForNodes(map), {brushNode}}});
+      REQUIRE(brushNode->brush().face(0).material() == nullptr);
+      selectNodes(map, {brushNode});
+
+      const auto report = chunkToGrid(map, 512);
+      CHECK(!report.committed);
+      CHECK(report.notOpaqueCount == 1u);
+    }
+
+    SECTION("The pieces of a brush inside an entity stay in the entity")
+    {
+      auto* entityNode = new EntityNode{Entity{}};
+      addNodes(map, {{&parentForNodes(map), {entityNode}}});
+      auto* brushNode = new BrushNode{
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {1024, 1024, 64}}, "material")
+        | kdl::value()};
+      addNodes(map, {{entityNode, {brushNode}}});
+      makeOpaque(*brushNode);
+      selectNodes(map, {brushNode});
+
+      const auto report = chunkToGrid(map, 512);
+      CHECK(report.committed);
+      CHECK(entityNode->childCount() == 4u);
+      for (const auto* piece : map.selection().brushes)
+      {
+        CHECK(piece->parent() == entityNode);
+      }
+    }
+
+    SECTION("A cut within half a unit of a vertex is left out")
+    {
+      auto* brushNode = addBrush(
+        builder.createCuboid(vm::bbox3d{{0, 0, 0}, {512.25, 64, 64}}, "material")
+        | kdl::value());
+      const auto original = brushNode->brush();
+      selectNodes(map, {brushNode});
+
+      const auto report = chunkToGrid(map, 512);
+      CHECK(!report.committed);
+      CHECK(report.skippedNearCount == 1u);
+      CHECK(brushNode->brush() == original);
+    }
+  }
+
   SECTION("csgConvexMerge")
   {
     SECTION("Merge two brushes")
@@ -1760,6 +2673,41 @@ TEST_CASE("Map_Geometry")
       CHECK(brushNode2->physicalBounds() == vm::bbox3d{{0, -32, -32}, {+64, +32, +64}});
     }
   }
+}
+
+TEST_CASE("Map_Geometry.safeSnapTiming", "[.][safe-snap-timing]")
+{
+  // An 8192-unit terrain of 8,192 triangle prisms (64 by 64 cells of 128 units): the safe
+  // snap against the stock snap on the same selection.
+  auto fixture = MapFixture{};
+  auto& map = fixture.create({.worldBounds = vm::bbox3d{131072.0}});
+  const auto builder = BrushBuilder{map.worldNode().mapFormat(), map.worldBounds()};
+  auto brushNodes = std::vector<Node*>{};
+  for (auto& brush : makeTrianglePrisms(builder, 64, 128.0))
+  {
+    brushNodes.push_back(new BrushNode{std::move(brush)});
+  }
+  addNodes(map, {{&parentForNodes(map), brushNodes}});
+  selectNodes(map, brushNodes);
+
+  const auto time = [](const auto& f) {
+    const auto start = std::chrono::steady_clock::now();
+    f();
+    return std::chrono::duration<double, std::milli>(
+             std::chrono::steady_clock::now() - start)
+      .count();
+  };
+
+  auto report = SafeSnapReport{};
+  const auto safeMs = time([&]() { report = safeSnapVertices(map, 1); });
+  CHECK(report.committed);
+  map.undoCommand();
+  auto stockDone = false;
+  const auto stockMs = time([&]() { stockDone = snapVertices(map, 1); });
+  CHECK(stockDone);
+  WARN(
+    "safe snap " << safeMs << " ms, stock snap " << stockMs << " ms, "
+                 << brushNodes.size() << " prisms");
 }
 
 } // namespace tb::mdl

@@ -33,6 +33,7 @@
 
 namespace tb::mdl
 {
+class BrushNode;
 class Map;
 
 bool transformSelection(
@@ -71,6 +72,79 @@ bool removeVertices(
   Map& map, const std::string& commandName, std::vector<vm::vec3d> vertexPositions);
 
 bool snapVertices(Map& map, double snapTo);
+
+struct SafeSnapReport
+{
+  // The selected brushes looked at, those already on the grid, and those snapped.
+  size_t brushCount = 0;
+  size_t unchangedCount = 0;
+  size_t snappedCount = 0;
+
+  // Why brushes were refused: a snap that merges vertices, changes the faces, flattens the
+  // brush or leaves the range the check handles; a brush inside a group with linked copies
+  // (the snap would move the copies unchecked); or a stock snap that did not give the faces
+  // the check expects.
+  size_t mergeCount = 0;
+  size_t faceSetCount = 0;
+  size_t flatCount = 0;
+  size_t rangeCount = 0;
+  size_t linkedCount = 0;
+  size_t stockMismatchCount = 0;
+  std::vector<BrushNode*> refusedBrushes;
+
+  // Contacts with other brushes that the snap would open, and the selected brushes that
+  // hold them: faces that touch with a positive area, and brushes that overlap (a seal).
+  size_t openedContactCount = 0;
+  std::vector<BrushNode*> openedContactBrushes;
+
+  // Set when the command could not run at all (no brushes, a grid below one unit).
+  std::string error;
+  // True when the snapped brushes were stored as one undoable command.
+  bool committed = false;
+
+  bool refused() const;
+};
+
+/**
+ * Rounds the vertices of all selected brushes to multiples of `snapTo`, a whole number of
+ * units of 1 or more, but only if every brush keeps its faces, every face contact with
+ * another brush keeps a positive area, and every two brushes that overlap still overlap or
+ * touch with a positive area. Otherwise nothing changes, and the report names the offending
+ * brushes. Unlike snapVertices, a brush is never rebuilt with other faces, and a brush in a
+ * group with linked copies is refused.
+ */
+SafeSnapReport safeSnapVertices(Map& map, double snapTo);
+
+struct ChunkToGridReport
+{
+  // The selected brushes looked at, those replaced by pieces, and the pieces made.
+  size_t brushCount = 0;
+  size_t chunkedCount = 0;
+  size_t pieceCount = 0;
+  size_t cutCount = 0;
+
+  // Cuts left out: a vertex lies within half a unit of the plane, a piece would be under
+  // one cubic unit, or the clip gave no valid brush.
+  size_t skippedNearCount = 0;
+  size_t skippedVolumeCount = 0;
+  size_t skippedFailedCount = 0;
+
+  // Brushes left whole because a face's material is translucent, perforated or missing: the
+  // compiler would draw the faces between their pieces.
+  size_t notOpaqueCount = 0;
+
+  // True when the pieces replaced their brushes as one undoable command.
+  bool committed = false;
+};
+
+/**
+ * Cuts each selected brush at the planes x = k * gridSize and y = k * gridSize (and
+ * z = k * gridSize if chunkZ is set) that it strictly crosses, and replaces it by the pieces
+ * in its own parent. Every original face plane is kept; each cut adds one axial plane whose
+ * face takes the material of the brush face closest to it in direction. A brush with a face
+ * whose material is translucent, perforated or missing is left whole.
+ */
+ChunkToGridReport chunkToGrid(Map& map, int gridSize = 512, bool chunkZ = false);
 
 bool csgConvexMerge(Map& map);
 bool csgSubtract(Map& map);

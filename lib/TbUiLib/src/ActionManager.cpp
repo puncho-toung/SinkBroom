@@ -1229,6 +1229,36 @@ void ActionManager::createEditMenu()
       return context.hasDocument() && context.mapWindow().canSnapVertices();
     },
   }));
+  vertexEditingMenu.addItem(addAction(Action{
+    "Menu/Edit/Safe Snap Vertices to Integer",
+    "Safe Snap Vertices to Integer",
+    ActionContext::Any,
+    KeySequence{},
+    [](auto& context) { context.mapWindow().safeSnapVerticesToInteger(); },
+    [](const auto& context) {
+      return context.hasDocument() && context.mapWindow().canSnapVertices();
+    },
+  }));
+  vertexEditingMenu.addItem(addAction(Action{
+    "Menu/Edit/Safe Snap Vertices to Grid",
+    "Safe Snap Vertices to Grid",
+    ActionContext::Any,
+    KeySequence{},
+    [](auto& context) { context.mapWindow().safeSnapVerticesToGrid(); },
+    [](const auto& context) {
+      return context.hasDocument() && context.mapWindow().canSnapVertices();
+    },
+  }));
+  vertexEditingMenu.addItem(addAction(Action{
+    "Menu/Edit/Chunk to Grid",
+    "Chunk Brushes to 512 Grid",
+    ActionContext::Any,
+    KeySequence{},
+    [](auto& context) { context.mapWindow().chunkSelectionToGrid(); },
+    [](const auto& context) {
+      return context.hasDocument() && context.mapWindow().canChunkSelectionToGrid();
+    },
+  }));
 
   auto& patchEditingMenu = editMenu.addMenu("Patches");
   patchEditingMenu.addItem(addAction(Action{

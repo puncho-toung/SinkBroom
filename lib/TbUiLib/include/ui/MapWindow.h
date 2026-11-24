@@ -427,6 +427,12 @@ public:
   void snapVerticesToGrid();
   bool canSnapVertices() const;
 
+  void safeSnapVerticesToInteger();
+  void safeSnapVerticesToGrid();
+  void safeSnapVertices(double snapTo);
+  void chunkSelectionToGrid();
+  bool canChunkSelectionToGrid() const;
+
   void convertSelectionToPatches();
   bool canConvertSelectionToPatches() const;
 
