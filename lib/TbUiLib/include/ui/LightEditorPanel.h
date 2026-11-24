@@ -59,8 +59,14 @@ class SignalDelayer;
  *
  * The editor shows the volume tools first, then the light's type, volume, transform and
  * colour, then an Emitter and a Texture page with the options of each kind of light, then
- * the flags. The page follows the selected lights; a click on a page's tab makes them
- * lights of its kind: emitter is set, and the other emitter properties are kept.
+ * the flags. The page follows the selected lights; a click on the Emitter or Texture tab
+ * makes them lights of its kind: emitter is set, and the other emitter properties are
+ * kept.
+ *
+ * A third page, Fog, is the engine's Fog tab (V7): the density, albedo, glow, soft sides
+ * and fog pass of fog lights, and a button that makes other lights fog lights. It is no
+ * kind of light: a click on its tab writes nothing, and it stays shown until the
+ * selection changes or another tab is clicked.
  *
  * Its Draw volume button is the only way to the light volume tool, which is active only
  * to draw a volume: the button activates it in draw mode, follows it when it is
@@ -130,7 +136,7 @@ private:
       std::optional<vm::mat3x3d>(const mdl::Entity&, mdl::LightProperties&)>& edit);
   /**
    * Makes the selected lights lights of the kind of the given page, as a click on its tab
-   * does.
+   * does; the Fog page is no kind, and its tab changes nothing.
    */
   void switchLightKind(int pageIndex);
   void editAngles(std::size_t component, double value);

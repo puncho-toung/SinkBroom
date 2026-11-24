@@ -576,6 +576,168 @@ TEST_CASE("LoadMaterialCollections")
     CHECK(shaderNamesWithPrefix(IndexedShaders{}, {"lights/"}).empty());
   }
 
+  SECTION("lightShaderFacts and fogLightShaderNames")
+  {
+    auto status = TestParserStatus{};
+    const auto shaders = IndexedShaders{Doom3MaterialParser{R"(
+fogs/basicFog
+{
+	fogLight
+	noShadows
+	{
+		map		_fog
+		colored
+	}
+}
+fogs/delta1_fog
+{
+	fogLight
+	{
+		map		_fog
+		alpha	0.5
+		colored
+	}
+}
+fogs/own_distance
+{
+	fogLight
+	{
+		map		_fog
+		rgb		0.5
+		alpha	0.5
+	}
+}
+fogs/pitFog
+{
+	blendLight
+	{
+		blend	blend
+		map		_fog
+		colored
+	}
+}
+lights/fog_in_lights
+{
+	FOGLIGHT
+	{
+		map		_fog
+		colored
+	}
+}
+lights/squarelight1
+{
+	{
+		map		_fog
+		colored
+	}
+}
+fogs/no_stage
+{
+	fogLight
+}
+fogs/two_stages
+{
+	fogLight
+	{
+		map		_fog
+		colored
+	}
+	{
+		map		_fog
+		alpha	0.5
+	}
+}
+fogs/two_stages_reversed
+{
+	fogLight
+	{
+		map		_fog
+		alpha	0.5
+	}
+	{
+		map		_fog
+		colored
+	}
+}
+textures/fog_elsewhere
+{
+	fogLight
+	{
+		map		_fog
+		colored
+	}
+}
+)"}
+                                          .parse(status)};
+    REQUIRE(status.countStatus(LogLevel::Warn) == 0);
+
+    CHECK(
+      lightShaderFacts(shaders, "fogs/basicFog") == LightShaderFacts{true, true, true});
+    // the last colour keyword wins, and the name ignores case
+    CHECK(
+      lightShaderFacts(shaders, "FOGS/DELTA1_FOG") == LightShaderFacts{true, true, true});
+    CHECK(
+      lightShaderFacts(shaders, "fogs/own_distance")
+      == LightShaderFacts{true, false, false});
+    CHECK(
+      lightShaderFacts(shaders, "fogs/pitFog") == LightShaderFacts{false, true, true});
+    CHECK(
+      lightShaderFacts(shaders, "lights/squarelight1")
+      == LightShaderFacts{false, true, true});
+    CHECK(
+      lightShaderFacts(shaders, "fogs/no_stage") == LightShaderFacts{true, false, false});
+    CHECK(lightShaderFacts(shaders, "fogs/missing") == std::nullopt);
+    // the first stage only, as the engine's Fog tab and FogPass read stage 0
+    CHECK(
+      lightShaderFacts(shaders, "fogs/two_stages") == LightShaderFacts{true, true, true});
+    CHECK(
+      lightShaderFacts(shaders, "fogs/two_stages_reversed")
+      == LightShaderFacts{true, false, false});
+    // a name the engine makes canonical: backslashes and an extension do not matter
+    CHECK(
+      lightShaderFacts(shaders, "Fogs\\basicFog.tga")
+      == LightShaderFacts{true, true, true});
+    // the facts of any shader, wherever it lies; only the list keeps to lights/ and fogs/
+    CHECK(
+      lightShaderFacts(shaders, "textures/fog_elsewhere")
+      == LightShaderFacts{true, true, true});
+
+    // the fog lights under lights/ and fogs/, in shaderNamesWithPrefix's order; the
+    // parser keeps a decl's name in lowercase, as the engine's decl manager names it
+    CHECK(
+      fogLightShaderNames(shaders)
+      == std::vector<std::string>{
+        "fogs/basicfog",
+        "fogs/delta1_fog",
+        "fogs/no_stage",
+        "fogs/own_distance",
+        "fogs/two_stages",
+        "fogs/two_stages_reversed",
+        "lights/fog_in_lights"});
+    CHECK(fogLightShaderNames(IndexedShaders{}).empty());
+
+    // a fog light that the engine replaces with its default material is none
+    auto defaultedStatus = TestParserStatus{};
+    const auto defaulted = IndexedShaders{Doom3MaterialParser{R"(
+fogs/defaulted
+{
+	fogLight
+	{
+		map		_fog
+		colored
+		fixture_unknown_keyword
+	}
+}
+)"}
+                                            .parse(defaultedStatus)};
+    REQUIRE(defaulted.findShader("fogs/defaulted") != nullptr);
+    REQUIRE(defaulted.findShader("fogs/defaulted")->engineDefaulted);
+    CHECK(
+      lightShaderFacts(defaulted, "fogs/defaulted")
+      == LightShaderFacts{false, false, false});
+    CHECK(fogLightShaderNames(defaulted).empty());
+  }
+
   SECTION("findIdTech4Material")
   {
     auto fs = fs::DiskFileSystem{getFixtureRoot() / "test/mdl/LoadIdTech4ObjModel"};

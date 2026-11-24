@@ -815,6 +815,10 @@ private:
     bool hasDynamicImage = false;
     bool texGenReflect = false;
     bool referencesCurrentRender = false;
+    // the register that each of red, green, blue and alpha is, lowercase, as
+    // idMaterial::ParseStage leaves color.registers; empty for anything else, the
+    // constant 1 at first
+    std::array<std::string, 4> colorRegisters;
   };
 
   struct EngineStage
@@ -858,6 +862,12 @@ private:
   Quake3Shader m_shader;
   bool m_defaulted = false;
   int m_nesting = 0;
+  // the register that the last expression (or term) parsed is when it is that register
+  // alone or in parentheses, lowercase, as idMaterial::ParseExpression returns the
+  // register itself; empty for anything else. The engine's folds of identities such as
+  // "parm3 * 1" are not followed.
+  std::string m_expressionRegister;
+  std::string m_termRegister;
   std::string m_editorImageName;
   std::optional<Coverage> m_explicitCoverage;
   bool m_sortPortalSky = false;
@@ -1053,9 +1063,11 @@ private:
     expectToken(")");
   }
 
-  // idMaterial::ParseExpression; returns the value if the expression is one number
+  // idMaterial::ParseExpression; returns the value if the expression is one number, and
+  // leaves in m_expressionRegister the register it is if it is one register
   std::optional<float> parseExpression()
   {
+    m_expressionRegister.clear();
     const auto guard = NestingGuard{m_nesting};
     if (!checkNesting("Expression"))
     {
@@ -1063,30 +1075,43 @@ private:
     }
 
     auto constant = parseTerm();
+    auto bareRegister = m_termRegister;
     while (!m_defaulted && !atEnd() && isAnyKeyword(peek(), BinaryOperators))
     {
       next();
       constant = std::nullopt;
+      bareRegister.clear();
       parseTerm();
     }
+    m_expressionRegister = m_defaulted ? std::string{} : std::move(bareRegister);
     return m_defaulted ? std::nullopt : constant;
   }
 
-  // idMaterial::ParseTerm
+  // idMaterial::ParseTerm; leaves in m_termRegister the register the term is, if it is
+  // one alone or in parentheses
   std::optional<float> parseTerm()
   {
+    m_termRegister.clear();
     const auto& token = next();
     if (isText(token, "("))
     {
       parseExpression();
+      auto innerRegister = m_expressionRegister;
       if (!m_defaulted)
       {
         matchToken(")");
       }
+      m_termRegister = std::move(innerRegister);
       return std::nullopt;
     }
 
-    if (isAnyKeyword(token, ExpressionRegisters) || isKeyword(token, "sound"))
+    if (isAnyKeyword(token, ExpressionRegisters))
+    {
+      m_termRegister = kdl::str_to_lower(token.text);
+      return std::nullopt;
+    }
+
+    if (isKeyword(token, "sound"))
     {
       return std::nullopt;
     }
@@ -1118,6 +1143,8 @@ private:
       {
         matchToken("]");
       }
+      // a lookup is no register, whatever its index is
+      m_termRegister.clear();
       return std::nullopt;
     }
 
@@ -1781,6 +1808,11 @@ private:
     {
       parseNumber();
     }
+    else if (isKeyword(token, "colored"))
+    {
+      // the four colour registers are the entity's shaderParm0 to 3
+      state.colorRegisters = {"parm0", "parm1", "parm2", "parm3"};
+    }
     else if (isAnyKeyword(token, StageFlags))
     {
       // no arguments, nothing to record
@@ -1841,17 +1873,36 @@ private:
     }
     else if (isKeyword(token, "color"))
     {
+      // red, green, blue and alpha in turn
       parseExpression();
-      for (auto i = 0; i < 3 && !m_defaulted; ++i)
+      state.colorRegisters[0] = m_expressionRegister;
+      for (size_t i = 1; i < 4 && !m_defaulted; ++i)
       {
         matchToken(",");
         if (!m_defaulted)
         {
           parseExpression();
+          state.colorRegisters[i] = m_expressionRegister;
         }
       }
     }
-    else if (isAnyKeyword(token, ColorKeywords) || isKeyword(token, "if"))
+    else if (isAnyKeyword(token, ColorKeywords))
+    {
+      parseExpression();
+      // the registers that red, green, blue, alpha, rgb and rgba set
+      const auto first = isKeyword(token, "green")   ? size_t(1)
+                         : isKeyword(token, "blue")  ? size_t(2)
+                         : isKeyword(token, "alpha") ? size_t(3)
+                                                     : size_t(0);
+      const auto last = isKeyword(token, "rgb")    ? size_t(2)
+                        : isKeyword(token, "rgba") ? size_t(3)
+                                                   : first;
+      for (auto i = first; i <= last; ++i)
+      {
+        state.colorRegisters[i] = m_expressionRegister;
+      }
+    }
+    else if (isKeyword(token, "if"))
     {
       parseExpression();
     }
@@ -1902,6 +1953,10 @@ private:
                               : std::optional<std::string>{"_default"});
 
     state.stage.map = idTech4Path(imageName);
+    const auto& registers = state.colorRegisters;
+    state.stage.rgbFromParms =
+      registers[0] == "parm0" && registers[1] == "parm1" && registers[2] == "parm2";
+    state.stage.alphaFromParm3 = registers[3] == "parm3";
     m_shader.stages.push_back(std::move(state.stage));
     m_stageTexGenReflect.push_back(state.texGenReflect);
   }

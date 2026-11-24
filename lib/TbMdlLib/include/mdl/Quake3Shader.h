@@ -79,8 +79,15 @@ public:
   std::optional<gl::MaterialAlphaFunc> alphaFunc;
   // Doom 3 only: the light interaction the stage takes part in.
   Lighting lighting = Lighting::None;
+  // Doom 3 only: where the stage's colour comes from, as idMaterial::ParseStage leaves
+  // its color.registers: red, green and blue from the entity's shaderParm0 to 2, alpha
+  // from its shaderParm3 ("colored", or each set to that register alone). A fog light's
+  // colour and density follow the light only where its first stage takes them.
+  bool rgbFromParms = false;
+  bool alphaFromParm3 = false;
 
-  kdl_reflect_decl(Quake3ShaderStage, map, blendFunc, alphaFunc, lighting);
+  kdl_reflect_decl(
+    Quake3ShaderStage, map, blendFunc, alphaFunc, lighting, rgbFromParms, alphaFromParm3);
 };
 
 class Quake3Shader

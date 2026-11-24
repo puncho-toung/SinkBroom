@@ -37,11 +37,13 @@
 #include <QWheelEvent>
 
 #include "SidebarTestUtils.h"
+#include "TestParserStatus.h"
 #include "base/NotifierConnection.h"
 #include "base/PreferenceManager.h"
 #include "fs/DiskFileSystem.h"
 #include "mdl/BrushBuilder.h"
 #include "mdl/BrushNode.h"
+#include "mdl/Doom3MaterialParser.h"
 #include "mdl/Entity.h"
 #include "mdl/EntityDefinitionManager.h"
 #include "mdl/EntityModelManager.h"
@@ -50,6 +52,7 @@
 #include "mdl/Hit.h"
 #include "mdl/Light.h"
 #include "mdl/LightVolume.h"
+#include "mdl/LoadMaterialCollections.h"
 #include "mdl/Map.h"
 #include "mdl/MapFixture.h"
 #include "mdl/Map_Assets.h"
@@ -81,6 +84,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <initializer_list>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -208,6 +213,7 @@ bool waitFor(const Predicate& predicate)
 // the pages of the editor's tab book
 constexpr auto EmitterPage = 0;
 constexpr auto TexturePage = 1;
+constexpr auto FogPage = 2;
 
 bool showsEmitterPage(const LightEditorPanel& panel)
 {
@@ -219,11 +225,16 @@ bool showsTexturePage(const LightEditorPanel& panel)
   return findControl<TabBookPage>(panel, "TexturePage").isVisibleTo(&panel);
 }
 
+bool showsFogPage(const LightEditorPanel& panel)
+{
+  return findControl<TabBookPage>(panel, "FogPage").isVisibleTo(&panel);
+}
+
 std::vector<TabBarButton*> tabButtons(const LightEditorPanel& panel)
 {
   const auto buttons =
     findControl<TabBook>(panel, "Tabs").tabBar()->findChildren<TabBarButton*>();
-  REQUIRE(buttons.size() == 2);
+  REQUIRE(buttons.size() == 3);
   return {buttons.begin(), buttons.end()};
 }
 
@@ -709,7 +720,8 @@ TEST_CASE("LightEditorPanel")
 
     CHECK(
       sectionTitles(*geometry) == QStringList{"Type", "Volume", "Transform", "Color"});
-    CHECK(sectionTitles(*flags) == QStringList{"Misc"});
+    // the Volumetric fog section shows only for lights that are not fog lights (V7)
+    CHECK(sectionTitles(*flags) == QStringList{"Misc", "Volumetric fog"});
     for (const auto* name : {"Point", "Spot", "Sun"})
     {
       CAPTURE(name);
@@ -786,6 +798,7 @@ TEST_CASE("LightEditorPanel")
     };
     CHECK(title(buttons[EmitterPage]) == "Emitter");
     CHECK(title(buttons[TexturePage]) == "Texture");
+    CHECK(title(buttons[FogPage]) == "Fog");
 
     auto& emitterPage = findControl<TabBookPage>(panel, "EmitterPage");
     auto& texturePage = findControl<TabBookPage>(panel, "TexturePage");
@@ -3358,6 +3371,586 @@ TEST_CASE("LightEditorPanel")
     CHECK(
       spotNode->entity().properties()
       == withValue(withValue(before, "light_radius", "300 300 300"), "emit_cone", "60"));
+  }
+}
+
+namespace
+{
+
+// a fog light of the fixture's tb_test_lights.mtr, without fog keys
+std::vector<mdl::EntityProperty> fogLightProperties(const std::string& origin)
+{
+  return {
+    {"classname", "light"},
+    {"origin", origin},
+    {"light_radius", "300 300 300"},
+    {"texture", "fogs/tb_test_fog"},
+  };
+}
+
+/**
+ * The keys whose values differ between the two property lists, or that only one has.
+ */
+std::vector<std::string> changedKeys(
+  const std::vector<mdl::EntityProperty>& before,
+  const std::vector<mdl::EntityProperty>& after)
+{
+  auto result = std::vector<std::string>{};
+  const auto find = [](const auto& properties, const std::string& key) {
+    return std::ranges::find_if(
+      properties, [&](const auto& property) { return property.key() == key; });
+  };
+  for (const auto& property : before)
+  {
+    const auto it = find(after, property.key());
+    if (it == after.end() || it->value() != property.value())
+    {
+      result.push_back(property.key());
+    }
+  }
+  for (const auto& property : after)
+  {
+    if (find(before, property.key()) == before.end())
+    {
+      result.push_back(property.key());
+    }
+  }
+  std::ranges::sort(result);
+  return result;
+}
+
+bool isShown(const LightEditorPanel& panel, const QString& name)
+{
+  return findControl<QWidget>(panel, name).isVisibleTo(&panel);
+}
+
+} // namespace
+
+TEST_CASE("LightEditorPanel's Fog page")
+{
+  auto fixture = SidebarContextFixture{mdl::Doom3BFGFixtureConfig};
+  auto& map = fixture.document().map();
+
+  SECTION("the Fog tab is no kind: a click on it writes nothing and its page stays")
+  {
+    auto* fogNode = addLight(map, fogLightProperties("0 0 0"));
+    auto* textureNode = addLight(
+      map,
+      {{"classname", "light"},
+       {"origin", "64 0 0"},
+       {"light_radius", "300 300 300"},
+       {"texture", "lights/tb_test_point"}});
+    auto* emitterNode =
+      addLight(map, emitterProperties("128 0 0", "omni", "288 288 288"));
+
+    auto panel = LightEditorPanel{fixture.context()};
+    const auto modificationCount = map.modificationCount();
+
+    for (auto* node : {fogNode, textureNode, emitterNode})
+    {
+      selectOnly(map, {node});
+      const auto before = node->entity().properties();
+      clickTab(panel, FogPage);
+      CHECK(showsFogPage(panel));
+      CHECK(node->entity().properties() == before);
+      CHECK(map.modificationCount() == modificationCount);
+    }
+
+    // a new selection shows the page of its kind, as before
+    selectOnly(map, {fogNode});
+    CHECK(showsTexturePage(panel));
+
+    // an edit on the Fog page keeps it shown
+    clickTab(panel, FogPage);
+    findControl<SpinControl>(panel, "FogGlow").setValue(2.0);
+    QApplication::processEvents();
+    CHECK(valueOf(*fogNode, "fog_emission") == "2");
+    CHECK(showsFogPage(panel));
+    // an undo and a redo of it too
+    map.undoCommand();
+    QApplication::processEvents();
+    CHECK(property(*fogNode, "fog_emission") == nullptr);
+    CHECK(showsFogPage(panel));
+    map.redoCommand();
+    QApplication::processEvents();
+    CHECK(showsFogPage(panel));
+
+    // the Emitter and Texture tabs still switch the kind
+    clickTab(panel, EmitterPage);
+    CHECK(valueOf(*fogNode, "emitter") == "1");
+    REQUIRE(map.undoCommandName() != nullptr);
+    CHECK(*map.undoCommandName() == "Set Light Kind");
+    clickTab(panel, TexturePage);
+    CHECK(valueOf(*fogNode, "emitter") == "0");
+  }
+
+  SECTION("each fog control writes its own key and nothing else")
+  {
+    auto* fogNode = addLight(map, fogLightProperties("0 0 0"));
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {fogNode});
+    clickTab(panel, FogPage);
+
+    // a light without the key shows a distance of 500 and writes nothing; the fields with
+    // no decimals keep their zeros
+    CHECK(findControl<SpinControl>(panel, "FogDistance").value() == 500.0);
+    CHECK(findControl<SpinControl>(panel, "FogDistance").text() == "500 units");
+    CHECK(findControl<SpinControl>(panel, "FogEdge").text() == "0 units");
+    CHECK(property(*fogNode, "shaderParm3") == nullptr);
+
+    const auto edit = [&](const auto& change, const std::string& commandName) {
+      const auto before = fogNode->entity().properties();
+      change();
+      QApplication::processEvents();
+      REQUIRE(map.undoCommandName() != nullptr);
+      CHECK(*map.undoCommandName() == commandName);
+      return changedKeys(before, fogNode->entity().properties());
+    };
+    const auto keys = [](std::initializer_list<std::string> strs) {
+      return std::vector<std::string>{strs};
+    };
+
+    CHECK(
+      edit(
+        [&]() { findControl<SpinControl>(panel, "FogGlow").setValue(2.0); },
+        "Set Fog Glow")
+      == keys({"fog_emission"}));
+    CHECK(valueOf(*fogNode, "fog_emission") == "2");
+    // typed past the slider's end, which the slider shows at its end
+    edit(
+      [&]() { findControl<SpinControl>(panel, "FogGlow").setValue(5.0); },
+      "Set Fog Glow");
+    CHECK(valueOf(*fogNode, "fog_emission") == "5");
+    CHECK(findControl<QSlider>(panel, "FogGlowSlider").value() == 1000);
+
+    CHECK(
+      edit(
+        [&]() { findControl<SpinControl>(panel, "FogAlbedo").setValue(0.6); },
+        "Set Fog Albedo")
+      == keys({"fog_albedo"}));
+    CHECK(valueOf(*fogNode, "fog_albedo") == "0.6");
+    // an arrow key moves the slider by the spin box's last decimal
+    CHECK(
+      edit(
+        [&]() {
+          findControl<QSlider>(panel, "FogAlbedoSlider")
+            .triggerAction(QAbstractSlider::SliderSingleStepAdd);
+        },
+        "Set Fog Albedo")
+      == keys({"fog_albedo"}));
+    CHECK(valueOf(*fogNode, "fog_albedo") == "0.61");
+
+    CHECK(
+      edit(
+        [&]() { findControl<SpinControl>(panel, "FogEdge").setValue(64.0); },
+        "Set Fog Soft Sides")
+      == keys({"fog_edge"}));
+    CHECK(valueOf(*fogNode, "fog_edge") == "64");
+    CHECK(findControl<SpinControl>(panel, "FogEdge").text() == "64 units");
+    // the slider spans 0 to 256 of the spin box's 4,096
+    CHECK(findControl<QSlider>(panel, "FogEdgeSlider").value() == 250);
+
+    CHECK(
+      edit(
+        [&]() { findControl<SpinControl>(panel, "FogDistance").setValue(600.0); },
+        "Set Fog Density")
+      == keys({"shaderParm3"}));
+    CHECK(valueOf(*fogNode, "shaderParm3") == "600");
+    // 100 log( 600 / 8,192 ) / log( 32 / 8,192 ) = 47.14, shown with one decimal
+    CHECK(findControl<SpinControl>(panel, "FogDensity").value() == Catch::Approx(47.1));
+
+    // Density 50 is a distance of 512, in whole units
+    CHECK(
+      edit(
+        [&]() { findControl<SpinControl>(panel, "FogDensity").setValue(50.0); },
+        "Set Fog Density")
+      == keys({"shaderParm3"}));
+    CHECK(valueOf(*fogNode, "shaderParm3") == "512");
+    CHECK(
+      findControl<QLabel>(panel, "FogDistanceText")
+        .text()
+        .startsWith(
+          "Classic fog: opaque at 512 units. Volumetric fog: 10.0 % of the light is left "
+          "after 512 units, 1.01 % after 1024."));
+
+    // the faint form: a strength at 500 units
+    auto& form = findControl<QComboBox>(panel, "FogDensityForm");
+    CHECK(
+      edit(
+        [&]() {
+          form.setCurrentIndex(1);
+          form.activated(1);
+        },
+        "Set Fog Density")
+      == keys({"shaderParm3"}));
+    CHECK(valueOf(*fogNode, "shaderParm3") == "0.5");
+    CHECK(isShown(panel, "FogStrength"));
+    CHECK_FALSE(isShown(panel, "FogDistance"));
+    edit(
+      [&]() { findControl<SpinControl>(panel, "FogStrength").setValue(0.25); },
+      "Set Fog Density");
+    CHECK(valueOf(*fogNode, "shaderParm3") == "0.25");
+    edit(
+      [&]() {
+        form.setCurrentIndex(0);
+        form.activated(0);
+      },
+      "Set Fog Density");
+    CHECK(valueOf(*fogNode, "shaderParm3") == "500");
+    CHECK(isShown(panel, "FogDistance"));
+
+    // Drawn by: the classic fog pass only is volumetric 2, automatic no key
+    auto& drawnBy = findControl<QComboBox>(panel, "FogDrawnBy");
+    CHECK(drawnBy.count() == 2);
+    CHECK(
+      edit(
+        [&]() {
+          drawnBy.setCurrentIndex(1);
+          drawnBy.activated(1);
+        },
+        "Set Fog Drawn By")
+      == keys({"volumetric"}));
+    CHECK(valueOf(*fogNode, "volumetric") == "2");
+    edit(
+      [&]() {
+        drawnBy.setCurrentIndex(0);
+        drawnBy.activated(0);
+      },
+      "Set Fog Drawn By");
+    CHECK(property(*fogNode, "volumetric") == nullptr);
+
+    // a drag of a slider writes once, on release, within the slider's 0 to 2
+    auto& glowSlider = findControl<QSlider>(panel, "FogGlowSlider");
+    CHECK(
+      edit(
+        [&]() {
+          glowSlider.setSliderDown(true);
+          glowSlider.setSliderPosition(750);
+          glowSlider.setSliderDown(false);
+        },
+        "Set Fog Glow")
+      == keys({"fog_emission"}));
+    CHECK(valueOf(*fogNode, "fog_emission") == "1.5");
+
+    // a default removes the key
+    CHECK(
+      edit(
+        [&]() { findControl<SpinControl>(panel, "FogGlow").setValue(1.0); },
+        "Set Fog Glow")
+      == keys({"fog_emission"}));
+    CHECK(property(*fogNode, "fog_emission") == nullptr);
+
+    // the fog material list holds the fog lights only
+    auto& material = findControl<QComboBox>(panel, "FogMaterial");
+    CHECK(material.count() == 1);
+    CHECK(material.itemText(0) == "fogs/tb_test_fog");
+    CHECK(material.currentIndex() == 0);
+  }
+
+  SECTION(
+    "one edit is one undo step over the selected fog lights, multi where they differ")
+  {
+    auto properties1 = fogLightProperties("0 0 0");
+    properties1.emplace_back("fog_emission", "0.5");
+    auto properties2 = fogLightProperties("64 0 0");
+    properties2.emplace_back("fog_emission", "1.5");
+    auto* fogNode1 = addLight(map, std::move(properties1));
+    auto* fogNode2 = addLight(map, std::move(properties2));
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {fogNode1, fogNode2});
+    clickTab(panel, FogPage);
+    auto& glow = findControl<SpinControl>(panel, "FogGlow");
+    CHECK(showsMulti(glow));
+
+    glow.setValue(2.0);
+    QApplication::processEvents();
+    CHECK(valueOf(*fogNode1, "fog_emission") == "2");
+    CHECK(valueOf(*fogNode2, "fog_emission") == "2");
+    CHECK_FALSE(showsMulti(glow));
+
+    REQUIRE(map.undoCommandName() != nullptr);
+    CHECK(*map.undoCommandName() == "Set Fog Glow");
+    map.undoCommand();
+    QApplication::processEvents();
+    CHECK(valueOf(*fogNode1, "fog_emission") == "0.5");
+    CHECK(valueOf(*fogNode2, "fog_emission") == "1.5");
+    CHECK(showsMulti(glow));
+  }
+
+  SECTION("several fog lights: the density line hides while their distances differ")
+  {
+    auto properties1 = fogLightProperties("0 0 0");
+    properties1.emplace_back("shaderParm3", "500");
+    auto properties2 = fogLightProperties("64 0 0");
+    properties2.emplace_back("shaderParm3", "1000");
+    auto* fogNode1 = addLight(map, std::move(properties1));
+    auto* fogNode2 = addLight(map, std::move(properties2));
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {fogNode1, fogNode2});
+    clickTab(panel, FogPage);
+    CHECK(showsMulti(findControl<SpinControl>(panel, "FogDistance")));
+    CHECK_FALSE(isShown(panel, "FogDistanceText"));
+
+    findControl<SpinControl>(panel, "FogDistance").setValue(800.0);
+    QApplication::processEvents();
+    CHECK(valueOf(*fogNode1, "shaderParm3") == "800");
+    CHECK(valueOf(*fogNode2, "shaderParm3") == "800");
+    CHECK(isShown(panel, "FogDistanceText"));
+  }
+
+  SECTION("the fog material is found whatever its case, as the engine finds it")
+  {
+    auto* fogNode = addLight(
+      map, withValue(fogLightProperties("0 0 0"), "texture", "FOGS/TB_Test_Fog"));
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {fogNode});
+    clickTab(panel, FogPage);
+    CHECK(isShown(panel, "FogGlow"));
+    auto& material = findControl<QComboBox>(panel, "FogMaterial");
+    CHECK(material.currentIndex() == 0);
+    CHECK(material.currentText() == "fogs/tb_test_fog");
+
+    // a re-pick of the material shown keeps the light's own spelling and writes nothing
+    const auto modificationCount = map.modificationCount();
+    material.activated(0);
+    QApplication::processEvents();
+    CHECK(valueOf(*fogNode, "texture") == "FOGS/TB_Test_Fog");
+    CHECK(map.modificationCount() == modificationCount);
+  }
+
+  SECTION("the fog controls change the fog lights only")
+  {
+    auto* fogNode = addLight(map, fogLightProperties("0 0 0"));
+    auto* pointNode = addLight(
+      map,
+      {{"classname", "light"},
+       {"origin", "64 0 0"},
+       {"light_radius", "300 300 300"},
+       {"texture", "lights/tb_test_point"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {fogNode, pointNode});
+    clickTab(panel, FogPage);
+
+    CHECK(isShown(panel, "FogNotice"));
+    CHECK(
+      findControl<QLabel>(panel, "FogNotice").text()
+      == "Some of the selected lights are not fog lights: these controls change the fog "
+         "lights only.");
+    CHECK(isShown(panel, "FogGlow"));
+
+    const auto pointBefore = pointNode->entity().properties();
+    findControl<SpinControl>(panel, "FogGlow").setValue(2.0);
+    QApplication::processEvents();
+    CHECK(valueOf(*fogNode, "fog_emission") == "2");
+    CHECK(pointNode->entity().properties() == pointBefore);
+  }
+
+  SECTION("Make it a fog light writes the texture and is one undo step")
+  {
+    auto* textureNode = addLight(
+      map,
+      {{"classname", "light"},
+       {"origin", "0 0 0"},
+       {"light_radius", "300 300 300"},
+       {"texture", "lights/tb_test_point"}});
+    auto* emitterNode = addLight(map, emitterProperties("64 0 0", "omni", "288 288 288"));
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {textureNode});
+    clickTab(panel, FogPage);
+
+    CHECK(isShown(panel, "FogNotice"));
+    CHECK(
+      findControl<QLabel>(panel, "FogNotice").text() == "This light is not a fog light.");
+    CHECK(isShown(panel, "MakeFogLight"));
+    CHECK_FALSE(isShown(panel, "FogGlow"));
+    CHECK_FALSE(isShown(panel, "FogMaterial"));
+
+    const auto before = textureNode->entity().properties();
+    findControl<QToolButton>(panel, "MakeFogLight").click();
+    QApplication::processEvents();
+    CHECK(
+      changedKeys(before, textureNode->entity().properties())
+      == std::vector<std::string>{"texture"});
+    CHECK(valueOf(*textureNode, "texture") == "fogs/basicFog");
+    REQUIRE(map.undoCommandName() != nullptr);
+    CHECK(*map.undoCommandName() == "Make Fog Light");
+    CHECK(showsFogPage(panel));
+    map.undoCommand();
+    QApplication::processEvents();
+    CHECK(textureNode->entity().properties() == before);
+
+    // an emitter becomes a texture light with the fog material, its emit_* keys kept
+    selectOnly(map, {emitterNode});
+    clickTab(panel, FogPage);
+    findControl<QToolButton>(panel, "MakeFogLight").click();
+    QApplication::processEvents();
+    CHECK(valueOf(*emitterNode, "emitter") == "0");
+    CHECK(valueOf(*emitterNode, "texture") == "fogs/basicFog");
+    CHECK(valueOf(*emitterNode, "emit_shape") == "omni");
+    REQUIRE(map.undoCommandName() != nullptr);
+    CHECK(*map.undoCommandName() == "Make Fog Light");
+    CHECK(showsFogPage(panel));
+  }
+
+  SECTION("Light in the fog is in Misc for lights that are not fog lights")
+  {
+    auto* fogNode = addLight(map, fogLightProperties("0 0 0"));
+    auto* pointNode = addLight(
+      map,
+      {{"classname", "light"}, {"origin", "64 0 0"}, {"light_radius", "300 300 300"}});
+
+    auto panel = LightEditorPanel{fixture.context()};
+    auto& lightInTheFog = findControl<QComboBox>(panel, "LightInTheFog");
+
+    selectOnly(map, {pointNode});
+    CHECK(lightInTheFog.isVisibleTo(&panel));
+    lightInTheFog.setCurrentIndex(2);
+    lightInTheFog.activated(2);
+    QApplication::processEvents();
+    CHECK(valueOf(*pointNode, "volumetric") == "2");
+    REQUIRE(map.undoCommandName() != nullptr);
+    CHECK(*map.undoCommandName() == "Set Light In The Fog");
+    lightInTheFog.setCurrentIndex(0);
+    lightInTheFog.activated(0);
+    QApplication::processEvents();
+    CHECK(property(*pointNode, "volumetric") == nullptr);
+
+    // a fog light's is its Drawn by, which shows a third item for volumetric 1
+    selectOnly(map, {fogNode});
+    CHECK_FALSE(lightInTheFog.isVisibleTo(&panel));
+    REQUIRE(mdl::setEntityProperty(map, "volumetric", "1"));
+    QApplication::processEvents();
+    clickTab(panel, FogPage);
+    auto& drawnBy = findControl<QComboBox>(panel, "FogDrawnBy");
+    CHECK(drawnBy.count() == 3);
+    CHECK(drawnBy.currentIndex() == 2);
+    CHECK(drawnBy.currentText() == "Always ( as Automatic for a fog light )");
+
+    // another choice drops the third item
+    drawnBy.setCurrentIndex(1);
+    drawnBy.activated(1);
+    QApplication::processEvents();
+    CHECK(valueOf(*fogNode, "volumetric") == "2");
+    CHECK(drawnBy.count() == 2);
+    CHECK(drawnBy.currentIndex() == 1);
+  }
+
+  SECTION("the density rows and the colour line follow the material's first stage")
+  {
+    auto status = TestParserStatus{};
+    map.entityModelManager().setShaders(
+      std::make_shared<const mdl::IndexedShaders>(mdl::Doom3MaterialParser{R"(
+fogs/own_distance
+{
+	fogLight
+	{
+		map		_fog
+		alpha	0.5
+	}
+}
+fogs/colored
+{
+	fogLight
+	{
+		map		_fog
+		alpha	0.5
+		colored
+	}
+}
+fogs/blend
+{
+	blendLight
+	{
+		map		_fog
+		colored
+	}
+}
+textures/fixture_fog
+{
+	fogLight
+	{
+		map		_fog
+		colored
+	}
+}
+)"}
+                                                    .parse(status)));
+    fixture.document().materialCollectionsDidChangeNotifier();
+    QApplication::processEvents();
+
+    auto* ownNode = addLight(
+      map, withValue(fogLightProperties("0 0 0"), "texture", "fogs/own_distance"));
+    auto* coloredNode =
+      addLight(map, withValue(fogLightProperties("64 0 0"), "texture", "fogs/colored"));
+    auto* blendNode =
+      addLight(map, withValue(fogLightProperties("128 0 0"), "texture", "fogs/blend"));
+
+    auto panel = LightEditorPanel{fixture.context()};
+
+    selectOnly(map, {ownNode});
+    clickTab(panel, FogPage);
+    CHECK(isShown(panel, "OwnFogDistanceNotice"));
+    CHECK_FALSE(isShown(panel, "FogDensityForm"));
+    CHECK_FALSE(isShown(panel, "FogDistance"));
+    CHECK(
+      findControl<QLabel>(panel, "FogColourText").text()
+      == "This material ignores the light's colour.");
+
+    // the last colour keyword wins: colored after alpha 0.5
+    selectOnly(map, {coloredNode});
+    clickTab(panel, FogPage);
+    CHECK_FALSE(isShown(panel, "OwnFogDistanceNotice"));
+    CHECK(isShown(panel, "FogDistance"));
+    CHECK(
+      findControl<QLabel>(panel, "FogColourText").text()
+      == "The colour tints the glow only. Set it under Color above.");
+
+    // a blend light is no fog light
+    selectOnly(map, {blendNode});
+    clickTab(panel, FogPage);
+    CHECK(
+      findControl<QLabel>(panel, "FogNotice").text() == "This light is not a fog light.");
+
+    auto& material = findControl<QComboBox>(panel, "FogMaterial");
+    CHECK(material.count() == 2);
+    CHECK(material.itemText(0) == "fogs/colored");
+    CHECK(material.itemText(1) == "fogs/own_distance");
+
+    // a fog light whose material is not in the list shows its material, not "multi"
+    auto* elsewhereNode = addLight(
+      map, withValue(fogLightProperties("192 0 0"), "texture", "textures/fixture_fog"));
+    selectOnly(map, {elsewhereNode});
+    clickTab(panel, FogPage);
+    CHECK(isShown(panel, "FogGlow"));
+    CHECK(material.currentIndex() == -1);
+    CHECK(material.placeholderText() == "textures/fixture_fog");
+  }
+
+  SECTION("without materials no light can be told a fog light, and the button is gone")
+  {
+    auto* fogNode = addLight(map, fogLightProperties("0 0 0"));
+    map.entityModelManager().setShaders(std::make_shared<const mdl::IndexedShaders>());
+    fixture.document().materialCollectionsDidChangeNotifier();
+    QApplication::processEvents();
+
+    auto panel = LightEditorPanel{fixture.context()};
+    selectOnly(map, {fogNode});
+    clickTab(panel, FogPage);
+    CHECK(
+      findControl<QLabel>(panel, "FogNotice").text()
+      == "No materials are loaded: the editor cannot tell fog lights.");
+    CHECK_FALSE(isShown(panel, "MakeFogLight"));
+
+    // nor does its click, should one arrive, rewrite the light's material
+    const auto before = fogNode->entity().properties();
+    findControl<QToolButton>(panel, "MakeFogLight").click();
+    QApplication::processEvents();
+    CHECK(fogNode->entity().properties() == before);
   }
 }
 

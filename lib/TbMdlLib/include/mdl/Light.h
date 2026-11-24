@@ -78,6 +78,14 @@ inline const std::string EmitEffect = "emit_effect";
 inline const std::string EmitEffectSpeed = "emit_effect_speed";
 inline const std::string EmitEffectAmount = "emit_effect_amount";
 inline const std::string EmitEffectPhase = "emit_effect_phase";
+
+// the fog keys of the engine's Fog tab (V7); shaderParm3 is a fog light's density, and on
+// any other light the material's to read
+inline const std::string ShaderParm3 = "shaderParm3";
+inline const std::string FogAlbedo = "fog_albedo";
+inline const std::string FogEmission = "fog_emission";
+inline const std::string FogEdge = "fog_edge";
+inline const std::string Volumetric = "volumetric";
 } // namespace LightPropertyKeys
 
 /**
@@ -296,6 +304,47 @@ struct EmitterProperties
     effectPhase);
 };
 
+// a fog light's distance D (shaderParm3 above 1) that the Fog page's Density spans by a
+// logarithm: 0 is D 8,192, 100 is D 32 (the engine's LightFogDensityToDistance)
+inline constexpr auto FogDensityFarDistance = 8192.0;
+inline constexpr auto FogDensityNearDistance = 32.0;
+// the engine's DEFAULT_FOG_DISTANCE, the distance of a fog light whose shaderParm3 is at
+// most 1
+inline constexpr auto DefaultFogDistance = 500.0;
+// the Distance field's limits, and the strength that the Form switch gives a faint fog
+inline constexpr auto MinFogDistance = 2.0;
+inline constexpr auto MaxFogDistance = 30000.0;
+inline constexpr auto FaintFogStrength = 0.5;
+// the limits of fog_emission and fog_edge, as the engine clamps them
+inline constexpr auto MaxFogEmission = 8.0;
+inline constexpr auto MaxFogEdge = 4096.0;
+// r_volumetricFogLightRate's default: the froxel fog leaves exp(-rate) of the light
+// behind a fog light after its distance D
+inline constexpr auto FogLightRate = 2.3;
+
+/**
+ * The fog keys of a light, the engine's LightInfo fog fields (V7). shaderParm3 is a fog
+ * light's distance D above 1, or a faint fog's strength from 0 to 1 at 500 units; without
+ * the key the engine reads 1. The other keys are read on every light, clamped as the
+ * engine clamps them.
+ */
+struct FogProperties
+{
+  // shaderParm3; nothing while the light has no such key
+  std::optional<double> distance;
+  // fog_albedo, 0 to 1
+  double albedo = 0.0;
+  // fog_emission, the glow, 0 to 8
+  double emission = 1.0;
+  // fog_edge, soft sides in world units, 0 to 4,096; 0 is hard sides
+  double edge = 0.0;
+  // volumetric: 0 is automatic, 1 always, 2 never (for a fog light, the classic fog pass
+  // only)
+  int volumetric = 0;
+
+  kdl_reflect_decl(FogProperties, distance, albedo, emission, edge, volumetric);
+};
+
 /**
  * The editable state of a light, like the engine's LightInfo without its gizmo state.
  * The rotation is not part of it: it belongs to the id Tech 4 rotation policy.
@@ -333,6 +382,8 @@ struct LightProperties
   // While enabled: type is the emitter's shape, radius its reach (a spot's three
   // components are its range), and the target vectors stay 0.
   EmitterProperties emitter;
+  // the fog keys, which every kind of light keeps
+  FogProperties fog;
 
   kdl_reflect_decl(
     LightProperties,
@@ -355,7 +406,8 @@ struct LightProperties
     castShadows,
     skipSpecular,
     badTargetInfo,
-    emitter);
+    emitter,
+    fog);
 };
 
 /**
@@ -385,6 +437,8 @@ bool isLightEntity(const Entity& entity);
  * not in step with its auto range (emitterRangeInStep), is read with autoRange false, so
  * that no edit moves its range and its next write writes emit_auto_range "0". A sun and
  * a curve without a reach factor keep the stored flag. See emitterRangeSetByHand.
+ *
+ * The fog keys are read on every light, as FogProperties says.
  */
 LightProperties parseLightProperties(const Entity& entity);
 
@@ -423,6 +477,11 @@ struct LightPropertyUpdate
  * emitter block and whose target is 0, an emitter spot whose flag alone was cleared, is
  * written as textureSpotFromEmitterSpot converts it, so that no texture spot is written
  * with a target of 0; asTextureLight is the conversion to call.
+ *
+ * The fog keys fog_albedo, fog_emission, fog_edge and volumetric are written where they
+ * are not their defaults and removed where they are, as LightInfo::ToDict writes them;
+ * shaderParm3 is written only where the light has a distance, and never removed: on a
+ * light that is not a fog light it is the material's to read.
  */
 LightPropertyUpdate lightPropertyUpdate(const LightProperties& light);
 
@@ -451,8 +510,9 @@ Entity applyLightPropertyUpdate(Entity entity, const LightPropertyUpdate& update
 
 /**
  * Returns the engine's default light of the given type (LightInfo::DefaultPoint,
- * DefaultProjected and DefaultSun), which keeps the colour, the origin, light_origin and
- * the emitter block of the given light and resets everything else.
+ * DefaultProjected and DefaultSun), which keeps the colour, the origin, light_origin, the
+ * emitter block and the fog keys of the given light (LightInfo::RestoreKept) and resets
+ * everything else.
  *
  * For an enabled emitter, a spot has no target vectors and the cone, penumbra and
  * squareness of a new spot; an omni and a spot then take their range from
@@ -644,5 +704,24 @@ LightProperties applyEmitterFalloff(const LightProperties& light, LightFalloff f
  * the path through this, never by reading the flag.
  */
 bool lightUsesEmitter(const LightProperties& light);
+
+/**
+ * The fog distance that the Fog page's Density gives, 0 to 100 after clamping:
+ * 8,192 * (32 / 8,192) ^ (density / 100), so 50 is 512 and every 12.5 halve it (the
+ * engine's LightFogDensityToDistance).
+ */
+double fogDensityToDistance(double density);
+
+/**
+ * The Density of a fog distance, the inverse of fogDensityToDistance clamped to 0 to 100;
+ * a distance below 1 counts as 1 (LightFogDistanceToDensity).
+ */
+double fogDistanceToDensity(double distance);
+
+/**
+ * Whether a shaderParm3 makes a faint fog: at most 1 and not 1, a strength at the
+ * engine's 500 units rather than a distance (LightFogFaint).
+ */
+bool fogIsFaint(double parm3);
 
 } // namespace tb::mdl

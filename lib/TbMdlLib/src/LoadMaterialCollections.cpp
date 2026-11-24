@@ -29,6 +29,7 @@
 #include "gl/Texture.h"
 #include "gl/TextureResource.h"
 #include "mdl/GameConfig.h"
+#include "mdl/IdTech4MaterialName.h"
 #include "mdl/LoadMipTexture.h"
 #include "mdl/LoadShaders.h"
 #include "mdl/LoadTexture.h"
@@ -44,6 +45,7 @@
 #include "kd/ranges/chunk_by_view.h"
 #include "kd/ranges/contains.h"
 #include "kd/ranges/to.h"
+#include "kd/reflection_impl.h"
 #include "kd/result.h"
 #include "kd/result_fold.h"
 #include "kd/string_compare.h"
@@ -1083,6 +1085,40 @@ std::vector<std::string> shaderNamesWithPrefix(
   std::stable_sort(names.begin(), names.end(), kdl::ci::string_less{});
   names.erase(
     std::unique(names.begin(), names.end(), kdl::ci::string_equal{}), names.end());
+  return names;
+}
+
+kdl_reflect_impl(LightShaderFacts);
+
+std::optional<LightShaderFacts> lightShaderFacts(
+  const IndexedShaders& shaders, const std::string_view shaderPath)
+{
+  // the name as the engine's FindMaterial makes it canonical: lowercase, forward slashes,
+  // no extension
+  const auto* shader = shaders.findShader(canonicalIdTech4MaterialName(shaderPath));
+  if (!shader)
+  {
+    return std::nullopt;
+  }
+
+  // the engine's stage 0 is the first stage of the decl unless the material has a bump,
+  // diffuse or specular stage, which no fog light has: then SortInteractionStages puts
+  // the stages in the order of their lighting, ambient first
+  const auto* firstStage = shader->stages.empty() ? nullptr : &shader->stages.front();
+  return LightShaderFacts{
+    .fogLight = !shader->engineDefaulted && shader->surfaceParms.contains("foglight"),
+    .densityFromLight = firstStage && firstStage->alphaFromParm3,
+    .colourFromLight = firstStage && firstStage->rgbFromParms,
+  };
+}
+
+std::vector<std::string> fogLightShaderNames(const IndexedShaders& shaders)
+{
+  auto names = shaderNamesWithPrefix(shaders, {"lights/", "fogs/"});
+  std::erase_if(names, [&](const auto& name) {
+    const auto facts = lightShaderFacts(shaders, name);
+    return !facts || !facts->fogLight;
+  });
   return names;
 }
 

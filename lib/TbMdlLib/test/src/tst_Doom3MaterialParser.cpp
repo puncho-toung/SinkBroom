@@ -36,6 +36,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include <catch2/catch_test_macros.hpp>
@@ -1778,6 +1779,55 @@ textures/fixture/argument
 
     CHECK(status.countStatus(LogLevel::Warn) == 0);
   }
+}
+
+TEST_CASE("Doom3MaterialParser stage colour")
+{
+  // the flags of the first stage of the one material in the given text
+  const auto firstStage = [](const std::string& stageText) {
+    auto status = TestParserStatus{};
+    const auto shaders =
+      Doom3MaterialParser{
+        "fogs/fixture\n{\n\tfogLight\n\t{\n\t\tmap _fog\n\t\t" + stageText + "\n\t}\n}\n"}
+        .parse(status);
+    REQUIRE(shaders.size() == 1);
+    REQUIRE_FALSE(shaders.front().engineDefaulted);
+    REQUIRE(!shaders.front().stages.empty());
+    const auto& stage = shaders.front().stages.front();
+    return std::pair{stage.rgbFromParms, stage.alphaFromParm3};
+  };
+
+  using T = std::tuple<std::string, bool, bool>;
+  const auto [stageText, rgbFromParms, alphaFromParm3] = GENERATE(
+    values<T>({
+      // the registers start as the constant 1
+      {"", false, false},
+      {"colored", true, true},
+      {"alpha parm3", false, true},
+      {"alpha ( parm3 )", false, true},
+      {"alpha ((PARM3))", false, true},
+      // an expression is a register only when it is the register alone
+      {"alpha parm3 * 2", false, false},
+      // ( the engine folds "parm3 * 1" to parm3: the known limit )
+      {"alpha parm3 * 1", false, false},
+      {"alpha fixture_table[ parm3 ]", false, false},
+      {"alpha 0.5", false, false},
+      {"alpha parm2", false, false},
+      // the last assignment wins
+      {"alpha 0.5\n\t\tcolored", true, true},
+      {"colored\n\t\talpha 0.5", true, false},
+      {"colored\n\t\trgb 1", false, true},
+      {"rgba parm3", false, true},
+      {"rgb parm0", false, false},
+      {"red parm0\n\t\tgreen parm1\n\t\tblue parm2", true, false},
+      {"color parm0, parm1, parm2, parm3", true, true},
+      {"color parm0, parm1, parm2, 1", true, false},
+      {"color 1, parm1, parm2, parm3", false, true},
+      {"vertexColor", false, false},
+    }));
+
+  CAPTURE(stageText);
+  CHECK(firstStage(stageText) == std::pair{rgbFromParms, alphaFromParm3});
 }
 
 } // namespace tb::mdl

@@ -58,7 +58,8 @@ QString SpinControl::textFromValue(const double val) const
 {
   auto str = QDoubleSpinBox::textFromValue(val);
 
-  if (m_minDigits < m_maxDigits)
+  // only the decimals' trailing zeros: without decimals they are the integer's own
+  if (m_minDigits < m_maxDigits && decimals() > 0)
   {
     const auto zero = locale().zeroDigit();
     while (str.length() > m_minDigits && str[str.length() - 1] == zero)

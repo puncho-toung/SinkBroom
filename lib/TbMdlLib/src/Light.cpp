@@ -743,6 +743,8 @@ kdl_reflect_impl(LightCurve);
 
 kdl_reflect_impl(EmitterProperties);
 
+kdl_reflect_impl(FogProperties);
+
 std::string_view emitterShapeName(const LightType type)
 {
   return EmitterShapeNames[static_cast<std::size_t>(type)];
@@ -855,6 +857,18 @@ LightProperties parseLightProperties(const Entity& entity)
   light.castShadows = !reader.boolean(NoShadows, false);
   light.skipSpecular = reader.boolean(NoSpecular, false);
 
+  // the fog keys (V7) on every light, clamped as LightInfo::FromDict clamps them;
+  // shaderParm3 as it is: a fog light's distance, and on any other light the material's
+  // to read
+  if (const auto* parm3 = reader.string(ShaderParm3))
+  {
+    light.fog.distance = parseIdTech4Float(*parm3);
+  }
+  light.fog.albedo = std::clamp(reader.number(FogAlbedo, 0.0), 0.0, 1.0);
+  light.fog.emission = std::clamp(reader.number(FogEmission, 1.0), 0.0, MaxFogEmission);
+  light.fog.edge = std::clamp(reader.number(FogEdge, 0.0), 0.0, MaxFogEdge);
+  light.fog.volumetric = std::clamp(reader.integer(Volumetric, 0), 0, 2);
+
   // a hand-set range wins (G0 section 5): an omni or a spot whose range is out of step
   // with its auto range is read with auto range off; a sun's radius is a box, and a
   // curve without a reach factor keeps the stored flag
@@ -947,6 +961,38 @@ LightPropertyUpdate lightPropertyUpdate(const LightProperties& light)
     // the emit_* keys stay, so that a light switched to a texture light and back gets its
     // emitter block again
     set(Emitter, "0");
+  }
+
+  // the fog keys (V7) as LightInfo::ToDict writes them: each only where it is not its
+  // default, and removed where it is; shaderParm3 only where the light has a distance,
+  // which only the Fog page gives a light that lacks the key, and never removed
+  if (light.fog.distance)
+  {
+    set(ShaderParm3, formatIdTech4Float(*light.fog.distance, 4));
+  }
+  // decided on the text that is written, so that a value that rounds to the default is
+  // removed, not written as the default
+  const auto setUnlessDefault =
+    [&](const std::string& key, const double value, const std::string& defaultText) {
+      if (auto text = formatIdTech4Float(value, 4); text != defaultText)
+      {
+        set(key, std::move(text));
+      }
+      else
+      {
+        remove(key);
+      }
+    };
+  setUnlessDefault(FogAlbedo, light.fog.albedo, "0");
+  setUnlessDefault(FogEmission, light.fog.emission, "1");
+  setUnlessDefault(FogEdge, light.fog.edge, "0");
+  if (light.fog.volumetric == 1 || light.fog.volumetric == 2)
+  {
+    set(Volumetric, fmt::format("{}", light.fog.volumetric));
+  }
+  else
+  {
+    remove(Volumetric);
   }
 
   return update;
@@ -1065,6 +1111,8 @@ LightProperties defaultLight(const LightType type, const LightProperties& keep)
   light.origin = keep.origin;
   light.color = keep.color;
   light.emitter = keep.emitter;
+  // and the fog keys, as LightInfo::RestoreKept keeps them (V7)
+  light.fog = keep.fog;
 
   switch (type)
   {
@@ -1387,6 +1435,28 @@ LightProperties applyEmitterFalloff(
   // the flag as it stands (G0 section 5, corrected for DP-T5-01): on, the range follows
   // the new curve; off, it is kept; a curve without a reach factor keeps the range
   return applyEmitterAutoRange(result, EmitterEdit::Reach);
+}
+
+double fogDensityToDistance(const double density)
+{
+  return FogDensityFarDistance
+         * std::pow(
+           FogDensityNearDistance / FogDensityFarDistance,
+           std::clamp(density, 0.0, 100.0) / 100.0);
+}
+
+double fogDistanceToDensity(const double distance)
+{
+  return std::clamp(
+    100.0 * std::log(std::max(distance, 1.0) / FogDensityFarDistance)
+      / std::log(FogDensityNearDistance / FogDensityFarDistance),
+    0.0,
+    100.0);
+}
+
+bool fogIsFaint(const double parm3)
+{
+  return parm3 <= 1.0 && parm3 != 1.0;
 }
 
 } // namespace tb::mdl

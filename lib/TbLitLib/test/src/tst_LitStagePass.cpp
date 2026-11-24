@@ -35,6 +35,7 @@
 #include "lit/ChunkBuilder.h"
 #include "lit/EngineLight.h"
 #include "lit/EnginePipelineState.h"
+#include "lit/LightParse.h"
 #include "lit/LitSession.h"
 #include "lit/MaterialDecls.h"
 
@@ -977,6 +978,46 @@ TEST_CASE("LitStagePass: FogPass' colour, density and planes (LP5.3, C49, SC533)
       view.worldModelViewMatrix,
       view.viewOrigin));
   }
+}
+
+TEST_CASE(
+  "LitStagePass: a fog light's shaderParm3 is its fog distance (V7, the Fog page)")
+{
+  // the light editor's Fog page writes shaderParm3; the preview reads it into the light's
+  // shaderParm 3 (parseLight), which a "colored" stage's alpha takes (parm3, register 7),
+  // and FogPass turns it into the density: a changed Distance changes the preview's fog
+  auto camera = CameraState{};
+  camera.position = vm::vec3f{100, 50, 80};
+  camera.direction = vm::vec3f{1, 0, 0};
+  camera.up = vm::vec3f{0, 0, 1};
+  camera.fovDegrees = 90.0f;
+  const auto view = litViewOf(camera, 64, 48);
+  const auto fogPlane = EnginePlane{0.0f, 0.0f, 1.0f, -296.0f};
+  auto shader = MaterialEntry{};
+  shader.fogLight = true;
+  shader.stages.resize(1);
+  shader.stages[0].colorRegisters = {4, 5, 6, 7};
+
+  const auto densityOf = [&](const std::string& shaderParm3) {
+    const auto light = parseLight(
+      {{"classname", "light"},
+       {"origin", "0 0 0"},
+       {"texture", "fogs/fixture"},
+       {"shaderParm3", shaderParm3}});
+    const auto& shaderParms = light.parms.shaderParms;
+    const auto registers = std::vector<float>{
+      1, 1, 0, 0, shaderParms[0], shaderParms[1], shaderParms[2], shaderParms[3]};
+    const auto parms = engineFogParms(
+      shader, registers, fogPlane, view.worldModelViewMatrix, view.viewOrigin);
+    REQUIRE(parms);
+    return parms->a;
+  };
+
+  CHECK(densityOf("500") == -0.5f / 500.0f);
+  CHECK(densityOf("250") == -0.5f / 250.0f);
+  CHECK(densityOf("512") == -0.5f / 512.0f);
+  // a faint fog is drawn at the default distance
+  CHECK(densityOf("0.5") == -0.5f / 500.0f);
 }
 
 TEST_CASE("LitStagePass: the fog cube is R_MakeZeroOneCubeTris (LP5.3, C49, D122)")

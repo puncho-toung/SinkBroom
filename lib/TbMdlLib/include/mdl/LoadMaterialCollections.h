@@ -26,6 +26,7 @@
 #include "mdl/Quake3Shader.h"
 
 #include "kd/path_hash.h"
+#include "kd/reflection_decl.h"
 
 #include <filesystem>
 #include <initializer_list>
@@ -132,6 +133,37 @@ public:
  */
 std::vector<std::string> shaderNamesWithPrefix(
   const IndexedShaders& shaders, std::initializer_list<std::string_view> prefixes);
+
+/**
+ * What a light editor reads of a Doom 3 light material: whether it is a fog light (the
+ * keyword fogLight, idMaterial::IsFogLight; fogs/pitFog is a blend light, and a material
+ * that the engine replaces with its default is none), and whether its first stage takes
+ * its alpha from the light's shaderParm3 and its colour from shaderParm0 to 2, so that a
+ * fog light's density and colour reach its fog (the engine's Fog tab tests stage 0's
+ * color.registers).
+ */
+struct LightShaderFacts
+{
+  bool fogLight = false;
+  bool densityFromLight = false;
+  bool colourFromLight = false;
+
+  kdl_reflect_decl(LightShaderFacts, fogLight, densityFromLight, colourFromLight);
+};
+
+/**
+ * The facts of the shader with the given name, made canonical as the engine's
+ * FindMaterial makes it (case, backslashes and an extension do not matter); nothing if no
+ * shader has it.
+ */
+std::optional<LightShaderFacts> lightShaderFacts(
+  const IndexedShaders& shaders, std::string_view shaderPath);
+
+/**
+ * The paths of the fog lights among the shaders under "lights/" and "fogs/", in the
+ * order of shaderNamesWithPrefix: the materials that a light editor offers a fog light.
+ */
+std::vector<std::string> fogLightShaderNames(const IndexedShaders& shaders);
 
 /**
  * Loads the material at the given path. If one of the given shaders has the path without

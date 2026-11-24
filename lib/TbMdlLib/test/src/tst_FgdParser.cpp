@@ -233,6 +233,56 @@ TEST_CASE("FgdParser")
         }));
     }
 
+    SECTION("the light class has the engine's fog rows and no row of unknown type")
+    {
+      // the export of V7 ( engine v0001.3p ): an unknown type is only logged at debug
+      // level, so a misspelt scalar row's type shows here alone ( a misspelt choices row
+      // stops the parse, which "parse all six files" catches )
+      for (const auto& filename : filenames)
+      {
+        CAPTURE(filename);
+
+        auto status = TestParserStatus{};
+        const auto definitions = parseFile(gamePath / filename, status) | kdl::value();
+        const auto it = std::ranges::find(definitions, "light", &EntityDefinition::name);
+        if (it == definitions.end())
+        {
+          // the models file has no light class
+          CHECK(filename == "DOOM-3-models.fgd");
+          continue;
+        }
+
+        for (const auto& propertyDefinition : it->propertyDefinitions)
+        {
+          CAPTURE(propertyDefinition.key);
+          CHECK_FALSE(
+            std::holds_alternative<PropertyValueTypes::Unknown>(
+              propertyDefinition.valueType));
+        }
+
+        const auto* volumetric = getPropertyDefinition(*it, "volumetric");
+        REQUIRE(volumetric != nullptr);
+        const auto* choice =
+          std::get_if<PropertyValueTypes::Choice>(&volumetric->valueType);
+        REQUIRE(choice != nullptr);
+        REQUIRE(choice->options.size() == 3);
+        CHECK(choice->options[0].value == "0");
+        CHECK(choice->options[1].value == "1");
+        CHECK(choice->options[2].value == "2");
+
+        for (const auto* key : {"fog_albedo", "fog_emission", "fog_edge"})
+        {
+          CAPTURE(key);
+          const auto* fogKey = getPropertyDefinition(*it, key);
+          REQUIRE(fogKey != nullptr);
+          CHECK(std::holds_alternative<PropertyValueTypes::Float>(fogKey->valueType));
+        }
+        const auto* emission = getPropertyDefinition(*it, "fog_emission");
+        CHECK(
+          std::get<PropertyValueTypes::Float>(emission->valueType).defaultValue == 1.0f);
+      }
+    }
+
     SECTION("referenced sprites are bundled")
     {
       // collect every "sprites/....png" model path from the FGD text

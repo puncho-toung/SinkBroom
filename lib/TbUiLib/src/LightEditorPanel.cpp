@@ -72,6 +72,7 @@
 
 #include "kd/contracts.h"
 #include "kd/ranges/to.h"
+#include "kd/string_compare.h"
 
 #include "vm/mat.h"
 #include "vm/vec.h"
@@ -227,12 +228,33 @@ constexpr auto ConeRange =
 constexpr auto HandleThresholdRange = SpinRange{1.0, 50.0, 0, 1.0, 5.0, 10.0};
 // how long the threshold's steps must pause before it is written
 constexpr auto HandleThresholdWriteDelay = std::chrono::milliseconds{200};
+// the Fog page's controls (V7), with the ranges of the engine's Fog tab: Density 0 to 100
+// over a distance of 8,192 to 32 units, Distance 2 to 30,000, a faint fog's Strength,
+// Albedo, Glow 0 to 8 (its slider to 2) and Soft sides 0 to 4,096 units (its slider to
+// 256)
+constexpr auto FogDensityRange = SpinRange{0.0, 100.0, 1, 1.0, 5.0, 12.5};
+constexpr auto FogDistanceRange =
+  SpinRange{mdl::MinFogDistance, mdl::MaxFogDistance, 0, 1.0, 16.0, 128.0};
+constexpr auto FogStrengthRange = SpinRange{0.0, 1.0, 2, 0.01, 0.1, 0.25};
+constexpr auto FogAlbedoRange = SpinRange{0.0, 1.0, 2, 0.01, 0.1, 0.25};
+constexpr auto FogGlowRange = SpinRange{0.0, mdl::MaxFogEmission, 2, 0.05, 0.25, 1.0};
+constexpr auto FogEdgeRange = SpinRange{0.0, mdl::MaxFogEdge, 0, 1.0, 8.0, 64.0};
+constexpr auto FogGlowSliderMaximum = 2.0;
+constexpr auto FogEdgeSliderMaximum = 256.0;
+// the material that "Make it a fog light" gives a light, as the engine's
+// LightMakeFogLight
+const auto FogLightTexture = std::string{"fogs/basicFog"};
 
 constexpr auto SliderSteps = 1000;
+// a slider spans its spin box's range unless it has a maximum of its own in this property
+// (the Fog page's Glow and Soft sides, whose spin boxes take typed values past the
+// slider's end, as the engine's ctrl+click does)
+constexpr auto SliderMaximumProperty = "LightEditorPanel_SliderMaximum";
 
-// the pages of the two kinds of light
+// the pages of the two kinds of light, and the Fog page, which is no kind
 constexpr auto EmitterPageIndex = 0;
 constexpr auto TexturePageIndex = 1;
+constexpr auto FogPageIndex = 2;
 
 const auto Multi = QString{"multi"};
 
@@ -350,11 +372,25 @@ QLayout* createVec3Layout(
 }
 
 QLayout* createSliderLayout(
-  QSlider*& slider, MultiSpinControl*& spin, const QString& name, const SpinRange& range)
+  QSlider*& slider,
+  MultiSpinControl*& spin,
+  const QString& name,
+  const SpinRange& range,
+  const std::optional<double> sliderMaximum = std::nullopt)
 {
   slider = new QSlider{Qt::Horizontal};
   slider->setObjectName(controlName(name + "Slider"));
   slider->setRange(0, SliderSteps);
+  if (sliderMaximum)
+  {
+    slider->setProperty(SliderMaximumProperty, *sliderMaximum);
+  }
+  // an arrow key moves the value by at least the spin box's last decimal, which a write
+  // rounds to: a smaller step would write the same value back
+  const auto span = sliderMaximum.value_or(range.max) - range.min;
+  slider->setSingleStep(
+    std::max(
+      1, int(std::ceil(SliderSteps * std::pow(10.0, -range.decimals) / span - 1e-9))));
 
   spin = createSpin(name, range);
 
@@ -452,7 +488,7 @@ TabBookPage* createTabPage(const QString& name, QLayout* form)
  * Sizes the tab book to the page that it shows: a stacked layout is as large as its
  * largest page, unless the other pages ignore their sizes.
  */
-void fitTabPages(const std::array<TabBookPage*, 2>& pages, const int currentIndex)
+void fitTabPages(const std::array<TabBookPage*, 3>& pages, const int currentIndex)
 {
   for (size_t i = 0; i < pages.size(); ++i)
   {
@@ -547,20 +583,30 @@ int addRow(FormWithSectionsLayout& form, QWidget* field)
   return row;
 }
 
-// a slider spans the range of its spin box's values, never the "multi" below it
-double sliderValue(const MultiSpinControl& spin, const int position)
+// a slider spans the range of its spin box's values, never the "multi" below it, up to
+// its own maximum where it has one
+double sliderMaximum(const QSlider& slider, const MultiSpinControl& spin)
+{
+  const auto maximum = slider.property(SliderMaximumProperty);
+  return maximum.isValid() ? maximum.toDouble() : spin.maximum();
+}
+
+double sliderValue(
+  const QSlider& slider, const MultiSpinControl& spin, const int position)
 {
   const auto minimum = spin.rangeMinimum();
-  const auto value = minimum + (spin.maximum() - minimum) * position / SliderSteps;
+  const auto value =
+    minimum + (sliderMaximum(slider, spin) - minimum) * position / SliderSteps;
   const auto scale = std::pow(10.0, spin.decimals());
   return std::round(value * scale) / scale;
 }
 
-int sliderPosition(const MultiSpinControl& spin, const double value)
+int sliderPosition(
+  const QSlider& slider, const MultiSpinControl& spin, const double value)
 {
   const auto minimum = spin.rangeMinimum();
-  const auto t =
-    (std::clamp(value, minimum, spin.maximum()) - minimum) / (spin.maximum() - minimum);
+  const auto maximum = sliderMaximum(slider, spin);
+  const auto t = (std::clamp(value, minimum, maximum) - minimum) / (maximum - minimum);
   return int(std::lround(t * SliderSteps));
 }
 
@@ -741,7 +787,12 @@ void setSlider(
 {
   const auto [value, multi] = firstValue(lights, get);
   setSpinValue(spin, value, multi);
-  slider->setValue(sliderPosition(*spin, value));
+  // a handle the user holds stays where the press found it, so that its release compares
+  // with the position it was pressed at; the release's refresh moves it
+  if (!slider->isSliderDown())
+  {
+    slider->setValue(sliderPosition(*slider, *spin, value));
+  }
 }
 
 template <typename Get>
@@ -797,6 +848,56 @@ void updateTextureItems(QComboBox& comboBox, const mdl::Map& map)
   {
     comboBox.addItem(QString::fromStdString(name));
   }
+}
+
+// the fog lights among the light materials, which the Fog page offers (V7)
+void updateFogMaterialItems(QComboBox& comboBox, const mdl::Map& map)
+{
+  const auto shaders = map.entityModelManager().shaders();
+  const auto names =
+    shaders ? mdl::fogLightShaderNames(*shaders) : std::vector<std::string>{};
+
+  comboBox.clear();
+  for (const auto& name : names)
+  {
+    comboBox.addItem(QString::fromStdString(name));
+  }
+}
+
+/**
+ * What the engine's Fog tab reads of the light's material (V7): nothing for an emitter, a
+ * light with the engine's default material, a material that no shader has, or while no
+ * shaders are loaded.
+ */
+std::optional<mdl::LightShaderFacts> lightShaderFactsOf(
+  const mdl::Map& map, const mdl::LightProperties& light)
+{
+  if (mdl::lightUsesEmitter(light) || light.texture.empty())
+  {
+    return std::nullopt;
+  }
+  const auto shaders = map.entityModelManager().shaders();
+  return shaders ? mdl::lightShaderFacts(*shaders, light.texture) : std::nullopt;
+}
+
+/**
+ * Whether the light is a fog light, as the engine's LightIsFogLight says: not an emitter,
+ * and its material has the keyword fogLight.
+ */
+bool isFogLight(const mdl::Map& map, const mdl::LightProperties& light)
+{
+  const auto facts = lightShaderFactsOf(map, light);
+  return facts && facts->fogLight;
+}
+
+/**
+ * Whether the map has its materials, without which no light can be told to be a fog light
+ * (no game path, or a load that failed): an editor's state the engine never is in.
+ */
+bool materialsLoaded(const mdl::Map& map)
+{
+  const auto shaders = map.entityModelManager().shaders();
+  return shaders && !shaders->shaders().empty();
 }
 
 using StyleOptions = std::vector<std::pair<std::string, std::string>>;
@@ -950,12 +1051,19 @@ struct LightEditorPanel::Controls
   QWidget* editor = nullptr;
   // the light's geometry and colour
   FormWithSectionsLayout* form = nullptr;
-  // the pages of emitters and texture lights, each with its own form
+  // the pages of emitters and texture lights, each with its own form, and the Fog page
   TabBook* tabs = nullptr;
   TabBookPage* emitterPage = nullptr;
   TabBookPage* texturePage = nullptr;
+  TabBookPage* fogPage = nullptr;
   FormWithSectionsLayout* emitterForm = nullptr;
   FormWithSectionsLayout* textureForm = nullptr;
+  FormWithSectionsLayout* fogForm = nullptr;
+  FormWithSectionsLayout* miscForm = nullptr;
+  // the page that the tab book shows; the Fog page stays shown while the selection is the
+  // same (V7)
+  int page = EmitterPageIndex;
+  bool selectionChanged = true;
 
   // every control that the user changes, blocked while the controls are set
   std::vector<QObject*> inputs;
@@ -1025,6 +1133,27 @@ struct LightEditorPanel::Controls
   MultiSpinControl* effectAmount = nullptr;
   MultiSpinControl* effectPhase = nullptr;
 
+  // the Fog page (V7)
+  QLabel* fogNoticeText = nullptr;
+  QToolButton* makeFogLight = nullptr;
+  QComboBox* fogMaterial = nullptr;
+  QComboBox* fogDensityForm = nullptr;
+  QSlider* fogDensitySlider = nullptr;
+  MultiSpinControl* fogDensity = nullptr;
+  MultiSpinControl* fogDistance = nullptr;
+  QLabel* fogDistanceText = nullptr;
+  QSlider* fogStrengthSlider = nullptr;
+  MultiSpinControl* fogStrength = nullptr;
+  QSlider* fogAlbedoSlider = nullptr;
+  MultiSpinControl* fogAlbedo = nullptr;
+  QSlider* fogGlowSlider = nullptr;
+  MultiSpinControl* fogGlow = nullptr;
+  QSlider* fogEdgeSlider = nullptr;
+  MultiSpinControl* fogEdge = nullptr;
+  QLabel* fogColourText = nullptr;
+  QComboBox* fogDrawnBy = nullptr;
+  QComboBox* lightInTheFog = nullptr;
+
   QCheckBox* castShadows = nullptr;
   QCheckBox* skipSpecular = nullptr;
 
@@ -1071,6 +1200,25 @@ struct LightEditorPanel::Controls
   int effectSpeedRow = -1;
   int effectAmountRow = -1;
   int effectPhaseRow = -1;
+  // the rows of fogForm and of the Misc form's Volumetric fog section
+  int fogNoticeRow = -1;
+  int fogStatusRow = -1;
+  int fogMaterialRow = -1;
+  int fogDensitySectionRow = -1;
+  int ownFogDistanceRow = -1;
+  int fogDensityFormRow = -1;
+  int fogDensityRow = -1;
+  int fogDistanceRow = -1;
+  int fogDistanceTextRow = -1;
+  int fogStrengthRow = -1;
+  int fogMediumSectionRow = -1;
+  int fogAlbedoRow = -1;
+  int fogGlowRow = -1;
+  int fogEdgeRow = -1;
+  int fogColourTextRow = -1;
+  int fogDrawnByRow = -1;
+  int volumetricSectionRow = -1;
+  int lightInTheFogRow = -1;
 };
 
 LightEditorPanel::LightEditorPanel(const SidebarContext& context, QWidget* parent)
@@ -1403,21 +1551,111 @@ QWidget* LightEditorPanel::createEditorPage()
   c.styleChoice = createComboBox("StyleChoice", {});
   textureForm->addRow(tr("Style"), c.styleChoice);
 
+  // the Fog page (V7), the engine's Fog tab in its words and order: on lights that are
+  // not fog lights a button that makes them fog lights; on fog lights the material, the
+  // density and what shows only in the game's volumetric fog
+  auto* fogForm = createForm();
+  c.fogForm = fogForm;
+  c.fogNoticeText = createNoticeLabel("FogNotice", tr("This light is not a fog light."));
+  c.makeFogLight = createTextButton("MakeFogLight", tr("Make it a fog light"));
+  c.fogNoticeRow = addRow(*fogForm, createNotice(c.fogNoticeText, c.makeFogLight));
+  // the 3D preview draws fog lights by the classic fog pass's rules (row 212)
+  auto* fogStatusText = createNoticeLabel(
+    "FogStatus",
+    tr(
+      "The 3D preview draws fog lights as the classic fog pass does: Colour and "
+      "Density show here. Albedo, Glow and Soft sides show only in the game, with the "
+      "volumetric fog on."));
+  fogStatusText->setWordWrap(true);
+  setInfoStyle(fogStatusText);
+  c.fogStatusRow = addRow(*fogForm, fogStatusText);
+  c.fogMaterial = createComboBox("FogMaterial", {});
+  c.fogMaterialRow = addRow(*fogForm, tr("Fog material"), c.fogMaterial);
+
+  c.fogDensitySectionRow = fogForm->rowCount();
+  fogForm->addSection(tr("Density"));
+  auto* ownFogDistanceText = createNoticeLabel(
+    "OwnFogDistanceNotice",
+    tr(
+      "This material sets its own fog distance: the light's density does not change "
+      "it."));
+  ownFogDistanceText->setWordWrap(true);
+  setInfoStyle(ownFogDistanceText);
+  c.ownFogDistanceRow = addRow(*fogForm, ownFogDistanceText);
+  c.fogDensityForm =
+    createComboBox("FogDensityForm", {tr("Distance"), tr("Faint ( fixed 500 units )")});
+  c.fogDensityFormRow = addRow(*fogForm, tr("Form"), c.fogDensityForm);
+  c.fogDensityRow = addRow(
+    *fogForm,
+    tr("Density"),
+    createSliderLayout(c.fogDensitySlider, c.fogDensity, "FogDensity", FogDensityRange));
+  c.fogDistance = createSpin("FogDistance", FogDistanceRange);
+  c.fogDistance->setSuffix(" units");
+  c.fogDistanceRow = addRow(*fogForm, tr("Distance"), c.fogDistance);
+  c.fogDistanceText = createNoticeLabel("FogDistanceText", {});
+  c.fogDistanceText->setWordWrap(true);
+  setInfoStyle(c.fogDistanceText);
+  c.fogDistanceTextRow = addRow(*fogForm, c.fogDistanceText);
+  c.fogStrengthRow = addRow(
+    *fogForm,
+    tr("Strength"),
+    createSliderLayout(
+      c.fogStrengthSlider, c.fogStrength, "FogStrength", FogStrengthRange));
+
+  c.fogMediumSectionRow = fogForm->rowCount();
+  fogForm->addSection(tr("In the volumetric fog"));
+  c.fogAlbedoRow = addRow(
+    *fogForm,
+    tr("Albedo"),
+    createSliderLayout(c.fogAlbedoSlider, c.fogAlbedo, "FogAlbedo", FogAlbedoRange));
+  c.fogGlowRow = addRow(
+    *fogForm,
+    tr("Glow"),
+    createSliderLayout(
+      c.fogGlowSlider, c.fogGlow, "FogGlow", FogGlowRange, FogGlowSliderMaximum));
+  c.fogGlow->setToolTip(tr("The slider runs to 2; type a value up to 8"));
+  c.fogEdgeRow = addRow(
+    *fogForm,
+    tr("Soft sides"),
+    createSliderLayout(
+      c.fogEdgeSlider, c.fogEdge, "FogEdge", FogEdgeRange, FogEdgeSliderMaximum));
+  c.fogEdge->setSuffix(" units");
+  c.fogEdge->setToolTip(tr("The slider runs to 256; type a value up to 4,096"));
+  c.fogColourText = createNoticeLabel("FogColourText", {});
+  c.fogColourText->setWordWrap(true);
+  setInfoStyle(c.fogColourText);
+  c.fogColourTextRow = addRow(*fogForm, c.fogColourText);
+  // "Always" is a third item only while a selected fog light says volumetric 1
+  c.fogDrawnBy = createComboBox("FogDrawnBy", {});
+  c.fogDrawnBy->addItem(tr("Automatic"), 0);
+  c.fogDrawnBy->addItem(tr("Classic fog pass only"), 2);
+  c.fogDrawnByRow = addRow(*fogForm, tr("Drawn by"), c.fogDrawnBy);
+
   c.emitterPage = createTabPage("EmitterPage", emitterForm);
   c.texturePage = createTabPage("TexturePage", textureForm);
+  c.fogPage = createTabPage("FogPage", fogForm);
   c.tabs = new TabBook{};
   c.tabs->setObjectName(controlName("Tabs"));
   c.tabs->addPage(c.emitterPage, tr("Emitter"));
   c.tabs->addPage(c.texturePage, tr("Texture"));
-  fitTabPages({c.emitterPage, c.texturePage}, EmitterPageIndex);
+  c.tabs->addPage(c.fogPage, tr("Fog"));
+  fitTabPages({c.emitterPage, c.texturePage, c.fogPage}, EmitterPageIndex);
 
   // misc
   auto* miscForm = createForm();
+  c.miscForm = miscForm;
   miscForm->addSection(tr("Misc"));
   c.castShadows = createCheckBox("CastShadows", tr("Cast shadows"));
   miscForm->addRow(c.castShadows);
   c.skipSpecular = createCheckBox("SkipSpecular", tr("Skip specular"));
   miscForm->addRow(c.skipSpecular);
+  // the key volumetric of a light that is not a fog light (row 51); a fog light's is the
+  // Fog page's Drawn by
+  c.volumetricSectionRow = miscForm->rowCount();
+  miscForm->addSection(tr("Volumetric fog"));
+  c.lightInTheFog =
+    createComboBox("LightInTheFog", {tr("Automatic"), tr("Always"), tr("Never")});
+  c.lightInTheFogRow = addRow(*miscForm, tr("Light in the fog"), c.lightInTheFog);
 
   c.inputs = {
     c.handleThreshold,
@@ -1453,6 +1691,21 @@ QWidget* LightEditorPanel::createEditorPage()
     c.effectAmountSlider,
     c.effectAmount,
     c.effectPhase,
+    c.fogMaterial,
+    c.fogDensityForm,
+    c.fogDensitySlider,
+    c.fogDensity,
+    c.fogDistance,
+    c.fogStrengthSlider,
+    c.fogStrength,
+    c.fogAlbedoSlider,
+    c.fogAlbedo,
+    c.fogGlowSlider,
+    c.fogGlow,
+    c.fogEdgeSlider,
+    c.fogEdge,
+    c.fogDrawnBy,
+    c.lightInTheFog,
     c.castShadows,
     c.skipSpecular,
   };
@@ -1549,7 +1802,7 @@ void LightEditorPanel::connectEditor()
       connectSpin(spin, commandName, set);
 
       const auto write = [=, this](const int position) {
-        const auto value = sliderValue(*spin, position);
+        const auto value = sliderValue(*slider, *spin, position);
         editLights(commandName, [&](mdl::LightProperties& light) { set(light, value); });
       };
       // the position at which the handle was pressed
@@ -1558,7 +1811,7 @@ void LightEditorPanel::connectEditor()
         if (slider->isSliderDown())
         {
           const auto blocker = QSignalBlocker{spin};
-          spin->setValue(sliderValue(*spin, position));
+          spin->setValue(sliderValue(*slider, *spin, position));
         }
         else
         {
@@ -1913,6 +2166,122 @@ void LightEditorPanel::connectEditor()
       light.emitter.effectPhase = value;
     }));
 
+  // the Fog page (V7): every fog control edits fog lights only
+  const auto forFogLights = [this](auto set) {
+    return [this, set](mdl::LightProperties& light, const auto value) {
+      if (isFogLight(m_document.map(), light))
+      {
+        set(light, value);
+      }
+    };
+  };
+  connect(c.makeFogLight, &QAbstractButton::clicked, this, [this]() {
+    // without materials no light is a fog light, so every light would be rewritten
+    if (!materialsLoaded(m_document.map()))
+    {
+      return;
+    }
+    editLights("Make Fog Light", [this](mdl::LightProperties& light) {
+      // the stock fog material, an emitter made a texture light as the Texture tab makes
+      // it one (LightMakeFogLight); a fog light keeps its material
+      if (!isFogLight(m_document.map(), light))
+      {
+        if (mdl::lightUsesEmitter(light))
+        {
+          light = mdl::asTextureLight(light);
+        }
+        light.texture = FogLightTexture;
+      }
+    });
+  });
+  const auto setFogMaterial =
+    forFogLights([](mdl::LightProperties& light, const std::string& texture) {
+      // the list holds lowercase decl names: a re-pick of the material shown keeps the
+      // light's own spelling
+      if (!kdl::ci::str_is_equal(light.texture, texture))
+      {
+        light.texture = texture;
+      }
+    });
+  connect(c.fogMaterial, &QComboBox::activated, this, [=, this](const int index) {
+    const auto texture = m_controls->fogMaterial->itemText(index).toStdString();
+    editLights("Set Light Texture", [&](mdl::LightProperties& light) {
+      setFogMaterial(light, texture);
+    });
+  });
+  // the form of the density: a distance, or a faint fog's strength at 500 units; picking
+  // a light's own form changes nothing
+  const auto setFogDensityForm =
+    forFogLights([](mdl::LightProperties& light, const int index) {
+      const auto faint = index == 1;
+      if (mdl::fogIsFaint(light.fog.distance.value_or(1.0)) != faint)
+      {
+        light.fog.distance = faint ? mdl::FaintFogStrength : mdl::DefaultFogDistance;
+      }
+    });
+  connect(c.fogDensityForm, &QComboBox::activated, this, [=, this](const int index) {
+    editLights("Set Fog Density", [&](mdl::LightProperties& light) {
+      setFogDensityForm(light, index);
+    });
+  });
+  // whole units in the map, as the engine writes the slider's distance
+  connectSlider(
+    c.fogDensitySlider,
+    c.fogDensity,
+    "Set Fog Density",
+    forFogLights([](mdl::LightProperties& light, const double value) {
+      light.fog.distance = std::round(mdl::fogDensityToDistance(value));
+    }));
+  connectSpin(
+    c.fogDistance,
+    "Set Fog Density",
+    forFogLights([](mdl::LightProperties& light, const double value) {
+      light.fog.distance = value;
+    }));
+  connectSlider(
+    c.fogStrengthSlider,
+    c.fogStrength,
+    "Set Fog Density",
+    forFogLights([](mdl::LightProperties& light, const double value) {
+      light.fog.distance = value;
+    }));
+  connectSlider(
+    c.fogAlbedoSlider,
+    c.fogAlbedo,
+    "Set Fog Albedo",
+    forFogLights(
+      [](mdl::LightProperties& light, const double value) { light.fog.albedo = value; }));
+  connectSlider(
+    c.fogGlowSlider,
+    c.fogGlow,
+    "Set Fog Glow",
+    forFogLights([](mdl::LightProperties& light, const double value) {
+      light.fog.emission = value;
+    }));
+  connectSlider(
+    c.fogEdgeSlider,
+    c.fogEdge,
+    "Set Fog Soft Sides",
+    forFogLights(
+      [](mdl::LightProperties& light, const double value) { light.fog.edge = value; }));
+  const auto setFogDrawnBy = forFogLights(
+    [](mdl::LightProperties& light, const int value) { light.fog.volumetric = value; });
+  connect(c.fogDrawnBy, &QComboBox::activated, this, [=, this](const int index) {
+    auto ok = false;
+    const auto value = m_controls->fogDrawnBy->itemData(index).toInt(&ok);
+    if (ok)
+    {
+      editLights("Set Fog Drawn By", [&](mdl::LightProperties& light) {
+        setFogDrawnBy(light, value);
+      });
+    }
+  });
+  connect(c.lightInTheFog, &QComboBox::activated, this, [this](const int index) {
+    editLights("Set Light In The Fog", [&](mdl::LightProperties& light) {
+      light.fog.volumetric = index;
+    });
+  });
+
   connectCheckBox(
     c.castShadows,
     "Set Light Shadows",
@@ -1966,7 +2335,9 @@ void LightEditorPanel::connectEditor()
     &LightEditorPanel::convertLightOrigins);
 
   connect(c.tabs, &TabBook::pageChanged, this, [this](const int index) {
-    fitTabPages({m_controls->emitterPage, m_controls->texturePage}, index);
+    auto& controls = *m_controls;
+    controls.page = index;
+    fitTabPages({controls.emitterPage, controls.texturePage, controls.fogPage}, index);
   });
 }
 
@@ -1988,8 +2359,11 @@ void LightEditorPanel::connectObservers()
   });
   m_notifierConnection +=
     m_document.documentDidChangeNotifier.connect([&] { refresh(); });
-  m_notifierConnection +=
-    m_document.selectionDidChangeNotifier.connect([&](const auto&) { refresh(); });
+  // a new selection shows the page of its kind, the Fog page too (V7)
+  m_notifierConnection += m_document.selectionDidChangeNotifier.connect([&](const auto&) {
+    m_controls->selectionChanged = true;
+    refresh();
+  });
   m_notifierConnection +=
     m_document.entityDefinitionsDidChangeNotifier.connect([&] { refresh(); });
   // a reload of the material collections parses the shaders again
@@ -2273,6 +2647,7 @@ void LightEditorPanel::updateEditor()
   if (c.texturesStale)
   {
     updateTextureItems(*c.texture, map);
+    updateFogMaterialItems(*c.fogMaterial, map);
     c.texturesStale = false;
   }
   const auto [texture, textureMulti] =
@@ -2327,10 +2702,15 @@ void LightEditorPanel::updateEditor()
   c.styleChoice->setCurrentIndex(styleMulti ? -1 : findStyleIndex(*c.styleChoice, style));
 
   // the page follows the lights: emitters, and emitters mixed with texture lights, on the
-  // Emitter page, texture lights on the Texture page; the tab book's signals are not
-  // blocked, because its tab bar follows them
+  // Emitter page, texture lights on the Texture page; the Fog page, which is no kind,
+  // stays while the selection is the same (V7); the tab book's signals are not blocked,
+  // because its tab bar follows them
   const auto mixedKinds = anyEmitter && !allEmitters;
-  c.tabs->switchToPage(anyEmitter ? EmitterPageIndex : TexturePageIndex);
+  if (c.page != FogPageIndex || c.selectionChanged)
+  {
+    c.tabs->switchToPage(anyEmitter ? EmitterPageIndex : TexturePageIndex);
+  }
+  c.selectionChanged = false;
   c.emitterForm->setRowVisible(c.mixedEmitterRow, mixedKinds);
   c.texturePage->setEnabled(!mixedKinds);
 
@@ -2399,7 +2779,140 @@ void LightEditorPanel::updateEditor()
     return light.emitter.effectPhase - std::floor(light.emitter.effectPhase);
   });
 
-  // misc
+  // the Fog page (V7): the controls show the selected fog lights; the other lights get
+  // the button that makes them fog lights. The density rows only where every fog light's
+  // material takes its alpha from shaderParm3, as the engine's tab tests its stage 0
+  auto fogLights = std::vector<mdl::LightProperties>{};
+  auto densityFromLight = true;
+  auto colourFromLight = true;
+  for (const auto& light : lights)
+  {
+    if (const auto facts = lightShaderFactsOf(map, light); facts && facts->fogLight)
+    {
+      fogLights.push_back(light);
+      densityFromLight = densityFromLight && facts->densityFromLight;
+      colourFromLight = colourFromLight && facts->colourFromLight;
+    }
+  }
+  const auto anyFog = !fogLights.empty();
+  const auto allFog = fogLights.size() == lights.size();
+  const auto parm3 = [](const auto& light) { return light.fog.distance.value_or(1.0); };
+  const auto allFaint = anyFog && std::ranges::all_of(fogLights, [&](const auto& light) {
+                          return mdl::fogIsFaint(parm3(light));
+                        });
+  const auto showDensity = anyFog && densityFromLight;
+
+  const auto haveMaterials = materialsLoaded(map);
+  c.fogNoticeText->setText(
+    !haveMaterials ? tr("No materials are loaded: the editor cannot tell fog lights.")
+    : anyFog
+      ? tr(
+          "Some of the selected lights are not fog lights: these controls change the "
+          "fog lights only.")
+      : tr("This light is not a fog light."));
+  c.makeFogLight->setVisible(haveMaterials);
+  c.fogForm->setRowVisible(c.fogNoticeRow, !allFog);
+  for (const auto row :
+       {c.fogStatusRow,
+        c.fogMaterialRow,
+        c.fogDensitySectionRow,
+        c.fogMediumSectionRow,
+        c.fogAlbedoRow,
+        c.fogGlowRow,
+        c.fogEdgeRow,
+        c.fogColourTextRow,
+        c.fogDrawnByRow})
+  {
+    c.fogForm->setRowVisible(row, anyFog);
+  }
+  c.fogForm->setRowVisible(c.ownFogDistanceRow, anyFog && !densityFromLight);
+  c.fogForm->setRowVisible(c.fogDensityFormRow, showDensity);
+  c.fogForm->setRowVisible(c.fogDensityRow, showDensity && !allFaint);
+  c.fogForm->setRowVisible(c.fogDistanceRow, showDensity && !allFaint);
+  c.fogForm->setRowVisible(c.fogDistanceTextRow, showDensity && !allFaint);
+  c.fogForm->setRowVisible(c.fogStrengthRow, showDensity && allFaint);
+
+  if (anyFog)
+  {
+    const auto [fogTexture, fogTextureMulti] =
+      firstValue(fogLights, [](const auto& light) { return light.texture; });
+    // a fog light whose material lies outside lights/ and fogs/ shows it, as the style
+    // combo shows a style that is not in its list
+    c.fogMaterial->setPlaceholderText(
+      fogTextureMulti ? Multi : QString::fromStdString(fogTexture));
+    c.fogMaterial->setCurrentIndex(
+      fogTextureMulti ? -1
+                      : c.fogMaterial->findText(
+                          QString::fromStdString(fogTexture), Qt::MatchFixedString));
+
+    // a distance at most 1 is no distance: the engine's DEFAULT_FOG_DISTANCE
+    const auto distanceOf = [&](const auto& light) {
+      const auto value = parm3(light);
+      return value > 1.0 ? value : mdl::DefaultFogDistance;
+    };
+    setComboBox(c.fogDensityForm, fogLights, [&](const auto& light) {
+      return mdl::fogIsFaint(parm3(light)) ? 1 : 0;
+    });
+    setSlider(c.fogDensitySlider, c.fogDensity, fogLights, [&](const auto& light) {
+      return mdl::fogDistanceToDensity(distanceOf(light));
+    });
+    setSpin(c.fogDistance, fogLights, distanceOf);
+    setSlider(c.fogStrengthSlider, c.fogStrength, fogLights, [&](const auto& light) {
+      return std::max(parm3(light), 0.0);
+    });
+    setSlider(c.fogAlbedoSlider, c.fogAlbedo, fogLights, [](const auto& light) {
+      return light.fog.albedo;
+    });
+    setSlider(c.fogGlowSlider, c.fogGlow, fogLights, [](const auto& light) {
+      return light.fog.emission;
+    });
+    setSlider(c.fogEdgeSlider, c.fogEdge, fogLights, [](const auto& light) {
+      return light.fog.edge;
+    });
+
+    // what the volumetric fog leaves of the light behind the fog, at the engine's rate,
+    // in the engine's words; the line speaks of one distance, so it hides while the fog
+    // lights' distances differ
+    const auto [distance, distanceMulti] = firstValue(fogLights, distanceOf);
+    c.fogForm->setRowVisible(
+      c.fogDistanceTextRow, showDensity && !allFaint && !distanceMulti);
+    const auto left = 100.0 * std::exp(-mdl::FogLightRate);
+    c.fogDistanceText->setText(
+      tr(
+        "Classic fog: opaque at %1 units. Volumetric fog: %2 % of the light is left "
+        "after %1 units, %3 % after %4.")
+        .arg(distance, 0, 'f', 0)
+        .arg(left, 0, 'f', 1)
+        .arg(left * left / 100.0, 0, 'f', 2)
+        .arg(2.0 * distance, 0, 'f', 0));
+    c.fogColourText->setText(
+      colourFromLight ? tr("The colour tints the glow only. Set it under Color above.")
+                      : tr("This material ignores the light's colour."));
+  }
+
+  // a fog light that says volumetric 1 shows it as a third item of Drawn by, kept until
+  // another is chosen (the engine's review CN3-6)
+  const auto anyAlways = std::ranges::any_of(
+    fogLights, [](const auto& light) { return light.fog.volumetric == 1; });
+  if (anyAlways && c.fogDrawnBy->count() == 2)
+  {
+    c.fogDrawnBy->addItem(tr("Always ( as Automatic for a fog light )"), 1);
+  }
+  else if (!anyAlways && c.fogDrawnBy->count() == 3)
+  {
+    c.fogDrawnBy->removeItem(2);
+  }
+  if (anyFog)
+  {
+    setComboBoxData(
+      c.fogDrawnBy, fogLights, [](const auto& light) { return light.fog.volumetric; });
+  }
+
+  // misc; the light in the fog while no selected light is a fog light
+  c.miscForm->setRowVisible(c.volumetricSectionRow, !anyFog);
+  c.miscForm->setRowVisible(c.lightInTheFogRow, !anyFog);
+  setComboBox(
+    c.lightInTheFog, lights, [](const auto& light) { return light.fog.volumetric; });
   setCheckBox(c.castShadows, lights, [](const auto& light) { return light.castShadows; });
   setCheckBox(
     c.skipSpecular, lights, [](const auto& light) { return light.skipSpecular; });
@@ -2472,6 +2985,12 @@ void LightEditorPanel::editOrientedLights(
 
 void LightEditorPanel::switchLightKind(const int pageIndex)
 {
+  // the Fog page is no kind of light: its tab writes nothing (V7)
+  if (pageIndex == FogPageIndex)
+  {
+    return;
+  }
+
   auto& map = m_document.map();
   const auto policy = map.gameInfo().gameConfig.entityConfig.rotationPolicy;
 

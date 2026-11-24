@@ -124,6 +124,16 @@ std::vector<std::string> keys(const std::vector<EntityProperty>& properties)
   return sorted(std::move(result));
 }
 
+// the four fog keys that a light at their defaults removes (V7)
+std::vector<std::string> withFogKeys(std::vector<std::string> strs)
+{
+  for (const auto* key : {"fog_albedo", "fog_emission", "fog_edge", "volumetric"})
+  {
+    strs.push_back(key);
+  }
+  return strs;
+}
+
 // the eighteen keys that an enabled emitter block writes
 std::vector<std::string> withEmitterKeys(std::vector<std::string> strs)
 {
@@ -527,7 +537,7 @@ TEST_CASE("Light")
       CHECK(
         keys(update.set)
         == sorted({"origin", "noshadows", "nospecular", "_color", "light_radius"}));
-      CHECK(sorted(update.remove) == sorted(pointRemoved));
+      CHECK(sorted(update.remove) == sorted(withFogKeys(pointRemoved)));
 
       CHECK(valueOf(update.set, "origin") == "0 0 0");
       CHECK(valueOf(update.set, "noshadows") == "0");
@@ -560,7 +570,7 @@ TEST_CASE("Light")
            "light_target",
            "light_up",
            "light_right"}));
-      CHECK(sorted(update.remove) == sorted(spotRemoved));
+      CHECK(sorted(update.remove) == sorted(withFogKeys(spotRemoved)));
 
       CHECK(valueOf(update.set, "light_target") == "0 0 -256");
       CHECK(valueOf(update.set, "light_up") == "0 -128 0");
@@ -582,8 +592,8 @@ TEST_CASE("Light")
            "light_end"}));
       CHECK(
         sorted(explicitUpdate.remove)
-        == sorted(
-          {"light", "texture", "light_radius", "light_center", "parallel", "style"}));
+        == sorted(withFogKeys(
+          {"light", "texture", "light_radius", "light_center", "parallel", "style"})));
       CHECK(valueOf(explicitUpdate.set, "light_start") == "0 0 -32");
       CHECK(valueOf(explicitUpdate.set, "light_end") == "0 0 -200");
     }
@@ -597,7 +607,7 @@ TEST_CASE("Light")
           {"origin", "noshadows", "nospecular", "_color", "light_radius", "parallel"}));
       CHECK(
         sorted(update.remove)
-        == sorted(
+        == sorted(withFogKeys(
           {"light",
            "texture",
            "light_center",
@@ -606,7 +616,7 @@ TEST_CASE("Light")
            "light_right",
            "light_start",
            "light_end",
-           "style"}));
+           "style"})));
       CHECK(valueOf(update.set, "light_radius") == "2048 2048 1024");
       CHECK(valueOf(update.set, "parallel") == "1");
     }
@@ -1337,7 +1347,7 @@ TEST_CASE("Light")
           {"origin", "noshadows", "nospecular", "_color", "light_radius"}));
       CHECK(
         sorted(update.remove)
-        == sorted(
+        == sorted(withFogKeys(
           {"light",
            "texture",
            "light_center",
@@ -1347,7 +1357,7 @@ TEST_CASE("Light")
            "light_right",
            "light_start",
            "light_end",
-           "style"}));
+           "style"})));
 
       CHECK(valueOf(update.set, "light_radius") == "288 288 288");
       CHECK(valueOf(update.set, "emitter") == "1");
@@ -2400,6 +2410,239 @@ TEST_CASE("Light")
         CHECK_FALSE(applyEmitterAutoRange(spot, EmitterEdit::Range).emitter.autoRange);
       }
     }
+  }
+}
+
+TEST_CASE("Light fog keys")
+{
+  // a fog light whose fog keys are all set, none at its default
+  const auto fogProperties = std::vector<EntityProperty>{
+    {"classname", "light"},
+    {"origin", "0 0 0"},
+    {"light_radius", "300 300 300"},
+    {"texture", "fogs/basicFog"},
+    {"shaderParm3", "600"},
+    {"fog_albedo", "0.6"},
+    {"fog_emission", "0.5"},
+    {"fog_edge", "64"},
+    {"volumetric", "2"},
+  };
+
+  SECTION("parseLightProperties reads the fog keys of every light")
+  {
+    CHECK(parse(defaultPointProperties).fog == FogProperties{});
+    CHECK(
+      parse(fogProperties).fog
+      == FogProperties{
+        .distance = 600.0,
+        .albedo = 0.6,
+        .emission = 0.5,
+        .edge = 64.0,
+        .volumetric = 2,
+      });
+
+    // as the engine clamps them; shaderParm3 is read as it is
+    CHECK(
+      parse(with(
+              defaultPointProperties,
+              {{"shaderParm3", "0.25"},
+               {"fog_albedo", "1.5"},
+               {"fog_emission", "9"},
+               {"fog_edge", "5000"},
+               {"volumetric", "3"}}))
+        .fog
+      == FogProperties{
+        .distance = 0.25,
+        .albedo = 1.0,
+        .emission = MaxFogEmission,
+        .edge = MaxFogEdge,
+        .volumetric = 2,
+      });
+    CHECK(
+      parse(with(
+              defaultPointProperties,
+              {{"fog_albedo", "-1"},
+               {"fog_emission", "-2"},
+               {"fog_edge", "-8"},
+               {"volumetric", "-1"}}))
+        .fog
+      == FogProperties{
+        .distance = std::nullopt,
+        .albedo = 0.0,
+        .emission = 0.0,
+        .edge = 0.0,
+        .volumetric = 0});
+
+    // read as atof and atoi read them: text that is no number is 0, a number's tail is
+    // dropped
+    CHECK(
+      parse(with(defaultPointProperties, {{"shaderParm3", "dense"}})).fog.distance
+      == 0.0);
+    CHECK(
+      parse(with(defaultPointProperties, {{"volumetric", "2x"}})).fog.volumetric == 2);
+  }
+
+  SECTION("lightPropertyUpdate writes a fog key only where it is not its default")
+  {
+    const auto defaults = lightPropertyUpdate(parse(defaultPointProperties));
+    for (const auto& key : {"fog_albedo", "fog_emission", "fog_edge", "volumetric"})
+    {
+      CAPTURE(key);
+      CHECK(valueOf(defaults.set, key) == "<missing>");
+      CHECK(contains(defaults.remove, key));
+    }
+    // shaderParm3 is neither written nor removed without a distance
+    CHECK(valueOf(defaults.set, "shaderParm3") == "<missing>");
+    CHECK_FALSE(contains(defaults.remove, "shaderParm3"));
+
+    const auto update = lightPropertyUpdate(parse(fogProperties));
+    CHECK(valueOf(update.set, "shaderParm3") == "600");
+    CHECK(valueOf(update.set, "fog_albedo") == "0.6");
+    CHECK(valueOf(update.set, "fog_emission") == "0.5");
+    CHECK(valueOf(update.set, "fog_edge") == "64");
+    CHECK(valueOf(update.set, "volumetric") == "2");
+    for (const auto& key :
+         {"shaderParm3", "fog_albedo", "fog_emission", "fog_edge", "volumetric"})
+    {
+      CAPTURE(key);
+      CHECK_FALSE(contains(update.remove, key));
+    }
+
+    // a value that rounds to the default at four decimals is removed, not written
+    auto almostDefault = parse(defaultPointProperties);
+    almostDefault.fog.albedo = 0.00001;
+    almostDefault.fog.emission = 1.00001;
+    const auto almostDefaultUpdate = lightPropertyUpdate(almostDefault);
+    CHECK(valueOf(almostDefaultUpdate.set, "fog_albedo") == "<missing>");
+    CHECK(valueOf(almostDefaultUpdate.set, "fog_emission") == "<missing>");
+    CHECK(contains(almostDefaultUpdate.remove, "fog_albedo"));
+    CHECK(contains(almostDefaultUpdate.remove, "fog_emission"));
+
+    auto always = parse(defaultPointProperties);
+    always.fog.volumetric = 1;
+    CHECK(valueOf(lightPropertyUpdate(always).set, "volumetric") == "1");
+
+    // a light written and read again has the same fog keys
+    const auto light = parse(fogProperties);
+    CHECK(
+      parse(applyLightPropertyUpdate(Entity{defaultPointProperties}, update).properties())
+        .fog
+      == light.fog);
+  }
+
+  SECTION("lightKeyDiff writes only the fog keys that an edit changes")
+  {
+    const auto entity = Entity{fogProperties};
+
+    auto glow = parseLightProperties(entity);
+    glow.fog.emission = 2.0;
+    CHECK(
+      lightKeyDiff(entity, glow)
+      == LightPropertyUpdate{{{"fog_emission", "2"}}, std::vector<std::string>{}});
+
+    // an edit to the default removes the key
+    auto noAlbedo = parseLightProperties(entity);
+    noAlbedo.fog.albedo = 0.0;
+    CHECK(
+      lightKeyDiff(entity, noAlbedo)
+      == LightPropertyUpdate{{}, std::vector<std::string>{"fog_albedo"}});
+
+    auto automatic = parseLightProperties(entity);
+    automatic.fog.volumetric = 0;
+    CHECK(
+      lightKeyDiff(entity, automatic)
+      == LightPropertyUpdate{{}, std::vector<std::string>{"volumetric"}});
+
+    // a distance where the light had none
+    auto distance = parse(defaultPointProperties);
+    distance.fog.distance = 300.0;
+    CHECK(
+      lightKeyDiff(Entity{defaultPointProperties}, distance).set
+      == std::vector<EntityProperty>{{"shaderParm3", "300"}});
+  }
+
+  SECTION("An edit of another key leaves shaderParm3 and the fog keys as they are")
+  {
+    // on a light that is not a fog light, shaderParm3 is the material's (a time scale),
+    // and a fog key at its default written by hand is no edit either
+    const auto entity = Entity{with(
+      defaultPointProperties,
+      {{"texture", "lights/round"},
+       {"shaderParm3", "0.5000"},
+       {"fog_albedo", "0"},
+       {"volumetric", "0"}})};
+
+    auto light = parseLightProperties(entity);
+    light.color = vm::vec3d{1, 0.5, 0.25};
+    const auto diff = lightKeyDiff(entity, light);
+    CHECK(diff.set == std::vector<EntityProperty>{{"_color", "1 0.5 0.25"}});
+    CHECK(diff.remove.empty());
+
+    const auto changed = applyLightPropertyUpdate(entity, diff);
+    CHECK(*changed.property("shaderParm3") == "0.5000");
+    CHECK(*changed.property("fog_albedo") == "0");
+    CHECK(*changed.property("volumetric") == "0");
+
+    // nothing changed is nothing written
+    CHECK(lightKeyDiff(entity, parseLightProperties(entity)) == LightPropertyUpdate{});
+  }
+
+  SECTION("defaultLight and the type switch keep the fog keys")
+  {
+    const auto keep = parse(fogProperties);
+    for (const auto type : {LightType::Point, LightType::Spot, LightType::Sun})
+    {
+      CAPTURE(type);
+      CHECK(defaultLight(type, keep).fog == keep.fog);
+      CHECK(emitterShapeSwitch(type, keep).fog == keep.fog);
+      CHECK(seededEmitterLight(type, keep).fog == keep.fog);
+    }
+
+    // so a type switch writes no fog key
+    const auto entity = Entity{fogProperties};
+    const auto diff = lightKeyDiff(entity, emitterShapeSwitch(LightType::Sun, keep));
+    for (const auto& key :
+         {"shaderParm3", "fog_albedo", "fog_emission", "fog_edge", "volumetric"})
+    {
+      CAPTURE(key);
+      CHECK(valueOf(diff.set, key) == "<missing>");
+      CHECK_FALSE(contains(diff.remove, key));
+    }
+  }
+
+  SECTION("fogDensityToDistance and fogDistanceToDensity")
+  {
+    CHECK(fogDensityToDistance(0.0) == Catch::Approx(8192.0));
+    CHECK(fogDensityToDistance(50.0) == Catch::Approx(512.0));
+    CHECK(fogDensityToDistance(62.5) == Catch::Approx(256.0));
+    CHECK(fogDensityToDistance(100.0) == Catch::Approx(32.0));
+    CHECK(fogDensityToDistance(-10.0) == Catch::Approx(8192.0));
+    CHECK(fogDensityToDistance(200.0) == Catch::Approx(32.0));
+
+    CHECK(fogDistanceToDensity(8192.0) == Catch::Approx(0.0).margin(1e-9));
+    CHECK(fogDistanceToDensity(512.0) == Catch::Approx(50.0));
+    CHECK(fogDistanceToDensity(32.0) == Catch::Approx(100.0));
+    CHECK(fogDistanceToDensity(30000.0) == 0.0);
+    CHECK(fogDistanceToDensity(2.0) == 100.0);
+    CHECK(fogDistanceToDensity(0.0) == 100.0);
+
+    for (const auto density : {0.0, 12.5, 33.3, 50.0, 87.5, 100.0})
+    {
+      CAPTURE(density);
+      CHECK(
+        fogDistanceToDensity(fogDensityToDistance(density))
+        == Catch::Approx(density).margin(1e-9));
+    }
+  }
+
+  SECTION("fogIsFaint")
+  {
+    CHECK(fogIsFaint(0.5));
+    CHECK(fogIsFaint(0.0));
+    CHECK(fogIsFaint(-1.0));
+    CHECK_FALSE(fogIsFaint(1.0));
+    CHECK_FALSE(fogIsFaint(1.0001));
+    CHECK_FALSE(fogIsFaint(DefaultFogDistance));
   }
 }
 

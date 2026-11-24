@@ -3598,6 +3598,22 @@ you func_remove it after it is shot if it's blocking an entrance."
 	target(target_destination) : "Entity to trigger; target1..targetN also link"
 ]
 
+@PointClass color(255 127 0) size(-8 -8 -8, 8 8 8) = func_decal : "Compile-time decal projector: dmap bakes 'material' onto world and inlined geometry inside a box 'depth' units deep centred on the origin, projecting along the entity's reverse forward axis (place it on the surface facing out of it). Movers and non-inlined func_statics are skipped (runtime decals cover them). Never spawned in game. The material must be discrete (DECAL_MACRO). 'target' aims the projector at another entity instead of 'angles'."
+[
+	dmapOnly(string) readonly : "" : "1"
+	material(string) : "decal material (discrete, e.g. DECAL_MACRO)"
+	decalSize(string) : "width height, in units, on the plane through the origin" : "64 64"
+	depth(float) : "projection depth in units, centred on the origin (default 32)" : 32
+	fade(float) : "fade depth at the far end in units, at most depth/2, 0 = hard edge (default 8)" : 8
+	parallel(choices) : "1 = orthographic, 0 = perspective from depth/2 in front of the origin" : 0 =
+	[
+		0 : "No"
+		1 : "Yes"
+	]
+	name(target_source) : "Entity name; other entities target this"
+	target(target_destination) : "Entity to trigger; target1..targetN also link"
+]
+
 @SolidClass color(0 127 204) = func_door : "Door."
 [
 	spawnclass(string) readonly : "" : "idDoor"
@@ -14135,6 +14151,7 @@ Prefer func_group for unreferenced brush detail. spawnSkipStatics may omit inlin
 @PointClass color(0 255 0) = info_landing : "Explicit party landing slot, index 0 through 7"
 [
 	dmapOnly(string) readonly : "" : "1"
+	mapOnlyKind(string) readonly : "" : "landing"
 	index(integer) : "Party player index" : 0
 	landmark(string) : "Arrival doorway id"
 	name(target_source) : "Entity name; other entities target this"
@@ -14144,6 +14161,7 @@ Prefer func_group for unreferenced brush detail. spawnSkipStatics may omit inlin
 @SolidClass color(0 255 255) = info_landmark : "Map graph doorway; landmark identity survives editor group renames"
 [
 	dmapOnly(string) readonly : "" : "1"
+	mapOnlyKind(string) readonly : "" : "landmark"
 	radius(float) : "Arrival placement radius" : 256
 	entry(choices) : "Arrivals may use this doorway" : 1 =
 	[
@@ -14223,9 +14241,9 @@ Prefer func_group for unreferenced brush detail. spawnSkipStatics may omit inlin
 [
 	spawnclass(string) readonly : "" : "idPortalSky"
 	hide(string) : "" : "1"
-	triggered(string) : "This portal sky will be inactive at start, and must be triggered to become active.  All additional portalsky areas must have this flag set."
 	parallax_scale(float) : "Sky view parallax scale (0 = fixed sky camera; 0.001 moves the sky camera 1 unit per 1000 units of player movement)" : 0
 	parallax_origin(string) : "Player-space reference point for the parallax" : "0 0 0"
+	triggered(string) : "This portal sky will be inactive at start, and must be triggered to become active.  All additional portalsky areas must have this flag set."
 	name(target_source) : "Entity name; other entities target this"
 	target(target_destination) : "Entity to trigger; target1..targetN also link"
 ]
@@ -14895,7 +14913,7 @@ PDA's contain vidoes, audio, e-mail, and security clearances."
 	break(string) : "break when triggered." : "0"
 	texture(string) : "light shader to use."
 	_color(color1) : "light color"
-	shaderParm3(string) : "shaderParm 3"
+	shaderParm3(string) : "Fog light: the fog distance in units ( above 1; smaller is denser ). 0 to 1: a faint fog of 500 units with this strength. Other lights: the material's to read ( often a time scale )"
 	shaderParm4(string) : "shaderParm 4"
 	shaderParm5(string) : "shaderParm 5"
 	shaderParm6(string) : "shaderParm 6"
@@ -14912,6 +14930,112 @@ PDA's contain vidoes, audio, e-mail, and security clearances."
 	leave_demonic_mat(string) : "leaves the demonic shader when the effect expires.. color is still reverted back."
 	proxymodel(string) : "A proxy model in OBJ file format automatically set by RBDoom so it can be displayed in TrenchBroom"
 	name(target_source) : "Entity name; other entities target this"
+	light_radius(string) : "Point light half extents x y z; without it the single light value is used. For an emitter its reach, each at least 1: an omni's or a sun's box, a spot's range three times" : "300 300 300"
+	light_center(string) : "Light and shadow centre offset inside the volume; for a parallel light the direction to the light" : "0 0 0"
+	light_target(string) : "Spot frustum target in light space; with light_right and light_up it makes a spot light"
+	light_right(string) : "Spot frustum right vector in light space; needs light_target and light_up"
+	light_up(string) : "Spot frustum up vector in light space; needs light_target and light_right"
+	light_start(string) : "Optional spot near plane point in light space"
+	light_end(string) : "Optional spot far plane point in light space; defaults to light_target"
+	light_origin(string) : "Shine from this world point instead of the entity origin, for a light with a fixture model"
+	light_angles(string) : "Pitch yaw roll of such a light; rotation and light_rotation override it"
+	parallel(choices) : "Sun light: parallel rays from the light_center direction" : 0 =
+	[
+		0 : "No"
+		1 : "Yes"
+	]
+	primarySun(choices) : "Marks this parallel light as the map's sun for cascaded shadows and the forward light list" : 0 =
+	[
+		0 : "No"
+		1 : "Yes"
+	]
+	forward(integer) : "Lighting path: 0 = automatic, 1 = force the forward light list, 2 = force the legacy interaction path" : 0
+	volumetric(choices) : "Froxel fog: Automatic = the fog takes the light where its shadow is known ( a shadow map with a place, or no shadow caster at all ), Always = also where it has no shadow map ( a light without shadows opts in; its fog shines through walls ), Never = the light adds no fog. A fog light: Automatic, or Never for the classic fog pass only" : 0 =
+	[
+		0 : "Automatic"
+		1 : "Always"
+		2 : "Never"
+	]
+	fog_albedo(float) : "Froxel fog, a fog light only: the share of its fog that scatters the lights and the ambient, 0 to 1 ( 0 = it scatters nothing, as the fog pass draws it; its glow is fog_emission )" : 0
+	fog_emission(float) : "Froxel fog, a fog light only: how strongly its fog glows with the light's colour, 0 to 8 ( 1 = as the fog pass draws it; 0 = it only darkens and scatters )" : 1
+	fog_edge(float) : "Froxel fog, a fog light only: soft sides: over this many units inside its volume's faces the fog thins to nothing, all but the fog plane's face ( an unrotated box's top, a projected light's far face ), which keeps its ramp, 0 to 4,096 ( 0 = hard sides )" : 0
+	noshadows(choices) : "The light casts no shadows" : 0 =
+	[
+		0 : "No"
+		1 : "Yes"
+	]
+	nospecular(choices) : "The light adds no specular highlights, diffuse only" : 0 =
+	[
+		0 : "No"
+		1 : "Yes"
+	]
+	emitter(choices) : "Shade from the lamp with a falloff curve instead of the light textures; texture, style and the spot vectors are then ignored" : 0 =
+	[
+		0 : "No"
+		1 : "Yes"
+	]
+	emit_shape(choices) : "Emitter shape; without it a sun when parallel is 1, else an omni. A spot points along its rotation" =
+	[
+		"omni" : "Omni"
+		"spot" : "Spot"
+		"sun" : "Sun"
+	]
+	emit_auto_range(choices) : "Editors only: the range follows intensity, size, start and falloff" : 1 =
+	[
+		0 : "No"
+		1 : "Yes"
+	]
+	emit_falloff(choices) : "Emitter falloff curve from the bulb out to the range; a sun has none" : "invsquare_clamped" =
+	[
+		"invsquare" : "Inverse square (unbounded)"
+		"linear" : "Linear"
+		"smooth" : "Smooth"
+		"exponential" : "Exponential"
+		"invsquare_clamped" : "Inverse square (clamped), PBR safe"
+	]
+	emit_size(float) : "World units, at least 1: the distance over which the curve falls" : 96
+	emit_start(float) : "World units, at least 0: full strength up to this distance from the bulb; at most the range minus 1" : 0
+	emit_clamp(choices) : "Clamp the falloff to 0..1 like a light texture; off lets it reach 64 near the bulb" : 1 =
+	[
+		0 : "No"
+		1 : "Yes"
+	]
+	emit_cone(string) : "Spot only: full cone angle in degrees, 1 to 120; two numbers h v for an elliptical beam" : "60"
+	emit_penumbra(float) : "Spot only: soft edge width of the beam, 0 to 1" : "0.2"
+	emit_square(float) : "Spot only: beam shape exponent 1.5 to 32; 2 is an ellipse, 16 nearly a rectangle" : 2
+	emit_pattern(choices) : "Pattern that modulates the falloff" : "none" =
+	[
+		"none" : "None"
+		"subsurface" : "Subsurface (warm halo)"
+		"ice" : "Ice (cool noise)"
+		"caustic" : "Caustic (sharp noise)"
+		"banded" : "Banded (sine rings)"
+		"granular" : "Granular (stippled)"
+	]
+	emit_pattern_strength(float) : "Pattern strength, 0 to 1" : 0
+	emit_pattern_scale(float) : "Pattern scale in world units round the bulb; larger is finer, 1 the size a light of radius 256 shows" : 1
+	emit_pattern_phase(float) : "Pattern phase; shifts the pattern" : 0
+	emit_effect(choices) : "Brightness effect: a predefined light style or a waveform" : "none" =
+	[
+		"none" : "None"
+		"flicker_a" : "Flicker A"
+		"slow_strong_pulse" : "Slow Strong Pulse"
+		"candle_a" : "Candle A"
+		"fast_strobe" : "Fast Strobe"
+		"gentle_pulse" : "Gentle Pulse"
+		"flicker_b" : "Flicker B"
+		"candle_b" : "Candle B"
+		"candle_c" : "Candle C"
+		"slow_strobe" : "Slow Strobe"
+		"fluorescent" : "Fluorescent Flicker"
+		"slow_pulse" : "Slow Pulse (no black)"
+		"strobe" : "Strobe"
+		"pulse" : "Pulse"
+		"flicker" : "Flicker"
+	]
+	emit_effect_speed(float) : "Effect speed, 0 to 100" : 1
+	emit_effect_amount(float) : "Effect amount, 0 to 1; 0 is a steady light" : 1
+	emit_effect_phase(float) : "Effect phase, used modulo 1" : 0
 ]
 
 @PointClass base(monster_zombie_maint) = mg_elite
@@ -15729,6 +15853,13 @@ Use it to place all kinds of models"
 @PointClass base(monster_demon_imp) model({ "path": "_tb/models/md5/monsters/imp/imp.obj" }) = monster_demon_imp_d3xp
 [
 	model(string) : "" : "monster_demon_imp_d3xp"
+	name(target_source) : "Entity name; other entities target this"
+	target(target_destination) : "Entity to trigger; target1..targetN also link"
+]
+
+@PointClass base(monster_demon_imp) = monster_demon_imp_melee
+[
+	scriptobject(string) : "" : "monster_demon_imp_melee"
 	name(target_source) : "Entity name; other entities target this"
 	target(target_destination) : "Entity to trigger; target1..targetN also link"
 ]
@@ -20157,6 +20288,16 @@ Only add model, model_detonate or model_burn or health to override defaults"
 	target(target_destination) : "Entity to trigger; target1..targetN also link"
 ]
 
+@PointClass base(moveable_base_fixed) model({ "path": "_tb/models/mapobjects/pbr/macbethchart/macbethchart.obj" }) = moveable_macbethchart
+[
+	model(string) : "" : "models/mapobjects/pbr/macbethchart/macbethchart.glb"
+	density(string) : "Volume of the object times the density is the mass." : "0.01"
+	friction(string) : "Friction with contacting surfaces in the range [0-1] where 0 is no friction." : "0.2"
+	bouncyness(string) : "How much the object bounces in the range [0-1] where 0 is no bounce." : "0.3"
+	name(target_source) : "Entity name; other entities target this"
+	target(target_destination) : "Entity to trigger; target1..targetN also link"
+]
+
 @PointClass base(moveable_base_fixed) = moveable_marine_helmet
 [
 	model(string) : "" : "models/mapobjects/helmet/helmet_collision.lwo"
@@ -22174,6 +22315,7 @@ Use keyval, keyval1, keyval2, etc.. for multiples."
 @SolidClass color(0 178 255) = trigger_transition : "Map-only carry volume paired with a landmark"
 [
 	dmapOnly(string) readonly : "" : "1"
+	mapOnlyKind(string) readonly : "" : "volume"
 	cap(integer) : "Most entities carried across, 0 through 64" : 64
 	carry(string) : "all carries the entities inside the volume; any other value carries none" : "all"
 	landmark(string) : "Doorway id"
